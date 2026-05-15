@@ -1,0 +1,24 @@
+import type { CompletionPolicy } from "./types.js";
+
+export const PACKAGE_NAME = "pi-lazy-subagents";
+export const TOOL_NAME = "lazy_subagents";
+export const STATUS_KEY = "pi-lazy-subagents";
+export const WIDGET_KEY = "pi-lazy-subagents";
+export const MESSAGE_TYPE_LAUNCH = "pi-lazy-subagents-launch";
+export const MESSAGE_TYPE_COMPLETION = "pi-lazy-subagents-completion";
+export const MESSAGE_TYPE_FAILURE = "pi-lazy-subagents-failure";
+export const MESSAGE_TYPE_ATTENTION = "pi-lazy-subagents-attention";
+export const MESSAGE_TYPE_PIN = "pi-lazy-subagents-pin";
+export const MESSAGE_TYPE_HIDDEN_SUMMARY = "pi-lazy-subagents-hidden-summary";
+export const PERSISTED_STATE_ENTRY = "pi-lazy-subagents-state";
+export const DEFAULT_COMPLETION_POLICY: CompletionPolicy = "follow_up_when_idle";
+export const DEFAULT_POLL_INTERVAL_MS = 1_000;
+export const DEFAULT_RECENT_EVENT_LIMIT = 12;
+export const DEFAULT_RECENT_RUN_LIMIT = 8;
+export const DEFAULT_COMPLETED_RETENTION_LIMIT = 20;
+export const DEFAULT_HIDDEN_SUMMARY_LIMIT = 6;
+export const DEFAULT_STALE_RUN_MS = 5 * 60_000;
+export const DEFAULT_RUNAWAY_TOOL_THRESHOLD = 100;
+export const DEFAULT_RUNAWAY_TOKEN_THRESHOLD = 250_000;
+export const DEFAULT_SUCCESS_VISIBILITY_GRACE_MS = 30_000;
+export const DEFAULT_ACKNOWLEDGED_SUCCESS_TTL_MS = 5 * 60_000;
