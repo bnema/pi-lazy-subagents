@@ -6,6 +6,7 @@ import {
   createFailureMessagePayload,
   createLaunchMessagePayload,
   formatRunMessageBody,
+  renderRunMessageText,
 } from "../src/ui/messages.js";
 import {
   GLYPH_INBOX,
@@ -61,7 +62,7 @@ function createSnapshot(runs: RunRecord[]): RunRegistrySnapshot {
 }
 
 describe("visibility helpers", () => {
-  test("builds a compact footer summary with attention, inbox, and primary run context", () => {
+  test("builds a compact footer summary without duplicating live run details", () => {
     const running = createRun({ id: "run-1", status: "running", startedAt: 30_000, updatedAt: 59_000, title: "Research auth flow" });
     (running as any).currentTool = "bash";
     (running as any).totalTokens = 126_400;
@@ -69,7 +70,7 @@ describe("visibility helpers", () => {
     const completed = createRun({ id: "run-3", status: "completed", updatedAt: 57_000, completedAt: 57_000, agent: "planner" });
     const snapshot = createSnapshot([running, blocked, completed]);
 
-    const status = buildFooterStatus(snapshot, 60_000, {
+    const status = buildFooterStatus(snapshot, {
       fg: (_color: string, text: string) => `<${text}>`,
       bold: (text: string) => `*${text}*`,
     } as any);
@@ -79,8 +80,9 @@ describe("visibility helpers", () => {
     expect(status).toContain("live");
     expect(status).toContain("attention");
     expect(status).toContain("inbox");
-    expect(status).toContain("Needs human input");
-    expect(status).toContain("quiet 2s");
+    expect(status).not.toContain("Needs human input");
+    expect(status).not.toContain("quiet 2s");
+    expect(status).not.toContain("126k");
   });
 
   test("builds grouped widget lines with summary, actionable rows, and inbox compression", () => {
@@ -113,6 +115,7 @@ describe("visibility helpers", () => {
     expect(lines[2]).toContain("read");
     expect(lines[2]).toContain("3 tools");
     expect(lines[2]).toContain("1.2k");
+    expect(lines[2]).not.toContain("upd ");
     expect(lines[3]).toContain(`<${GLYPH_INBOX}>`);
     expect(lines[3]).toContain("inbox");
     expect(lines[3]).toContain("Plan done");
@@ -120,7 +123,7 @@ describe("visibility helpers", () => {
   });
 
   test("formats launch, completion, and failure message payloads", () => {
-    const running = createRun({ id: "run-1", status: "running", title: "Research auth flow" });
+    const running = createRun({ id: "run-1", status: "queued", title: "Research auth flow", taskSummary: "Research auth flow" });
     const completed = createRun({ id: "run-2", status: "completed", title: "Plan auth flow", resultPreview: "Found 3 files", completedAt: 90 });
     (completed as any).totalTokens = 247_000;
     const failed = createRun({ id: "run-3", status: "failed", title: "Implement auth flow", errorPreview: "worker failed" });
@@ -130,10 +133,29 @@ describe("visibility helpers", () => {
     const failure = createFailureMessagePayload(failed);
 
     expect(formatRunMessageBody(launch, false)).toContain("Launched");
+    expect(formatRunMessageBody(launch, false)).toContain("/lazy-subagents status run-1");
     expect(formatRunMessageBody(completion, false)).toContain("247k tokens");
     expect(formatRunMessageBody(completion, false)).toContain("Found 3 files");
     expect(formatRunMessageBody(completion, true)).toContain("/lazy-subagents result run-2");
     expect(formatRunMessageBody(failure, true)).toContain("worker failed");
+  });
+
+  test("renders launch cards without duplicate copy and with clearer queued context", () => {
+    const launch = createLaunchMessagePayload(createRun({
+      id: "run-9",
+      status: "queued",
+      agent: "reviewer",
+      title: "Narrow dumber audio-shutdown review",
+      taskSummary: "Narrow dumber audio-shutdown review",
+    }));
+
+    const text = renderRunMessageText(launch, false);
+
+    expect(text).toContain("[QUEUED]");
+    expect(text).toContain("agent reviewer");
+    expect(text).toContain("run run-9");
+    expect(text).toContain("/lazy-subagents status run-9");
+    expect(text.match(/Narrow dumber audio-shutdown review/g)?.length).toBe(1);
   });
 
   test("tolerates malformed runtime message previews", () => {

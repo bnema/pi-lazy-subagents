@@ -1042,7 +1042,7 @@ export class LazySubagentsController {
   private renderUi(ctx = this.currentCtx): void {
     if (!ctx?.hasUI) return;
     const snapshot = this.getLiveUiSnapshot();
-    ctx.ui.setStatus(STATUS_KEY, buildFooterStatus(snapshot, this.now(), ctx.ui.theme));
+    ctx.ui.setStatus(STATUS_KEY, buildFooterStatus(snapshot, ctx.ui.theme));
     ctx.ui.setWidget(
       WIDGET_KEY,
       createWidgetContent(snapshot, this.now(), 6, { isPinned: (runId) => this.registry.isPinned(runId) }),

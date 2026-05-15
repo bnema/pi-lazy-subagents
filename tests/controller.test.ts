@@ -320,7 +320,8 @@ describe("LazySubagentsController", () => {
     await controller.pollOnce();
 
     expect(controller.getSnapshot().activeRuns[0]?.totalTokens).toBe(6079);
-    expect(statuses.at(-1)?.[1]).toContain("6.1k tok");
+    expect(statuses.at(-1)?.[1]).toContain("1 live");
+    expect(statuses.at(-1)?.[1]).not.toContain("6.1k tok");
     expect(widgets.at(-1)?.[1]?.join("\n") ?? "").toContain("6.1k tok");
   });
 

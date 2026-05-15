@@ -83,22 +83,24 @@ function shortTitle(run: RunRecord): string {
   return run.title || run.taskSummary;
 }
 
-function latestMeta(run: RunRecord, now: number): string {
+function latestMeta(run: RunRecord, now: number): string | undefined {
   if (run.status === "completed" && run.completedAt) return `done ${formatAge({ now, timestamp: run.completedAt })}`;
   if (run.status === "failed" && run.completedAt) return `failed ${formatAge({ now, timestamp: run.completedAt })}`;
   if (run.status === "cancelled" && run.completedAt) return `cancelled ${formatAge({ now, timestamp: run.completedAt })}`;
   if (run.status === "paused") return `paused ${formatDuration(now - run.updatedAt)}`;
   if (run.status === "blocked") return `quiet ${formatDuration(now - run.updatedAt)}`;
   if (run.status === "queued") return `queued ${formatDuration(now - run.startedAt)}`;
-  return `upd ${formatDuration(now - run.updatedAt)}`;
+  return undefined;
 }
 
 function metadataParts(run: RunRecord, now: number): string[] {
-  const parts = [run.agent, latestMeta(run, now)];
-  if (run.currentTool) parts.push(run.currentTool);
-  if (run.toolCount !== undefined && run.toolCount > 0) parts.push(`${run.toolCount} tools`);
-  if (run.totalTokens !== undefined && run.totalTokens > 0) parts.push(`${formatCompactThousands(run.totalTokens)} tok`);
-  return parts;
+  return [
+    run.agent,
+    latestMeta(run, now),
+    run.currentTool,
+    run.toolCount !== undefined && run.toolCount > 0 ? `${run.toolCount} tools` : undefined,
+    run.totalTokens !== undefined && run.totalTokens > 0 ? `${formatCompactThousands(run.totalTokens)} tok` : undefined,
+  ].filter((value): value is string => Boolean(value));
 }
 
 function labelForRun(run: RunRecord, isPinned: boolean): WidgetLabel {
