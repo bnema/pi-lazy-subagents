@@ -146,10 +146,22 @@ interface RunHealthAlert {
   status?: RunStatus;
 }
 
+const GENERIC_LOOP_SIGNALS = new Set([
+  "queued",
+  "running",
+  "blocked",
+  "paused",
+  "completed",
+  "failed",
+  "cancelled",
+  "needs attention",
+]);
+
 function normalizeLoopSignal(run: RunRecord, summary: string): string | undefined {
   const trimmed = summary.replace(/\s+/g, " ").trim();
   if (!trimmed) return undefined;
-  return trimmed.startsWith(`${run.id} `) ? trimmed.slice(run.id.length + 1) : trimmed;
+  const withoutRunId = trimmed.startsWith(`${run.id} `) ? trimmed.slice(run.id.length + 1) : trimmed;
+  return GENERIC_LOOP_SIGNALS.has(withoutRunId.toLowerCase()) ? undefined : withoutRunId;
 }
 
 function canonicalizePattern(pattern: string[]): string[] {
@@ -756,6 +768,7 @@ export class LazySubagentsController {
   private applyUpdate(runId: string, update: NormalizedRunUpdate): void {
     const existing = this.registry.get(runId);
     if (!existing) return;
+    if (isTerminalStatus(existing.status)) return;
     if (equalUpdate(existing, update) && (!update.event || existing.recentEvents.some((event) => event.id === update.event?.id))) {
       return;
     }

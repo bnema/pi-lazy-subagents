@@ -476,6 +476,44 @@ describe("LazySubagentsController", () => {
     expect(messages.some((entry) => entry.message.customType === MESSAGE_TYPE_ATTENTION)).toBe(false);
   });
 
+  test("does not surface a loop alert for generic running heartbeat updates", async () => {
+    const { api, messages } = createPi();
+    const launcher = new FakeLauncher();
+    const controller = new LazySubagentsController(api as any, { launcher, createRunId: () => "run-1", now: () => 100 });
+    const { ctx } = createContext({ isIdle: true, hasPendingMessages: false });
+
+    await controller.handleSessionStart(ctx);
+    await controller.launchChild(
+      {
+        agent: "reviewer",
+        title: "Review auth diff",
+        taskSummary: "Review auth diff",
+        prompt: "Review the auth diff and summarize the issues.",
+      },
+      ctx,
+    );
+
+    for (const updatedAt of [110, 111, 112]) {
+      launcher.updates.set("run-1", {
+        runId: "run-1",
+        status: "running",
+        updatedAt,
+        toolCount: updatedAt - 110,
+        event: {
+          id: `run-1:${updatedAt}:progress`,
+          category: "progress",
+          timestamp: updatedAt,
+          summary: "run-1 running",
+          status: "running",
+        },
+      });
+      await controller.pollOnce();
+    }
+
+    expect(controller.getSnapshot().activeRuns[0]?.attentionNeeded).toBe(false);
+    expect(messages.some((entry) => entry.message.customType === MESSAGE_TYPE_ATTENTION)).toBe(false);
+  });
+
   test("surfaces a loop alert when recent activity repeats the same multi-step cycle", async () => {
     const { api, messages } = createPi();
     const launcher = new FakeLauncher();
@@ -495,11 +533,11 @@ describe("LazySubagentsController", () => {
 
     for (const update of [
       { updatedAt: 110, currentTool: "read", toolCount: 0, summary: "run-1 running · read" },
-      { updatedAt: 111, currentTool: undefined, toolCount: 1, summary: "run-1 running" },
+      { updatedAt: 111, currentTool: undefined, toolCount: 1, summary: "run-1 running · summarize findings" },
       { updatedAt: 112, currentTool: "read", toolCount: 1, summary: "run-1 running · read" },
-      { updatedAt: 113, currentTool: undefined, toolCount: 2, summary: "run-1 running" },
+      { updatedAt: 113, currentTool: undefined, toolCount: 2, summary: "run-1 running · summarize findings" },
       { updatedAt: 114, currentTool: "read", toolCount: 2, summary: "run-1 running · read" },
-      { updatedAt: 115, currentTool: undefined, toolCount: 3, summary: "run-1 running" },
+      { updatedAt: 115, currentTool: undefined, toolCount: 3, summary: "run-1 running · summarize findings" },
     ]) {
       launcher.updates.set("run-1", {
         runId: "run-1",
@@ -582,11 +620,11 @@ describe("LazySubagentsController", () => {
 
     const loopPattern = [
       { updatedAt: 110, currentTool: "read", toolCount: 0, summary: "run-1 running · read" },
-      { updatedAt: 111, currentTool: undefined, toolCount: 1, summary: "run-1 running" },
+      { updatedAt: 111, currentTool: undefined, toolCount: 1, summary: "run-1 running · summarize findings" },
       { updatedAt: 112, currentTool: "read", toolCount: 1, summary: "run-1 running · read" },
-      { updatedAt: 113, currentTool: undefined, toolCount: 2, summary: "run-1 running" },
+      { updatedAt: 113, currentTool: undefined, toolCount: 2, summary: "run-1 running · summarize findings" },
       { updatedAt: 114, currentTool: "read", toolCount: 2, summary: "run-1 running · read" },
-      { updatedAt: 115, currentTool: undefined, toolCount: 3, summary: "run-1 running" },
+      { updatedAt: 115, currentTool: undefined, toolCount: 3, summary: "run-1 running · summarize findings" },
     ];
 
     for (const update of loopPattern) {
@@ -652,6 +690,56 @@ describe("LazySubagentsController", () => {
     }
 
     expect(messages.filter((entry) => entry.message.customType === MESSAGE_TYPE_ATTENTION)).toHaveLength(2);
+  });
+
+  test("ignores stale in-flight running updates after cancel", async () => {
+    const { api, messages } = createPi();
+    const launcher = new FakeLauncher();
+    const controller = new LazySubagentsController(api as any, { launcher, createRunId: () => "run-1", now: () => 100 });
+    const { ctx } = createContext({ isIdle: true, hasPendingMessages: false });
+
+    let resolveUpdate: ((value: NormalizedRunUpdate | undefined) => void) | undefined;
+    launcher.readUpdateHook = async (launch) => {
+      if (launch.runId !== "run-1") return undefined;
+      return await new Promise<NormalizedRunUpdate | undefined>((resolve) => {
+        resolveUpdate = resolve;
+      });
+    };
+
+    await controller.handleSessionStart(ctx);
+    await controller.launchChild(
+      {
+        agent: "reviewer",
+        title: "Scoped workflow review",
+        taskSummary: "Scoped workflow review",
+        prompt: "Review the workflow changes.",
+      },
+      ctx,
+    );
+
+    const pollPromise = controller.pollOnce();
+    await Promise.resolve();
+
+    expect(await controller.cancelRun("run-1", ctx)).toBe(true);
+
+    resolveUpdate?.({
+      runId: "run-1",
+      status: "running",
+      updatedAt: 120,
+      currentTool: "read",
+      event: {
+        id: "run-1:120:progress",
+        category: "progress",
+        timestamp: 120,
+        summary: "run-1 running · read .github/workflows/ci.yml",
+        status: "running",
+      },
+    });
+    await pollPromise;
+
+    expect(controller.getSnapshot().runs.find((run) => run.id === "run-1")?.status).toBe("cancelled");
+    expect(controller.getSnapshot().activeRuns).toHaveLength(0);
+    expect(messages.filter((entry) => entry.message.customType === MESSAGE_TYPE_ATTENTION)).toHaveLength(0);
   });
 
   test("pins a run into chat and renders detailed progress lines from child events", async () => {
