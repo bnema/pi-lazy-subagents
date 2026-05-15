@@ -49,7 +49,7 @@ describe("persistence", () => {
   test("round-trips registry state including dedupe metadata", () => {
     const registry = new RunRegistry();
     registry.upsert(createRun({ id: "run-1", updatedAt: 5, resultPreview: "done" }));
-    registry.markCompletionSurfaced("run-1:completed:5");
+    registry.markCompletionSurfaced("run-1", "run-1:completed:5");
     registry.acknowledgeRun("run-1");
 
     const persisted = createPersistedState(registry.serialize(), 123);

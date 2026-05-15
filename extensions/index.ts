@@ -106,6 +106,7 @@ export default function lazySubagentsExtension(pi: ExtensionAPI): void {
       "Use lazy_subagents action=run when the human wants parallelism without blocking the main session.",
       "For lazy_subagents action=run, omit agent or use delegate when unsure; delegate is the general-purpose fallback.",
       "Use scout for read-only codebase inspection, researcher for evidence gathering, planner for plans, reviewer for review-only work, and worker for implementation work.",
+      "After launching background work, wait about 60 seconds before checking action=status unless the task should finish almost immediately; instant polling usually just returns running.",
       "Use lazy_subagents action=status, action=result, action=pickup, action=pin, action=clear, or action=cancel to inspect or manage existing runs.",
     ],
     parameters: ToolParamsSchema,

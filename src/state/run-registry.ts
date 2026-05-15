@@ -79,12 +79,19 @@ function normalizeRun(run: RunRecord, recentEventLimit: number): RunRecord {
   return normalized;
 }
 
+function inferRunIdFromFingerprint(fingerprint: string): string | undefined {
+  const separatorIndex = fingerprint.indexOf(":");
+  if (separatorIndex <= 0) return undefined;
+  return fingerprint.slice(0, separatorIndex);
+}
+
 export class RunRegistry {
   private readonly recentEventLimit: number;
   private readonly recentRunLimit: number;
   private readonly completedRetentionLimit: number;
   private readonly runs = new Map<string, RunRecord>();
   private readonly surfacedCompletionKeys = new Set<string>();
+  private readonly surfacedCompletionKeysByRun = new Map<string, Set<string>>();
   private readonly acknowledgedRunIds = new Set<string>();
   private readonly pinnedRunIds = new Set<string>();
 
@@ -101,7 +108,12 @@ export class RunRegistry {
     }
 
     for (const fingerprint of initialState.surfacedCompletionKeys) {
-      this.surfacedCompletionKeys.add(fingerprint);
+      const runId = inferRunIdFromFingerprint(fingerprint);
+      if (!runId) {
+        this.surfacedCompletionKeys.add(fingerprint);
+        continue;
+      }
+      this.trackSurfacedCompletionFingerprint(runId, fingerprint);
     }
 
     for (const runId of initialState.acknowledgedRunIds) {
@@ -166,9 +178,9 @@ export class RunRegistry {
     return cloneRun(nextRun);
   }
 
-  markCompletionSurfaced(fingerprint: string): boolean {
+  markCompletionSurfaced(runId: string, fingerprint: string): boolean {
     if (this.surfacedCompletionKeys.has(fingerprint)) return false;
-    this.surfacedCompletionKeys.add(fingerprint);
+    this.trackSurfacedCompletionFingerprint(runId, fingerprint);
     return true;
   }
 
@@ -199,8 +211,7 @@ export class RunRegistry {
   deleteRun(runId: string): boolean {
     const deleted = this.runs.delete(runId);
     if (!deleted) return false;
-    this.acknowledgedRunIds.delete(runId);
-    this.pinnedRunIds.delete(runId);
+    this.clearRunMetadata(runId);
     return true;
   }
 
@@ -209,8 +220,7 @@ export class RunRegistry {
     for (const [runId, run] of this.runs.entries()) {
       if (!predicate(run)) continue;
       this.runs.delete(runId);
-      this.acknowledgedRunIds.delete(runId);
-      this.pinnedRunIds.delete(runId);
+      this.clearRunMetadata(runId);
       removed.push(runId);
     }
     return removed;
@@ -221,10 +231,9 @@ export class RunRegistry {
     const keepTerminalIds = new Set(terminalRuns.slice(0, this.completedRetentionLimit).map((run) => run.id));
 
     for (const [runId, run] of this.runs.entries()) {
-      if (isTerminalStatus(run.status) && !keepTerminalIds.has(runId)) {
+      if (isTerminalStatus(run.status) && !keepTerminalIds.has(runId) && !this.pinnedRunIds.has(runId)) {
         this.runs.delete(runId);
-        this.acknowledgedRunIds.delete(runId);
-        this.pinnedRunIds.delete(runId);
+        this.clearRunMetadata(runId);
       }
     }
   }
@@ -259,6 +268,25 @@ export class RunRegistry {
       acknowledgedRunIds: [...this.acknowledgedRunIds],
       pinnedRunIds: [...this.pinnedRunIds],
     };
+  }
+
+  private trackSurfacedCompletionFingerprint(runId: string, fingerprint: string): void {
+    this.surfacedCompletionKeys.add(fingerprint);
+    const fingerprints = this.surfacedCompletionKeysByRun.get(runId) ?? new Set<string>();
+    fingerprints.add(fingerprint);
+    this.surfacedCompletionKeysByRun.set(runId, fingerprints);
+  }
+
+  private clearRunMetadata(runId: string): void {
+    this.acknowledgedRunIds.delete(runId);
+    this.pinnedRunIds.delete(runId);
+    const fingerprints = this.surfacedCompletionKeysByRun.get(runId);
+    if (fingerprints) {
+      for (const fingerprint of fingerprints) {
+        this.surfacedCompletionKeys.delete(fingerprint);
+      }
+      this.surfacedCompletionKeysByRun.delete(runId);
+    }
   }
 }
 

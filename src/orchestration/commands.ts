@@ -181,6 +181,8 @@ export function formatStatusReport(snapshot: RunRegistrySnapshot, runId?: string
   if (snapshot.runs.length === 0) return "No tracked lazy subagent runs.";
 
   const focusedRun = findRun(snapshot, runId);
+  if (runId && !focusedRun) return `No run found with id: ${runId}`;
+
   const runs = focusedRun ? [focusedRun] : snapshot.runs;
   const lines = [
     `Active runs: ${snapshot.activeRuns.length}`,
@@ -222,6 +224,7 @@ export function buildLazySubagentsHelp(): string {
     "  /lazy-subagents run worker \"Implement the requested fix\"",
     "",
     "Tool note: lazy_subagents action=run defaults agent to delegate when omitted.",
+    "Tip: wait about 60s before checking status on a fresh run; immediate polling usually only says running.",
   ].join("\n");
 }
 

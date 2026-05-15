@@ -64,7 +64,7 @@ describe("extension entrypoint", () => {
     expect(events.has("turn_end")).toBe(true);
   });
 
-  test("tool guidance exposes help, built-in profiles, and delegate fallback", () => {
+  test("tool guidance exposes help, built-in profiles, delegate fallback, and delayed status polling guidance", () => {
     const { api, tools } = createPi();
     lazySubagentsExtension(api as any);
 
@@ -74,6 +74,7 @@ describe("extension entrypoint", () => {
     expect(tool?.promptGuidelines.join("\n")).toContain("delegate");
     expect(tool?.promptGuidelines.join("\n")).toContain("reviewer");
     expect(tool?.promptGuidelines.join("\n")).toContain("worker");
+    expect(tool?.promptGuidelines.join("\n")).toContain("60");
   });
 
   test("clears footer and widget state on shutdown", async () => {
@@ -82,11 +83,25 @@ describe("extension entrypoint", () => {
 
     const statuses: Array<[string, string | undefined]> = [];
     const widgets: Array<[string, string[] | undefined]> = [];
+    const theme = {
+      fg: (_color: string, text: string) => text,
+      dim: (text: string) => text,
+      muted: (text: string) => text,
+      bold: (text: string) => text,
+      bg: (_color: string, text: string) => text,
+    };
     const ctx = {
       hasUI: true,
       ui: {
+        theme,
         setStatus: (key: string, value: string | undefined) => statuses.push([key, value]),
-        setWidget: (key: string, value: string[] | undefined) => widgets.push([key, value]),
+        setWidget: (key: string, value: string[] | ((tui: unknown, themeArg: typeof theme) => { render(width: number): string[] }) | undefined) => {
+          if (typeof value === "function") {
+            widgets.push([key, value({}, theme).render(160)]);
+            return;
+          }
+          widgets.push([key, value]);
+        },
       },
     };
 

@@ -131,14 +131,16 @@ describe("PiSubagentsAdapter helpers", () => {
     const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true as never);
     const adapter = new PiSubagentsAdapter({ asyncDirRoot, resultsDir });
 
-    await expect(adapter.cancel({ runId: "run-1", asyncId: "run-1", asyncDir })).resolves.toBe(true);
+    try {
+      await expect(adapter.cancel({ runId: "run-1", asyncId: "run-1", asyncDir })).resolves.toBe(true);
 
-    const status = JSON.parse(await fs.readFile(path.join(asyncDir, "status.json"), "utf8")) as { state: string };
-    const result = JSON.parse(await fs.readFile(path.join(resultsDir, "run-1.json"), "utf8")) as { state: string };
-    expect(status.state).toBe("cancelled");
-    expect(result.state).toBe("cancelled");
-
-    killSpy.mockRestore();
+      const status = JSON.parse(await fs.readFile(path.join(asyncDir, "status.json"), "utf8")) as { state: string };
+      const result = JSON.parse(await fs.readFile(path.join(resultsDir, "run-1.json"), "utf8")) as { state: string };
+      expect(status.state).toBe("cancelled");
+      expect(result.state).toBe("cancelled");
+    } finally {
+      killSpy.mockRestore();
+    }
   });
 
   test("readUpdate tolerates malformed result files", async () => {

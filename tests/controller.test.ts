@@ -2,10 +2,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 
 import { MESSAGE_TYPE_ATTENTION, MESSAGE_TYPE_COMPLETION, MESSAGE_TYPE_FAILURE, MESSAGE_TYPE_LAUNCH, MESSAGE_TYPE_PIN, PERSISTED_STATE_ENTRY, STATUS_KEY, WIDGET_KEY } from "../src/defaults.js";
-import { LazySubagentsController } from "../src/orchestration/controller.ts";
+import { LazySubagentsController } from "../src/orchestration/controller.js";
 import { createPersistedState } from "../src/state/persistence.js";
 import { RunRegistry } from "../src/state/run-registry.js";
 import type { LaunchChildRequest, LaunchResult, Launcher, LauncherRuntimeContext, NormalizedRunUpdate } from "../src/launcher/interface.js";
@@ -43,6 +43,7 @@ class FakeLauncher implements Launcher {
   public readonly updates = new Map<string, NormalizedRunUpdate | undefined>();
   public readonly launchResults = new Map<string, Partial<LaunchResult>>();
   public launchGroupError: Error | undefined;
+  public readUpdateHook: ((launch: LaunchResult) => Promise<NormalizedRunUpdate | undefined>) | undefined;
 
   async launchChild(request: LaunchChildRequest, _runtime: LauncherRuntimeContext): Promise<LaunchResult> {
     this.launches.push(request);
@@ -68,6 +69,7 @@ class FakeLauncher implements Launcher {
   }
 
   async readUpdate(launch: LaunchResult): Promise<NormalizedRunUpdate | undefined> {
+    if (this.readUpdateHook) return await this.readUpdateHook(launch);
     return this.updates.get(launch.runId);
   }
 
@@ -85,15 +87,27 @@ function createContext(options: {
   const statuses: Array<[string, string | undefined]> = [];
   const widgets: Array<[string, string[] | undefined]> = [];
   const notifications: Array<[string, string | undefined]> = [];
+  const theme = {
+    fg: (_color: string, text: string) => text,
+    dim: (text: string) => text,
+    muted: (text: string) => text,
+    bold: (text: string) => text,
+    bg: (_color: string, text: string) => text,
+  };
 
   const ctx = {
     hasUI: true,
     cwd: "/repo",
     ui: {
+      theme,
       setStatus: (key: string, value: string | undefined) => {
         statuses.push([key, value]);
       },
-      setWidget: (key: string, value: string[] | undefined) => {
+      setWidget: (key: string, value: string[] | ((tui: unknown, themeArg: typeof theme) => { render(width: number): string[] }) | undefined) => {
+        if (typeof value === "function") {
+          widgets.push([key, value({}, theme).render(160)]);
+          return;
+        }
         widgets.push([key, value]);
       },
       notify: (message: string, level?: string) => {
@@ -174,7 +188,7 @@ describe("LazySubagentsController", () => {
     await controller.handleSessionStart(ctx);
 
     expect(controller.getSnapshot().activeRuns.map((run: RunRecord) => run.id)).toEqual(["branch-run"]);
-    expect(statuses.at(-1)).toEqual([STATUS_KEY, expect.stringContaining("running")]);
+    expect(statuses.at(-1)).toEqual([STATUS_KEY, expect.stringContaining("1 live")]);
     expect(widgets.at(-1)?.[0]).toBe(WIDGET_KEY);
   });
 
@@ -226,6 +240,48 @@ describe("LazySubagentsController", () => {
     ).toBe(true);
   });
 
+  test("skips timed-out launcher reads and continues polling other tracked runs", async () => {
+    const { api } = createPi();
+    const launcher = new FakeLauncher();
+    let nextRun = 0;
+    const controller = new LazySubagentsController(api as any, {
+      launcher,
+      createRunId: () => `run-${++nextRun}`,
+      now: () => 100,
+      readUpdateTimeoutMs: 1,
+    });
+    const { ctx } = createContext({ isIdle: true, hasPendingMessages: false });
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      await controller.handleSessionStart(ctx);
+      await controller.launchChild({ agent: "reviewer", title: "Run one", taskSummary: "Run one", prompt: "one" }, ctx);
+      await controller.launchChild({ agent: "reviewer", title: "Run two", taskSummary: "Run two", prompt: "two" }, ctx);
+
+      launcher.readUpdateHook = async (launch) => {
+        if (launch.runId === "run-1") {
+          return await new Promise<NormalizedRunUpdate | undefined>(() => {});
+        }
+        return {
+          runId: "run-2",
+          status: "running",
+          updatedAt: 101,
+          currentTool: "read",
+        };
+      };
+
+      await controller.pollOnce();
+
+      expect(controller.getSnapshot().activeRuns.find((run) => run.id === "run-1")?.status).toBe("queued");
+      expect(controller.getSnapshot().activeRuns.find((run) => run.id === "run-2")?.currentTool).toBe("read");
+    } finally {
+      launcher.readUpdateHook = async () => undefined;
+      controller.clearRuns("all");
+      await controller.handleSessionShutdown(ctx);
+      warnSpy.mockRestore();
+    }
+  });
+
   test("keeps the last nonzero token total when later live updates report zero", async () => {
     const { api } = createPi();
     const launcher = new FakeLauncher();
@@ -265,7 +321,7 @@ describe("LazySubagentsController", () => {
 
     expect(controller.getSnapshot().activeRuns[0]?.totalTokens).toBe(6079);
     expect(statuses.at(-1)?.[1]).toContain("6.1k tok");
-    expect(widgets.at(-1)?.[1]?.[0]).toContain("6.1k tok");
+    expect(widgets.at(-1)?.[1]?.join("\n") ?? "").toContain("6.1k tok");
   });
 
   test("keeps recent successful runs visible briefly, then hides them from live UI after the grace window", async () => {

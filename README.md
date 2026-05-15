@@ -80,14 +80,18 @@ Built-in agent profiles:
 - `reviewer` — read-only review/verification
 - `worker` — implementation and edits
 
+File-based profiles discovered from `~/.agents/agents` and `~/.pi/agent/agents` override builtins with the same name, so you can shadow defaults like `reviewer` or `scout`.
+
 For tool calls, `action=run` defaults `agent` to `delegate` when omitted.
 
 ## UX notes
 
 - `status` is for live health: it reports elapsed time, last update age, current tool when known, tool count when known, and the last recorded event.
+- after launching a background run, wait about 60 seconds before checking `status` unless the task should finish almost immediately; instant polling usually just returns `running`.
 - `result` returns the full final output for a completed run and acknowledges it for live-UI cleanup.
 - `pickup` injects that completed result back into the current Pi chat so the parent/orchestrator can act on it immediately.
 - `pin` posts a durable chat card that shows detailed subagent progress lines and keeps that run visible in live UI surfaces.
+- routine completed runs are collapsed into one inbox row so active and attention-needed runs stay visible.
 - plain successful runs auto-hide from the footer/widget after a short grace window; failed, paused, manual-pickup, and pinned runs stay visible until resolved or cleared.
 
 ## Manual smoke test
@@ -129,7 +133,7 @@ For tool calls, `action=run` defaults `agent` to `delegate` when omitted.
    /lazy-subagents pickup <runId>
    ```
 
-11. Confirm the completed result is injected back into chat.
+1. Confirm the completed result is injected back into chat.
 
 ### Print-mode smoke test
 

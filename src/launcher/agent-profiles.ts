@@ -155,6 +155,12 @@ export function listDiscoveredAgentProfiles(searchDirs = defaultAgentProfileSear
   return [...discovered.values()].sort((left, right) => left.name.localeCompare(right.name));
 }
 
+/**
+ * Merge listBuiltinAgentProfiles() with listDiscoveredAgentProfiles().
+ *
+ * Discovered file-based profiles win on name collisions so project- or machine-specific
+ * agent definitions can intentionally shadow builtin defaults without modifying the package.
+ */
 export function listAvailableAgentProfiles(searchDirs = defaultAgentProfileSearchDirs()): AgentProfile[] {
   const profiles = new Map<string, AgentProfile>();
   for (const profile of listBuiltinAgentProfiles()) {

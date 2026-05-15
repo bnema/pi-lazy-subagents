@@ -38,18 +38,28 @@ import {
   type RunMessagePayload,
 } from "../ui/messages.js";
 import { buildFooterStatus } from "../ui/status.js";
-import { buildWidgetLines } from "../ui/widget.js";
+import { GLYPH_PINNED } from "../ui/glyphs.js";
+import { createWidgetContent } from "../ui/widget.js";
 import { formatCompactThousands, formatDuration } from "../utils/time.js";
 
 export interface LazySubagentsControllerOptions {
   launcher?: Launcher;
   pollIntervalMs?: number;
+  readUpdateTimeoutMs?: number;
   now?: () => number;
   createRunId?: () => string;
 }
 
 export type ControllerLaunchChildRequest = Omit<LaunchChildRequest, "runId">;
 export type ControllerLaunchGroupRequest = Omit<LaunchGroupRequest, "runId">;
+
+const DEFAULT_READ_UPDATE_TIMEOUT_MS = 500;
+
+class ReadUpdateTimeoutError extends Error {
+  constructor(runId: string, timeoutMs: number) {
+    super(`Timed out reading update for ${runId} after ${timeoutMs}ms`);
+  }
+}
 
 function isTerminalStatus(status: RunStatus): boolean {
   return status === "completed" || status === "failed" || status === "cancelled" || status === "paused";
@@ -297,13 +307,14 @@ export class LazySubagentsController {
   private registry = new RunRegistry();
   private readonly launcher: Launcher;
   private readonly pollIntervalMs: number;
+  private readonly readUpdateTimeoutMs: number;
   private readonly now: () => number;
   private readonly createRunId: () => string;
   private readonly trackedLaunches = new Map<string, LaunchResult>();
   private readonly progressLines = new Map<string, string[]>();
   private currentCtx: ExtensionContext | undefined;
   private poller: ReturnType<typeof setInterval> | undefined;
-  private polling = false;
+  private activePoll: Promise<void> | undefined;
 
   constructor(
     private readonly pi: ExtensionAPI,
@@ -311,6 +322,7 @@ export class LazySubagentsController {
   ) {
     this.launcher = options.launcher ?? new PiSubagentsAdapter();
     this.pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
+    this.readUpdateTimeoutMs = options.readUpdateTimeoutMs ?? DEFAULT_READ_UPDATE_TIMEOUT_MS;
     this.now = options.now ?? Date.now;
     this.createRunId = options.createRunId ?? (() => crypto.randomUUID());
   }
@@ -566,18 +578,20 @@ export class LazySubagentsController {
     const run = this.registry.get(runId);
     if (!run) return [`Pinned lazy subagent ${runId} not found.`];
 
-    const headerParts = [`📌 ${run.agent}`, run.status];
-    if (run.currentTool) headerParts.push(run.currentTool);
-    if (run.toolCount !== undefined) headerParts.push(`${run.toolCount} tools`);
-    if (run.totalTokens !== undefined) headerParts.push(`${formatCompactThousands(run.totalTokens)} tokens`);
+    const title = run.title || run.taskSummary;
+    const metaParts = [run.agent, run.status];
+    if (run.currentTool) metaParts.push(run.currentTool);
+    if (run.toolCount !== undefined && run.toolCount > 0) metaParts.push(`${run.toolCount} tools`);
+    if (run.totalTokens !== undefined && run.totalTokens > 0) metaParts.push(`${formatCompactThousands(run.totalTokens)} tokens`);
 
     const detailLines = this.progressLines.get(runId)
       ?? run.recentEvents.map((event) => summarizeSingleLine(event.summary)).filter((line): line is string => Boolean(line));
     const visibleLines = detailLines.slice(Math.max(0, detailLines.length - (expanded ? 20 : 8)));
 
     return [
-      headerParts.join(" · "),
-      `${run.id} · ${run.title || run.taskSummary}`,
+      `${GLYPH_PINNED} ${title}`,
+      metaParts.join(" · "),
+      ...(expanded ? [`run ${run.id}`] : []),
       ...visibleLines.map((line) => `  ${line}`),
     ];
   }
@@ -634,35 +648,57 @@ export class LazySubagentsController {
   }
 
   async pollOnce(): Promise<void> {
-    if (this.polling) return;
-    this.polling = true;
+    while (this.activePoll) {
+      await this.activePoll;
+      await Promise.resolve();
+    }
 
-    try {
-      for (const [runId, launch] of [...this.trackedLaunches.entries()]) {
-        let update: NormalizedRunUpdate | undefined;
-        try {
-          update = await this.launcher.readUpdate(launch);
-        } catch (error) {
-          update = {
-            runId,
-            status: "failed",
-            updatedAt: this.now(),
-            completedAt: this.now(),
-            errorPreview: error instanceof Error ? error.message : String(error),
-            attentionNeeded: true,
-          };
+    const pollPromise = (async () => {
+      try {
+        for (const [runId, launch] of [...this.trackedLaunches.entries()]) {
+          let update: NormalizedRunUpdate | undefined;
+          try {
+            update = await Promise.race([
+              this.launcher.readUpdate(launch),
+              new Promise<undefined>((_, reject) => {
+                setTimeout(() => reject(new ReadUpdateTimeoutError(runId, this.readUpdateTimeoutMs)), this.readUpdateTimeoutMs);
+              }),
+            ]);
+          } catch (error) {
+            if (error instanceof ReadUpdateTimeoutError) {
+              console.warn(`[pi-lazy-subagents] ${error.message}`);
+              update = undefined;
+            } else {
+              update = {
+                runId,
+                status: "failed",
+                updatedAt: this.now(),
+                completedAt: this.now(),
+                errorPreview: error instanceof Error ? error.message : String(error),
+                attentionNeeded: true,
+              };
+            }
+          }
+          if (!update) continue;
+          this.applyUpdate(runId, update);
+          await this.refreshProgressLines(runId, launch);
         }
-        if (!update) continue;
-        this.applyUpdate(runId, update);
-        await this.refreshProgressLines(runId, launch);
+        this.scanRunHealth();
+        const removedAcknowledgedRuns = this.cleanupAcknowledgedCompletedRuns();
+        if (removedAcknowledgedRuns) this.persistState();
+        this.renderUi();
+      } finally {
+        this.refreshPoller();
       }
-      this.scanRunHealth();
-      const removedAcknowledgedRuns = this.cleanupAcknowledgedCompletedRuns();
-      if (removedAcknowledgedRuns) this.persistState();
-      this.renderUi();
+    })();
+
+    this.activePoll = pollPromise;
+    try {
+      await pollPromise;
     } finally {
-      this.polling = false;
-      this.refreshPoller();
+      if (this.activePoll === pollPromise) {
+        this.activePoll = undefined;
+      }
     }
   }
 
@@ -713,7 +749,7 @@ export class LazySubagentsController {
       completedAt: run.completedAt,
     });
 
-    if (!this.registry.markCompletionSurfaced(fingerprint)) return;
+    if (!this.registry.markCompletionSurfaced(run.id, fingerprint)) return;
 
     if (run.status === "completed") {
       this.sendVisiblePayload(createCompletionMessagePayload(run));
@@ -928,8 +964,10 @@ export class LazySubagentsController {
     if (!ctx?.hasUI) return;
     const snapshot = this.getLiveUiSnapshot();
     ctx.ui.setStatus(STATUS_KEY, buildFooterStatus(snapshot, this.now(), ctx.ui.theme));
-    const lines = buildWidgetLines(snapshot, this.now(), 6, ctx.ui.theme);
-    ctx.ui.setWidget(WIDGET_KEY, lines.length > 0 ? lines : undefined);
+    ctx.ui.setWidget(
+      WIDGET_KEY,
+      createWidgetContent(snapshot, this.now(), 6, { isPinned: (runId) => this.registry.isPinned(runId) }),
+    );
   }
 
   private queuePoll(): void {

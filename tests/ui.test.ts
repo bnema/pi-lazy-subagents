@@ -7,6 +7,12 @@ import {
   createLaunchMessagePayload,
   formatRunMessageBody,
 } from "../src/ui/messages.js";
+import {
+  GLYPH_INBOX,
+  GLYPH_LAZY_SUBAGENTS,
+  GLYPH_RUNNING,
+  GLYPH_WAITING,
+} from "../src/ui/glyphs.js";
 import { buildWidgetLines } from "../src/ui/widget.js";
 import type { RunRecord, RunRegistrySnapshot } from "../src/types.js";
 
@@ -55,7 +61,7 @@ function createSnapshot(runs: RunRecord[]): RunRegistrySnapshot {
 }
 
 describe("visibility helpers", () => {
-  test("builds a richer footer summary with live tool, token, and timing context", () => {
+  test("builds a compact footer summary with attention, inbox, and primary run context", () => {
     const running = createRun({ id: "run-1", status: "running", startedAt: 30_000, updatedAt: 59_000, title: "Research auth flow" });
     (running as any).currentTool = "bash";
     (running as any).totalTokens = 126_400;
@@ -65,25 +71,24 @@ describe("visibility helpers", () => {
 
     const status = buildFooterStatus(snapshot, 60_000, {
       fg: (_color: string, text: string) => `<${text}>`,
+      bold: (text: string) => `*${text}*`,
     } as any);
 
-    expect(status).toContain("<●>");
-    expect(status).toContain("1 running");
-    expect(status).toContain("1 blocked");
-    expect(status).toContain("bash");
-    expect(status).toContain("126k");
-    expect(status).toContain("upd 1s");
-    expect(status).toContain("last finish 3s");
+    expect(status).toContain(`<${GLYPH_LAZY_SUBAGENTS}>`);
+    expect(status).toContain("lazy");
+    expect(status).toContain("live");
+    expect(status).toContain("attention");
+    expect(status).toContain("inbox");
+    expect(status).toContain("Needs human input");
+    expect(status).toContain("quiet 2s");
   });
 
-  test("builds colorized widget lines with live health, token, and recent outcome context", () => {
+  test("builds grouped widget lines with summary, actionable rows, and inbox compression", () => {
     const running = createRun({ id: "run-1", status: "running", startedAt: 50_000, updatedAt: 59_000, title: "Research auth flow" });
     (running as any).currentTool = "read";
     (running as any).toolCount = 3;
     (running as any).totalTokens = 1_240;
-    running.recentEvents = [{ id: "progress-1", category: "progress", timestamp: 59_000, summary: "Inspecting auth.ts" }];
     const blocked = createRun({ id: "run-2", status: "blocked", startedAt: 45_000, updatedAt: 52_000, title: "Needs human input", attentionNeeded: true });
-    blocked.recentEvents = [{ id: "attention-1", category: "attention", timestamp: 52_000, summary: "Waiting on a decision about provider choice" }];
     const completed = createRun({ id: "run-3", status: "completed", updatedAt: 58_000, completedAt: 58_000, title: "Plan done", agent: "planner", resultPreview: "Found 3 files" });
     const snapshot = createSnapshot([running, blocked, completed]);
 
@@ -94,19 +99,24 @@ describe("visibility helpers", () => {
       bold: (text: string) => `*${text}*`,
     } as any);
 
-    expect(lines[0]).toContain("<↻>");
-    expect(lines[0]).toContain("elapsed 10s");
-    expect(lines[0]).toContain("upd 1s");
-    expect(lines[0]).toContain("read");
-    expect(lines[0]).toContain("3 tools");
-    expect(lines[0]).toContain("1.2k");
-    expect(lines[1]).toContain("Research auth flow");
-    expect(lines[1]).toContain("Inspecting auth.ts");
-    expect(lines[2]).toContain("<!>");
-    expect(lines[2]).toContain("quiet 8s");
-    expect(lines[4]).toContain("<✓>");
-    expect(lines[4]).toContain("done 2s ago");
-    expect(lines[5]).toContain("Found 3 files");
+    expect(lines[0]).toContain(`<${GLYPH_LAZY_SUBAGENTS}>`);
+    expect(lines[0]).toContain("lazy subagents");
+    expect(lines[0]).toContain("attention");
+    expect(lines[0]).toContain("inbox");
+    expect(lines[1]).toContain(`<${GLYPH_WAITING}>`);
+    expect(lines[1]).toContain("waiting");
+    expect(lines[1]).toContain("Needs human input");
+    expect(lines[1]).toContain("quiet 8s");
+    expect(lines[2]).toContain(`<${GLYPH_RUNNING}>`);
+    expect(lines[2]).toContain("live");
+    expect(lines[2]).toContain("Research auth flow");
+    expect(lines[2]).toContain("read");
+    expect(lines[2]).toContain("3 tools");
+    expect(lines[2]).toContain("1.2k");
+    expect(lines[3]).toContain(`<${GLYPH_INBOX}>`);
+    expect(lines[3]).toContain("inbox");
+    expect(lines[3]).toContain("Plan done");
+    expect(lines[3]).toContain("done 2s ago");
   });
 
   test("formats launch, completion, and failure message payloads", () => {
@@ -124,5 +134,17 @@ describe("visibility helpers", () => {
     expect(formatRunMessageBody(completion, false)).toContain("Found 3 files");
     expect(formatRunMessageBody(completion, true)).toContain("/lazy-subagents result run-2");
     expect(formatRunMessageBody(failure, true)).toContain("worker failed");
+  });
+
+  test("tolerates malformed runtime message previews", () => {
+    const malformed = {
+      kind: "completion",
+      run: createRun({ id: "run-9", status: "completed" }),
+      summary: 42 as unknown as string,
+      preview: { nope: true } as unknown as string,
+    };
+
+    expect(formatRunMessageBody(malformed as any, false)).toBe("42");
+    expect(formatRunMessageBody(malformed as any, true)).toBe("42");
   });
 });

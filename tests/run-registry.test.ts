@@ -101,4 +101,20 @@ describe("RunRegistry", () => {
     expect(registry.get("newest-complete")?.status).toBe("completed");
     expect(registry.get("still-running")?.status).toBe("running");
   });
+
+  test("keeps pinned terminal runs and drops their surfaced completion fingerprints only when removed", () => {
+    const registry = new RunRegistry({ completedRetentionLimit: 1, recentRunLimit: 1 });
+
+    registry.upsert(createRun({ id: "pinned-complete", status: "completed", updatedAt: 1, completedAt: 1 }));
+    registry.pinRun("pinned-complete");
+    registry.upsert(createRun({ id: "newest-complete", status: "completed", updatedAt: 2, completedAt: 2 }));
+    registry.markCompletionSurfaced("pinned-complete", "pinned-complete:completed:1");
+
+    registry.prune();
+    expect(registry.get("pinned-complete")?.status).toBe("completed");
+    expect(registry.hasSurfacedCompletion("pinned-complete:completed:1")).toBe(true);
+
+    expect(registry.deleteRun("pinned-complete")).toBe(true);
+    expect(registry.hasSurfacedCompletion("pinned-complete:completed:1")).toBe(false);
+  });
 });

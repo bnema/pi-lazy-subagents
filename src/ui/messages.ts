@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { Box, Text } from "@earendil-works/pi-tui";
 
 import { formatCompactThousands } from "../utils/time.js";
 import {
@@ -81,11 +81,25 @@ export function createAttentionMessagePayload(run: RunRecord): RunMessagePayload
   return makePayload("attention", run, preview || undefined);
 }
 
+function coerceMessageText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (value === undefined || value === null) return "";
+  return String(value);
+}
+
+function firstPreviewLine(preview: unknown): string | undefined {
+  if (typeof preview !== "string") return undefined;
+  return preview.split("\n", 1)[0] ?? preview;
+}
+
 export function formatRunMessageBody(payload: RunMessagePayload, expanded: boolean): string {
-  if (!payload.preview) return payload.summary;
-  if (expanded) return `${payload.summary}\n${payload.preview}`;
-  if (payload.kind === "launch") return payload.summary;
-  return `${payload.summary}\n${payload.preview.split("\n", 1)[0]}`;
+  const summary = coerceMessageText(payload.summary);
+  const preview = typeof payload.preview === "string" ? payload.preview : undefined;
+
+  if (!preview) return summary;
+  if (expanded) return `${summary}\n${preview}`;
+  if (payload.kind === "launch") return summary;
+  return `${summary}\n${firstPreviewLine(preview) ?? ""}`.trimEnd();
 }
 
 function isRunMessagePayload(value: unknown): value is RunMessagePayload {
@@ -102,10 +116,70 @@ function isPinnedRunMessagePayload(value: unknown): value is PinnedRunMessagePay
     && "runId" in value;
 }
 
-function renderRunMessage(message: { content: string; details?: unknown }, expanded: boolean): Text {
+function messageKindColor(kind: RunMessageKind): "accent" | "success" | "error" | "warning" {
+  switch (kind) {
+    case "launch":
+      return "accent";
+    case "completion":
+      return "success";
+    case "failure":
+      return "error";
+    case "attention":
+      return "warning";
+  }
+}
+
+function messageKindLabel(kind: RunMessageKind): string {
+  switch (kind) {
+    case "launch":
+      return "LIVE";
+    case "completion":
+      return "DONE";
+    case "failure":
+      return "FAIL";
+    case "attention":
+      return "ATTN";
+  }
+}
+
+function renderRunMessageText(payload: RunMessagePayload, expanded: boolean, theme?: {
+  fg(color: string, text: string): string;
+  bold(text: string): string;
+}): string {
+  const title = payload.run.title || payload.run.taskSummary;
+  const label = theme
+    ? theme.fg(messageKindColor(payload.kind), `[${messageKindLabel(payload.kind)}]`)
+    : `[${messageKindLabel(payload.kind)}]`;
+  const header = `${label} ${theme ? theme.bold(title) : title}`;
+  const metaParts = [payload.run.agent, payload.run.status];
+  if (payload.run.totalTokens !== undefined && payload.run.totalTokens > 0) {
+    metaParts.push(`${formatCompactThousands(payload.run.totalTokens)} tok`);
+  }
+
+  const lines = [header, theme ? theme.fg("muted", metaParts.join(" · ")) : metaParts.join(" · ")];
+  const preview = typeof payload.preview === "string" ? payload.preview : undefined;
+  if (preview) {
+    lines.push(expanded ? preview : firstPreviewLine(preview) ?? "");
+  }
+
+  return lines.join("\n");
+}
+
+function renderRunMessage(
+  message: { content: string; details?: unknown },
+  expanded: boolean,
+  theme?: {
+    fg(color: string, text: string): string;
+    bg(color: string, text: string): string;
+    bold(text: string): string;
+  },
+) {
   const payload = isRunMessagePayload(message.details) ? message.details : undefined;
-  if (!payload) return new Text(message.content, 0, 0);
-  return new Text(formatRunMessageBody(payload, expanded), 0, 0);
+  if (!payload || !theme) return new Text(payload ? formatRunMessageBody(payload, expanded) : message.content, 0, 0);
+
+  const box = new Box(1, 0, (text) => theme.bg("customMessageBg", text));
+  box.addChild(new Text(renderRunMessageText(payload, expanded, theme), 0, 0));
+  return box;
 }
 
 export function registerRunMessageRenderers(
@@ -113,7 +187,7 @@ export function registerRunMessageRenderers(
   options: { getPinnedRunLines?: (runId: string, expanded: boolean) => string[] } = {},
 ): void {
   const register = (customType: string) => {
-    pi.registerMessageRenderer(customType, (message, options) => renderRunMessage(message as { content: string; details?: unknown }, options.expanded));
+    pi.registerMessageRenderer(customType, (message, options, theme) => renderRunMessage(message as { content: string; details?: unknown }, options.expanded, theme as any));
   };
 
   register(MESSAGE_TYPE_LAUNCH);
@@ -126,12 +200,8 @@ export function registerRunMessageRenderers(
       return new Text(typeof message.content === "string" ? message.content : "Pinned lazy subagent", 0, 0);
     }
 
-    return {
-      render() {
-        const lines = options.getPinnedRunLines!(payload.runId, optionsArg.expanded);
-        return lines.map((line, index) => index === 0 ? theme.fg("accent", line) : index === 1 ? theme.fg("muted", line) : line);
-      },
-      invalidate() {},
-    } as any;
+    const box = new Box(1, 0, (text) => theme.bg("customMessageBg", text));
+    box.addChild(new Text(options.getPinnedRunLines!(payload.runId, optionsArg.expanded).join("\n"), 0, 0));
+    return box as any;
   });
 }

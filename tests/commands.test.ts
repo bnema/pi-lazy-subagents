@@ -57,6 +57,7 @@ describe("lazy-subagents command parsing", () => {
     expect(help).toContain("scout");
     expect(help).toContain("Examples:");
     expect(help).toContain("defaults agent to delegate");
+    expect(help).toContain("wait about 60s");
   });
 
   test("parses run, status, result, pickup, pin, clear, and cancel commands", () => {
@@ -74,6 +75,12 @@ describe("lazy-subagents command parsing", () => {
     expect(parseLazySubagentsCommand("pin run-1")).toEqual({ action: "pin", runId: "run-1" });
     expect(parseLazySubagentsCommand("clear all")).toEqual({ action: "clear", scope: "all" });
     expect(parseLazySubagentsCommand("cancel run-1")).toEqual({ action: "cancel", runId: "run-1" });
+  });
+
+  test("returns a clear message when a scoped run id is missing", () => {
+    const snapshot = createSnapshot([createRun({ id: "run-1" })]);
+
+    expect(formatStatusReport(snapshot, "missing-run", 60_000)).toBe("No run found with id: missing-run");
   });
 
   test("formats a richer status report for active and recent runs", () => {
