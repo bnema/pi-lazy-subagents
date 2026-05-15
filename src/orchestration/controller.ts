@@ -147,6 +147,11 @@ interface RunHealthAlert {
   status?: RunStatus;
 }
 
+interface ApplyUpdateResult {
+  stateChanged: boolean;
+  recordedEvent: boolean;
+}
+
 const GENERIC_LOOP_SIGNALS = new Set([
   "queued",
   "running",
@@ -778,8 +783,10 @@ export class LazySubagentsController {
             }
           }
           if (!update) continue;
-          this.applyUpdate(runId, update);
-          await this.refreshProgressLines(runId, launch);
+          const applied = this.applyUpdate(runId, update);
+          if ((applied.stateChanged || applied.recordedEvent) && this.registry.isPinned(runId)) {
+            await this.refreshProgressLines(runId, launch);
+          }
         }
         this.scanRunHealth();
         const removedAcknowledgedRuns = this.cleanupAcknowledgedCompletedRuns();
@@ -800,46 +807,55 @@ export class LazySubagentsController {
     }
   }
 
-  private applyUpdate(runId: string, update: NormalizedRunUpdate): void {
+  private applyUpdate(runId: string, update: NormalizedRunUpdate): ApplyUpdateResult {
     const existing = this.registry.get(runId);
-    if (!existing) return;
-    if (isTerminalStatus(existing.status)) return;
-    if (equalUpdate(existing, update) && (!update.event || existing.recentEvents.some((event) => event.id === update.event?.id))) {
-      return;
+    if (!existing) return { stateChanged: false, recordedEvent: false };
+    if (isTerminalStatus(existing.status)) return { stateChanged: false, recordedEvent: false };
+
+    const hasStateChange = !equalUpdate(existing, update);
+    const hasNewEvent = Boolean(update.event && !existing.recentEvents.some((event) => event.id === update.event?.id));
+    if (!hasStateChange && !hasNewEvent) {
+      return { stateChanged: false, recordedEvent: false };
     }
 
     const previousStatus = existing.status;
     const previousAttention = existing.attentionNeeded;
 
-    this.registry.updateRun(runId, {
-      status: update.status,
-      updatedAt: update.updatedAt,
-      completedAt: update.completedAt ?? existing.completedAt,
-      sessionFile: update.sessionFile ?? existing.sessionFile,
-      artifactPath: update.artifactPath ?? existing.artifactPath,
-      resultPreview: update.resultPreview ?? existing.resultPreview,
-      errorPreview: update.errorPreview ?? existing.errorPreview,
-      currentTool: update.currentTool,
-      toolCount: update.toolCount,
-      totalTokens: mergeTotalTokens(existing.totalTokens, update.totalTokens),
-      attentionNeeded: update.attentionNeeded ?? false,
-    });
+    if (hasStateChange) {
+      this.registry.updateRun(runId, {
+        status: update.status,
+        updatedAt: update.updatedAt,
+        completedAt: update.completedAt ?? existing.completedAt,
+        sessionFile: update.sessionFile ?? existing.sessionFile,
+        artifactPath: update.artifactPath ?? existing.artifactPath,
+        resultPreview: update.resultPreview ?? existing.resultPreview,
+        errorPreview: update.errorPreview ?? existing.errorPreview,
+        currentTool: update.currentTool,
+        toolCount: update.toolCount,
+        totalTokens: mergeTotalTokens(existing.totalTokens, update.totalTokens),
+        attentionNeeded: update.attentionNeeded ?? false,
+      });
+    }
 
-    if (update.event && !existing.recentEvents.some((event) => event.id === update.event?.id)) {
+    if (hasNewEvent && update.event) {
       this.registry.recordEvent(runId, update.event);
     }
 
     const next = this.registry.get(runId)!;
-    if (isTerminalStatus(next.status)) {
-      this.trackedLaunches.delete(runId);
-      this.activeLoopAlertIds.delete(runId);
-      this.handleTerminalTransition(next);
-    } else if ((!previousAttention && next.attentionNeeded) || (previousStatus !== "blocked" && next.status === "blocked")) {
-      this.sendVisiblePayload(createAttentionMessagePayload(next));
+    if (hasStateChange) {
+      if (isTerminalStatus(next.status)) {
+        this.trackedLaunches.delete(runId);
+        this.activeLoopAlertIds.delete(runId);
+        this.handleTerminalTransition(next);
+      } else if ((!previousAttention && next.attentionNeeded) || (previousStatus !== "blocked" && next.status === "blocked")) {
+        this.sendVisiblePayload(createAttentionMessagePayload(next));
+      }
+
+      this.persistState();
+      this.renderUi();
     }
 
-    this.persistState();
-    this.renderUi();
+    return { stateChanged: hasStateChange, recordedEvent: hasNewEvent };
   }
 
   private handleTerminalTransition(run: RunRecord): void {

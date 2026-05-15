@@ -799,6 +799,116 @@ describe("LazySubagentsController", () => {
     expect(controller.getPinnedRunLines("run-1").join("\n")).toContain("Looks good overall.");
   });
 
+  test("does not reread progress logs on every poll and refreshes pinned logs only when updates advance", async () => {
+    const { api, entries } = createPi();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-lazy-subagents-progress-cache-"));
+    const eventsPath = path.join(tempDir, "events.jsonl");
+    await fs.writeFile(eventsPath, [
+      JSON.stringify({ runId: "run-1", index: 0, raw: JSON.stringify({ type: "tool_execution_start", toolName: "read", args: { path: "/repo/src/auth.ts" } }) }),
+    ].join("\n"), "utf8");
+
+    const launcher = new FakeLauncher();
+    launcher.launchResults.set("run-1", { asyncDir: tempDir, resultPath: path.join(tempDir, "result.json") });
+    const controller = new LazySubagentsController(api as any, { launcher, createRunId: () => "run-1", now: () => 100 });
+    const { ctx } = createContext({ isIdle: true, hasPendingMessages: false });
+
+    await controller.handleSessionStart(ctx);
+    await controller.launchChild(
+      {
+        agent: "reviewer",
+        title: "Review auth diff",
+        taskSummary: "Review auth diff",
+        prompt: "Review the auth diff and summarize the issues.",
+      },
+      ctx,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const readSpy = vi.spyOn(fs, "readFile");
+    try {
+      launcher.updates.set("run-1", {
+        runId: "run-1",
+        status: "running",
+        updatedAt: 120,
+        currentTool: "read",
+        toolCount: 1,
+        totalTokens: 42,
+      });
+      await controller.pollOnce();
+      expect(readSpy.mock.calls.filter(([filePath]) => String(filePath) === eventsPath)).toHaveLength(0);
+
+      expect(await controller.pinRun("run-1")).toBe(true);
+      expect(readSpy.mock.calls.filter(([filePath]) => String(filePath) === eventsPath)).toHaveLength(1);
+
+      launcher.updates.set("run-1", {
+        runId: "run-1",
+        status: "running",
+        updatedAt: 120,
+        currentTool: "read",
+        toolCount: 1,
+        totalTokens: 42,
+      });
+      await controller.pollOnce();
+      expect(readSpy.mock.calls.filter(([filePath]) => String(filePath) === eventsPath)).toHaveLength(1);
+
+      const persistedEntryCount = entries.length;
+      await fs.appendFile(
+        eventsPath,
+        `\n${JSON.stringify({
+          runId: "run-1",
+          index: 0,
+          raw: JSON.stringify({
+            type: "message_end",
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "Intermediate note." }],
+            },
+          }),
+        })}`,
+        "utf8",
+      );
+      launcher.updates.set("run-1", {
+        runId: "run-1",
+        status: "running",
+        updatedAt: 121,
+        currentTool: "read",
+        toolCount: 1,
+        totalTokens: 42,
+      });
+      await controller.pollOnce();
+      expect(entries.length).toBeGreaterThan(persistedEntryCount);
+      expect(readSpy.mock.calls.filter(([filePath]) => String(filePath) === eventsPath)).toHaveLength(2);
+      expect(controller.getPinnedRunLines("run-1").join("\n")).toContain("Intermediate note.");
+
+      await fs.appendFile(
+        eventsPath,
+        `\n${JSON.stringify({ runId: "run-1", index: 0, raw: JSON.stringify({ type: "tool_execution_end", toolName: "read" }) })}`,
+        "utf8",
+      );
+      launcher.updates.set("run-1", {
+        runId: "run-1",
+        status: "running",
+        updatedAt: 121,
+        currentTool: "read",
+        toolCount: 1,
+        totalTokens: 42,
+        event: {
+          id: "run-1:121:tool-end",
+          category: "progress",
+          timestamp: 121,
+          summary: "run-1 running · read",
+          status: "running",
+        },
+      });
+      await controller.pollOnce();
+      expect(entries.length).toBeGreaterThan(persistedEntryCount);
+      expect(readSpy.mock.calls.filter(([filePath]) => String(filePath) === eventsPath)).toHaveLength(3);
+      expect(controller.getPinnedRunLines("run-1").join("\n")).toContain("tool end · read");
+    } finally {
+      readSpy.mockRestore();
+    }
+  });
+
   test("records a failed group launch instead of throwing away state", async () => {
     const { api, messages } = createPi();
     const launcher = new FakeLauncher();
