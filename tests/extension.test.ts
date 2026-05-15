@@ -64,17 +64,24 @@ describe("extension entrypoint", () => {
     expect(events.has("turn_end")).toBe(true);
   });
 
-  test("tool guidance exposes help, built-in profiles, delegate fallback, and delayed status polling guidance", () => {
+  test("tool guidance exposes help, agent selection, automatic completion signaling, and anti-polling guidance", () => {
     const { api, tools } = createPi();
     lazySubagentsExtension(api as any);
 
     const tool = tools.find((entry) => entry.name === TOOL_NAME);
 
-    expect(tool?.promptGuidelines.join("\n")).toContain("action=help");
-    expect(tool?.promptGuidelines.join("\n")).toContain("delegate");
-    expect(tool?.promptGuidelines.join("\n")).toContain("reviewer");
-    expect(tool?.promptGuidelines.join("\n")).toContain("worker");
-    expect(tool?.promptGuidelines.join("\n")).toContain("60");
+    const guidance = tool?.promptGuidelines.join("\n") ?? "";
+
+    expect(tool?.description).toContain("completion or attention");
+    expect(tool?.promptSnippet).toContain("wait for completion/attention signals");
+    expect(guidance).toContain("action=help");
+    expect(guidance).toContain("delegate");
+    expect(guidance).toContain("reviewer");
+    expect(guidance).toContain("worker");
+    expect(guidance).toContain("emitted back into the same session automatically");
+    expect(guidance).toContain("Do not call action=status in a loop");
+    expect(guidance).toContain("60 seconds");
+    expect(guidance).toContain("action=pin");
   });
 
   test("clears footer and widget state on shutdown", async () => {

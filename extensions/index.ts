@@ -4,7 +4,7 @@ import { Type } from "typebox";
 import { DEFAULT_COMPLETION_POLICY, TOOL_NAME } from "../src/defaults.js";
 import { DEFAULT_AGENT_PROFILE_NAME, listAvailableAgentProfiles, resolveAgentProfileName } from "../src/launcher/agent-profiles.js";
 import { LazySubagentsController } from "../src/orchestration/controller.js";
-import { buildLazySubagentsHelp, executeLazySubagentsCommand, formatStatusReport } from "../src/orchestration/commands.js";
+import { buildLazySubagentsHelp, executeLazySubagentsCommand, formatLaunchAcknowledgement, formatStatusReport } from "../src/orchestration/commands.js";
 import { registerRunMessageRenderers } from "../src/ui/messages.js";
 
 const CompletionPolicySchema = Type.Union([
@@ -26,20 +26,20 @@ const ToolParamsSchema = Type.Object({
     Type.Literal("clear"),
     Type.Literal("cancel"),
   ], {
-    description: "Operation to perform. Use help first if you need built-in agent profile descriptions or examples.",
+    description: "Operation to perform. Use help first if you need built-in agent profile descriptions, examples, or the wait-for-signal workflow.",
   }),
   agent: Type.Optional(Type.String({
     description: `Single-run agent profile. Available profiles: ${listAvailableAgentProfiles().map((profile) => `${profile.name} (${profile.description})`).join("; ")}. When omitted for action=run, defaults to ${DEFAULT_AGENT_PROFILE_NAME}.`,
   })),
   prompt: Type.Optional(Type.String({
-    description: "Task for the child session. For action=run, describe the delegated work clearly and concisely.",
+    description: "Task for the child session. For action=run, describe the delegated work clearly and concisely, then let the child report completion or attention back asynchronously.",
   })),
   title: Type.Optional(Type.String({
     description: "Optional short label shown in the widget, status, and message cards.",
   })),
   completionPolicy: Type.Optional(CompletionPolicySchema),
   runId: Type.Optional(Type.String({
-    description: "Existing run id for status, result, pickup, clear, or cancel operations.",
+    description: "Existing run id for status, result, pickup, clear, or cancel operations. Use this sparingly for later health checks or final-result retrieval, not tight polling loops.",
   })),
   scope: Type.Optional(Type.Union([Type.Literal("completed"), Type.Literal("all")], {
     description: "Clear only completed runs or all tracked runs.",
@@ -99,14 +99,16 @@ export default function lazySubagentsExtension(pi: ExtensionAPI): void {
   pi.registerTool({
     name: TOOL_NAME,
     label: "Lazy Subagents",
-    description: "Launch or manage background lazy subagent runs without blocking the current session.",
-    promptSnippet: "Launch background child work, inspect results, or ask lazy_subagents for built-in agent profile help.",
+    description: "Launch or manage background lazy subagent runs that emit completion or attention back into the current session without blocking it.",
+    promptSnippet: "Launch background child work and wait for completion/attention signals, or inspect results/help only when needed.",
     promptGuidelines: [
       "Use lazy_subagents action=help when you need exact usage, available agent profiles, or examples before launching work.",
       "Use lazy_subagents action=run when the human wants parallelism without blocking the main session.",
       "For lazy_subagents action=run, omit agent or use delegate when unsure; delegate is the general-purpose fallback.",
       "Use scout for read-only codebase inspection, researcher for evidence gathering, planner for plans, reviewer for review-only work, and worker for implementation work.",
-      "After launching background work, wait about 60 seconds before checking action=status unless the task should finish almost immediately; instant polling usually just returns running.",
+      "After action=run or action=parallel, usually stop polling and wait; launch, completion, and attention messages are emitted back into the same session automatically.",
+      "Do not call action=status in a loop. Use it only when the human asks, when about 60 seconds have passed with no signal and you need a health check, or when you suspect a stall.",
+      "Use action=result only after a run reaches a terminal state, use action=pickup to inject that final result into chat, and use action=pin when you want durable live progress in chat.",
       "Use lazy_subagents action=status, action=result, action=pickup, action=pin, action=clear, or action=cancel to inspect or manage existing runs.",
     ],
     parameters: ToolParamsSchema,
@@ -132,7 +134,7 @@ export default function lazySubagentsExtension(pi: ExtensionAPI): void {
             ctx,
           );
 
-          return { content: [{ type: "text", text: `Launched ${run.id} (${run.agent}).` }], details: { action: params.action, runId: run.id, agent: run.agent } };
+          return { content: [{ type: "text", text: formatLaunchAcknowledgement(`Launched ${run.id} (${run.agent}).`) }], details: { action: params.action, runId: run.id, agent: run.agent } };
         }
         case "parallel": {
           if (!params.children || params.children.length === 0) {
@@ -153,7 +155,7 @@ export default function lazySubagentsExtension(pi: ExtensionAPI): void {
             ctx,
           );
 
-          return { content: [{ type: "text", text: `Launched ${run.id} (${params.children.length} children).` }], details: { action: params.action, runId: run.id } };
+          return { content: [{ type: "text", text: formatLaunchAcknowledgement(`Launched ${run.id} (${params.children.length} children).`) }], details: { action: params.action, runId: run.id } };
         }
         case "status":
           await controller.pollOnce();

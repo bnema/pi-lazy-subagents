@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { buildLazySubagentsHelp, formatStatusReport, parseLazySubagentsCommand } from "../src/orchestration/commands.js";
+import { buildLazySubagentsHelp, executeLazySubagentsCommand, formatStatusReport, parseLazySubagentsCommand } from "../src/orchestration/commands.js";
 import type { RunRecord, RunRegistrySnapshot } from "../src/types.js";
 
 function createRun(overrides: Partial<RunRecord> = {}): RunRecord {
@@ -49,15 +49,32 @@ function createSnapshot(runs: RunRecord[]): RunRegistrySnapshot {
 }
 
 describe("lazy-subagents command parsing", () => {
-  test("help output includes built-in agent profiles and examples", () => {
+  test("help output includes slash-command usage, tool usage, built-in agent profiles, and wait guidance", () => {
     const help = buildLazySubagentsHelp();
 
     expect(help).toContain("delegate");
     expect(help).toContain("reviewer");
     expect(help).toContain("scout");
+    expect(help).toContain("Slash command usage:");
+    expect(help).toContain("Tool usage:");
+    expect(help).toContain("action=parallel");
     expect(help).toContain("Examples:");
     expect(help).toContain("defaults agent to delegate");
-    expect(help).toContain("wait about 60s");
+    expect(help).toContain("emitted back into this session automatically");
+    expect(help).toContain("Do not poll in a loop");
+    expect(help).toContain("Use result after terminal completion");
+  });
+
+  test("run command acknowledgement tells the caller to wait for emitted signals", async () => {
+    const controller = {
+      launchChild: async (request: { agent: string }) => ({ id: "run-1", agent: request.agent }),
+    };
+
+    const message = await executeLazySubagentsCommand('run reviewer "Review the auth diff"', controller as any, {} as any);
+
+    expect(message).toContain("Launched run-1 (reviewer).");
+    expect(message).toContain("completion/attention messages");
+    expect(message).toContain("polling right away");
   });
 
   test("parses run, status, result, pickup, pin, clear, and cancel commands", () => {

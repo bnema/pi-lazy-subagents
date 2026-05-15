@@ -82,6 +82,12 @@ function shortTitle(text: string): string {
   return singleLine.length <= 72 ? singleLine : `${singleLine.slice(0, 71).trimEnd()}…`;
 }
 
+export const WAIT_FOR_SIGNAL_GUIDANCE = "Wait for completion/attention messages instead of polling right away.";
+
+export function formatLaunchAcknowledgement(summary: string): string {
+  return `${summary} ${WAIT_FOR_SIGNAL_GUIDANCE}`;
+}
+
 function findRun(snapshot: RunRegistrySnapshot, runId: string | undefined): RunRecord | undefined {
   if (!runId) return undefined;
   return snapshot.runs.find((run) => run.id === runId);
@@ -206,7 +212,7 @@ function formatAgentHelpLines(): string[] {
 
 export function buildLazySubagentsHelp(): string {
   return [
-    "Usage:",
+    "Slash command usage:",
     "  /lazy-subagents run <agent> <prompt> [--policy POLICY] [--title TITLE]",
     "  /lazy-subagents status [runId]",
     "  /lazy-subagents result <runId>",
@@ -215,16 +221,30 @@ export function buildLazySubagentsHelp(): string {
     "  /lazy-subagents cancel <runId>",
     "  /lazy-subagents clear [all|runId]",
     "",
+    "Tool usage:",
+    "  lazy_subagents action=help",
+    "  lazy_subagents action=run agent=<agent> prompt=<prompt> [completionPolicy=<policy>] [title=<title>]",
+    "  lazy_subagents action=parallel children=[{agent,prompt,taskSummary?,cwd?}, ...] [completionPolicy=<policy>] [title=<title>]",
+    "  lazy_subagents action=status [runId=<runId>]",
+    "  lazy_subagents action=result runId=<runId>",
+    "  lazy_subagents action=pickup runId=<runId>",
+    "  lazy_subagents action=pin runId=<runId>",
+    "  lazy_subagents action=cancel runId=<runId>",
+    "  lazy_subagents action=clear [scope=completed|all] [runId=<runId>]",
+    "",
     "Available agent profiles:",
     ...formatAgentHelpLines(),
     "",
     "Examples:",
     "  /lazy-subagents run reviewer \"Review the auth diff\"",
     "  /lazy-subagents run scout \"Inspect the package layout\"",
-    "  /lazy-subagents run worker \"Implement the requested fix\"",
+    "  lazy_subagents action=run agent=worker prompt=\"Implement the requested fix\"",
+    "  lazy_subagents action=parallel children=[{agent:\"scout\",prompt:\"Inspect the package layout\"},{agent:\"reviewer\",prompt:\"Review the auth diff\"}]",
     "",
     "Tool note: lazy_subagents action=run defaults agent to delegate when omitted.",
-    "Tip: wait about 60s before checking status on a fresh run; immediate polling usually only says running.",
+    "Normal flow: launch once, then wait. Launch, completion, and attention messages are emitted back into this session automatically.",
+    "Do not poll in a loop. Use status only when the human asks, when about 60s have passed with no signal and you need a health check, or when you suspect a stall.",
+    "Use result after terminal completion, pickup to inject the final result into chat, and pin when you want durable live progress in chat without repeated status checks.",
   ].join("\n");
 }
 
@@ -274,7 +294,7 @@ export async function executeLazySubagentsCommand(
         },
         ctx,
       );
-      return `Launched ${run.id} (${run.agent}).`;
+      return formatLaunchAcknowledgement(`Launched ${run.id} (${run.agent}).`);
     }
   }
 }
