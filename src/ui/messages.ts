@@ -201,13 +201,15 @@ function createPinnedRunMessageComponent(
   expanded: boolean,
   theme: {
     bg(color: string, text: string): string;
-  },
+  } | undefined,
   getPinnedRunLines: (runId: string, expanded: boolean) => string[],
 ) {
   return {
     render(width: number) {
-      const box = new Box(1, 0, (text) => theme.bg("customMessageBg", text));
-      box.addChild(new Text(getPinnedRunLines(runId, expanded).join("\n"), 0, 0));
+      const text = new Text(getPinnedRunLines(runId, expanded).join("\n"), 0, 0);
+      if (!theme) return text.render(width);
+      const box = new Box(1, 0, (value) => theme.bg("customMessageBg", value));
+      box.addChild(text);
       return box.render(width);
     },
     invalidate() {},
@@ -232,6 +234,6 @@ export function registerRunMessageRenderers(
       return new Text(typeof message.content === "string" ? message.content : "Pinned lazy subagent", 0, 0);
     }
 
-    return createPinnedRunMessageComponent(payload.runId, optionsArg.expanded, theme as any, options.getPinnedRunLines!);
+    return createPinnedRunMessageComponent(payload.runId, optionsArg.expanded, theme as any, options.getPinnedRunLines);
   });
 }

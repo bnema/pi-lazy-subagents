@@ -33,10 +33,14 @@ function needsAttention(snapshot: RunRegistrySnapshot): number {
   )).length;
 }
 
+function countLiveRuns(snapshot: RunRegistrySnapshot): number {
+  return snapshot.activeRuns.filter((run) => run.status !== "blocked" && run.status !== "paused").length;
+}
+
 export function buildFooterStatus(snapshot: RunRegistrySnapshot, theme?: StatusThemeLike): string | undefined {
   if (snapshot.runs.length === 0) return undefined;
 
-  const liveCount = snapshot.activeRuns.length;
+  const liveCount = countLiveRuns(snapshot);
   const attentionCount = needsAttention(snapshot);
   const inboxCount = snapshot.recentRuns.filter((run) => run.status === "completed" && !run.attentionNeeded && run.completionPolicy !== "manual_pickup").length;
 

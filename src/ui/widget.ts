@@ -153,7 +153,7 @@ function formatMoreLine(hiddenCount: number, theme?: WidgetThemeLike): string {
 
 function buildSummaryLine(snapshot: RunRegistrySnapshot, theme?: WidgetThemeLike, options: WidgetBuildOptions = {}): string {
   const isPinned = options.isPinned ?? (() => false);
-  const liveCount = snapshot.activeRuns.length;
+  const liveCount = snapshot.activeRuns.filter((run) => run.status !== "blocked" && run.status !== "paused").length;
   const attentionCount = snapshot.runs.filter((run) => needsAttention(run)).length;
   const pinnedCount = snapshot.runs.filter((run) => isPinned(run.id) && !needsAttention(run)).length;
   const inboxCount = snapshot.recentRuns.filter((run) => isSuccessfulInboxRun(run, isPinned(run.id))).length;

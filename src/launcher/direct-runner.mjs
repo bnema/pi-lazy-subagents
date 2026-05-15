@@ -134,7 +134,11 @@ export function createSerialLineProcessor(processLine, onError) {
     queue = queue
       .then(async () => {
         for (const line of lines) {
-          await processLine(line);
+          try {
+            await processLine(line);
+          } catch (error) {
+            onError?.(error, { line });
+          }
         }
       })
       .catch((error) => {

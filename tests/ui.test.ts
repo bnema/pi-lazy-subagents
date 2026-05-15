@@ -70,8 +70,9 @@ describe("visibility helpers", () => {
     (running as any).currentTool = "bash";
     (running as any).totalTokens = 126_400;
     const blocked = createRun({ id: "run-2", status: "blocked", updatedAt: 58_000, title: "Needs human input", attentionNeeded: true });
+    const paused = createRun({ id: "run-4", status: "paused", updatedAt: 58_500, title: "Paused by user", attentionNeeded: true });
     const completed = createRun({ id: "run-3", status: "completed", updatedAt: 57_000, completedAt: 57_000, agent: "planner" });
-    const snapshot = createSnapshot([running, blocked, completed]);
+    const snapshot = createSnapshot([running, blocked, paused, completed]);
 
     const status = buildFooterStatus(snapshot, {
       fg: (_color: string, text: string) => `<${text}>`,
@@ -80,7 +81,9 @@ describe("visibility helpers", () => {
 
     expect(status).toContain(`<${GLYPH_LAZY_SUBAGENTS}>`);
     expect(status).toContain("lazy");
-    expect(status).toContain("live");
+    expect(status).toContain("1 live");
+    expect(status).not.toContain("2 live");
+    expect(status).not.toContain("3 live");
     expect(status).toContain("attention");
     expect(status).toContain("inbox");
     expect(status).not.toContain("Needs human input");
@@ -106,6 +109,8 @@ describe("visibility helpers", () => {
 
     expect(lines[0]).toContain(`<${GLYPH_LAZY_SUBAGENTS}>`);
     expect(lines[0]).toContain("lazy subagents");
+    expect(lines[0]).toContain("1 live");
+    expect(lines[0]).not.toContain("2 live");
     expect(lines[0]).toContain("attention");
     expect(lines[0]).toContain("inbox");
     expect(lines[1]).toContain(`<${GLYPH_WAITING}>`);
@@ -183,6 +188,26 @@ describe("visibility helpers", () => {
     expect(component.render(160).join("\n")).toContain("first progress line");
     lines = ["updated progress line"];
     expect(component.render(160).join("\n")).toContain("updated progress line");
+  });
+
+  test("renders pinned messages without a theme using the live pinned content", () => {
+    const renderers = new Map<string, Function>();
+    let lines = ["live detail"];
+
+    registerRunMessageRenderers({
+      registerMessageRenderer: (customType: string, renderer: Function) => {
+        renderers.set(customType, renderer);
+      },
+    } as any, {
+      getPinnedRunLines: () => lines,
+    });
+
+    const renderer = renderers.get(MESSAGE_TYPE_PIN)!;
+    const component = renderer({ content: "Pinned lazy subagent", details: { runId: "run-1" } }, { expanded: false }, undefined);
+
+    expect(component.render(160).join("\n")).toContain("live detail");
+    lines = ["updated detail"];
+    expect(component.render(160).join("\n")).toContain("updated detail");
   });
 
   test("tolerates malformed runtime message previews", () => {
