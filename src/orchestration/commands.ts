@@ -167,6 +167,7 @@ function formatRunStatus(run: RunRecord, now: number): string[] {
   lines.push(`  task: ${run.title || run.taskSummary}`);
   lines.push(`  elapsed: ${formatDuration(now - run.startedAt)}`);
   lines.push(`  updated: ${formatAge({ now, timestamp: run.updatedAt })}`);
+  if (run.model) lines.push(`  model: ${run.model}`);
   if (run.currentTool) lines.push(`  tool: ${run.currentTool}`);
   if (run.toolCount !== undefined) lines.push(`  tools used: ${run.toolCount}`);
   if (run.totalTokens !== undefined) lines.push(`  tokens: ${formatCompactThousands(run.totalTokens)}`);

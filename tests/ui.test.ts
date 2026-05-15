@@ -6,6 +6,8 @@ import {
   createFailureMessagePayload,
   createLaunchMessagePayload,
   formatRunMessageBody,
+  registerRunMessageRenderers,
+  renderRunMessageText,
 } from "../src/ui/messages.js";
 import {
   GLYPH_INBOX,
@@ -14,6 +16,7 @@ import {
   GLYPH_WAITING,
 } from "../src/ui/glyphs.js";
 import { buildWidgetLines } from "../src/ui/widget.js";
+import { MESSAGE_TYPE_PIN } from "../src/defaults.js";
 import type { RunRecord, RunRegistrySnapshot } from "../src/types.js";
 
 function createRun(overrides: Partial<RunRecord> = {}): RunRecord {
@@ -33,6 +36,7 @@ function createRun(overrides: Partial<RunRecord> = {}): RunRecord {
     artifactPath: overrides.artifactPath,
     resultPreview: overrides.resultPreview,
     errorPreview: overrides.errorPreview,
+    model: overrides.model,
     attentionNeeded: overrides.attentionNeeded ?? false,
     groupId: overrides.groupId,
     children: overrides.children,
@@ -61,26 +65,30 @@ function createSnapshot(runs: RunRecord[]): RunRegistrySnapshot {
 }
 
 describe("visibility helpers", () => {
-  test("builds a compact footer summary with attention, inbox, and primary run context", () => {
+  test("builds a compact footer summary without duplicating live run details", () => {
     const running = createRun({ id: "run-1", status: "running", startedAt: 30_000, updatedAt: 59_000, title: "Research auth flow" });
     (running as any).currentTool = "bash";
     (running as any).totalTokens = 126_400;
     const blocked = createRun({ id: "run-2", status: "blocked", updatedAt: 58_000, title: "Needs human input", attentionNeeded: true });
+    const paused = createRun({ id: "run-4", status: "paused", updatedAt: 58_500, title: "Paused by user", attentionNeeded: true });
     const completed = createRun({ id: "run-3", status: "completed", updatedAt: 57_000, completedAt: 57_000, agent: "planner" });
-    const snapshot = createSnapshot([running, blocked, completed]);
+    const snapshot = createSnapshot([running, blocked, paused, completed]);
 
-    const status = buildFooterStatus(snapshot, 60_000, {
+    const status = buildFooterStatus(snapshot, {
       fg: (_color: string, text: string) => `<${text}>`,
       bold: (text: string) => `*${text}*`,
     } as any);
 
     expect(status).toContain(`<${GLYPH_LAZY_SUBAGENTS}>`);
     expect(status).toContain("lazy");
-    expect(status).toContain("live");
+    expect(status).toContain("1 live");
+    expect(status).not.toContain("2 live");
+    expect(status).not.toContain("3 live");
     expect(status).toContain("attention");
     expect(status).toContain("inbox");
-    expect(status).toContain("Needs human input");
-    expect(status).toContain("quiet 2s");
+    expect(status).not.toContain("Needs human input");
+    expect(status).not.toContain("quiet 2s");
+    expect(status).not.toContain("126k");
   });
 
   test("builds grouped widget lines with summary, actionable rows, and inbox compression", () => {
@@ -101,6 +109,8 @@ describe("visibility helpers", () => {
 
     expect(lines[0]).toContain(`<${GLYPH_LAZY_SUBAGENTS}>`);
     expect(lines[0]).toContain("lazy subagents");
+    expect(lines[0]).toContain("1 live");
+    expect(lines[0]).not.toContain("2 live");
     expect(lines[0]).toContain("attention");
     expect(lines[0]).toContain("inbox");
     expect(lines[1]).toContain(`<${GLYPH_WAITING}>`);
@@ -113,6 +123,7 @@ describe("visibility helpers", () => {
     expect(lines[2]).toContain("read");
     expect(lines[2]).toContain("3 tools");
     expect(lines[2]).toContain("1.2k");
+    expect(lines[2]).not.toContain("upd ");
     expect(lines[3]).toContain(`<${GLYPH_INBOX}>`);
     expect(lines[3]).toContain("inbox");
     expect(lines[3]).toContain("Plan done");
@@ -120,7 +131,7 @@ describe("visibility helpers", () => {
   });
 
   test("formats launch, completion, and failure message payloads", () => {
-    const running = createRun({ id: "run-1", status: "running", title: "Research auth flow" });
+    const running = createRun({ id: "run-1", status: "queued", title: "Research auth flow", taskSummary: "Research auth flow" });
     const completed = createRun({ id: "run-2", status: "completed", title: "Plan auth flow", resultPreview: "Found 3 files", completedAt: 90 });
     (completed as any).totalTokens = 247_000;
     const failed = createRun({ id: "run-3", status: "failed", title: "Implement auth flow", errorPreview: "worker failed" });
@@ -130,10 +141,73 @@ describe("visibility helpers", () => {
     const failure = createFailureMessagePayload(failed);
 
     expect(formatRunMessageBody(launch, false)).toContain("Launched");
+    expect(formatRunMessageBody(launch, false)).toContain("/lazy-subagents status run-1");
     expect(formatRunMessageBody(completion, false)).toContain("247k tokens");
     expect(formatRunMessageBody(completion, false)).toContain("Found 3 files");
     expect(formatRunMessageBody(completion, true)).toContain("/lazy-subagents result run-2");
     expect(formatRunMessageBody(failure, true)).toContain("worker failed");
+  });
+
+  test("renders launch cards without duplicate copy and with clearer queued context", () => {
+    const launch = createLaunchMessagePayload(createRun({
+      id: "run-9",
+      status: "queued",
+      agent: "reviewer",
+      model: "(openai-codex) gpt-5.4 • xhigh",
+      title: "Narrow dumber audio-shutdown review",
+      taskSummary: "Narrow dumber audio-shutdown review",
+    }));
+
+    const text = renderRunMessageText(launch, false);
+
+    expect(text).toContain("[QUEUED]");
+    expect(text).toContain("agent reviewer");
+    expect(text).toContain("run run-9");
+    expect(text).toContain("model (openai-codex) gpt-5.4 • xhigh");
+    expect(text).toContain("/lazy-subagents status run-9");
+    expect(text.match(/Narrow dumber audio-shutdown review/g)?.length).toBe(1);
+  });
+
+  test("renders pinned run messages from the latest getter output instead of freezing a snapshot", () => {
+    const renderers = new Map<string, Function>();
+    let lines = ["first progress line"];
+
+    registerRunMessageRenderers({
+      registerMessageRenderer: (customType: string, renderer: Function) => {
+        renderers.set(customType, renderer);
+      },
+    } as any, {
+      getPinnedRunLines: () => lines,
+    });
+
+    const renderer = renderers.get(MESSAGE_TYPE_PIN)!;
+    const component = renderer({ content: "Pinned lazy subagent", details: { runId: "run-1" } }, { expanded: false }, {
+      bg: (_color: string, text: string) => text,
+    });
+
+    expect(component.render(160).join("\n")).toContain("first progress line");
+    lines = ["updated progress line"];
+    expect(component.render(160).join("\n")).toContain("updated progress line");
+  });
+
+  test("renders pinned messages without a theme using the live pinned content", () => {
+    const renderers = new Map<string, Function>();
+    let lines = ["live detail"];
+
+    registerRunMessageRenderers({
+      registerMessageRenderer: (customType: string, renderer: Function) => {
+        renderers.set(customType, renderer);
+      },
+    } as any, {
+      getPinnedRunLines: () => lines,
+    });
+
+    const renderer = renderers.get(MESSAGE_TYPE_PIN)!;
+    const component = renderer({ content: "Pinned lazy subagent", details: { runId: "run-1" } }, { expanded: false }, undefined);
+
+    expect(component.render(160).join("\n")).toContain("live detail");
+    lines = ["updated detail"];
+    expect(component.render(160).join("\n")).toContain("updated detail");
   });
 
   test("tolerates malformed runtime message previews", () => {

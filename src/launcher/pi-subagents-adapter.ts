@@ -1,8 +1,11 @@
+import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 import { getAgentProfile, type AgentProfile } from "./agent-profiles.js";
 import type {
@@ -81,6 +84,8 @@ interface RunnerChildConfig {
   sessionDir: string;
   outputFile: string;
   profile: AgentProfile;
+  resolvedModel?: string;
+  resolvedThinking?: string;
 }
 
 interface RunnerConfig {
@@ -94,6 +99,15 @@ interface RunnerConfig {
   eventsPath: string;
   children: RunnerChildConfig[];
 }
+
+type LazySubagentSettingsFile = {
+  defaultProvider?: unknown;
+  defaultModel?: unknown;
+  defaultThinkingLevel?: unknown;
+  subagents?: {
+    agentOverrides?: Record<string, { model?: unknown; thinking?: unknown }>;
+  };
+};
 
 function sanitizeTempScopeSegment(value: string): string {
   const sanitized = value
@@ -174,6 +188,155 @@ function getResultSessionFile(result: DirectResultFile): string | undefined {
   return result.sessionFile ?? result.results?.find((child) => child.sessionFile)?.sessionFile;
 }
 
+function normalizeText(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function findNearestProjectSettingsPath(cwd: string): string | undefined {
+  let currentDir = cwd;
+  while (true) {
+    const candidate = path.join(currentDir, ".pi", "settings.json");
+    if (fs.existsSync(candidate)) return candidate;
+    const parentDir = path.dirname(currentDir);
+    if (parentDir === currentDir) return undefined;
+    currentDir = parentDir;
+  }
+}
+
+function getBuiltinAgentModelOverride(settings: LazySubagentSettingsFile | undefined, agentName: string): string | false | undefined {
+  const override = settings?.subagents?.agentOverrides?.[agentName]?.model;
+  if (override === false) return false;
+  return normalizeText(override);
+}
+
+function getBuiltinAgentThinkingOverride(settings: LazySubagentSettingsFile | undefined, agentName: string): string | false | undefined {
+  const override = settings?.subagents?.agentOverrides?.[agentName]?.thinking;
+  if (override === false) return false;
+  return normalizeText(override);
+}
+
+function buildDefaultModelReference(
+  userSettings: LazySubagentSettingsFile | undefined,
+  projectSettings: LazySubagentSettingsFile | undefined,
+): string | undefined {
+  const provider = normalizeText(projectSettings?.defaultProvider) ?? normalizeText(userSettings?.defaultProvider);
+  const model = normalizeText(projectSettings?.defaultModel) ?? normalizeText(userSettings?.defaultModel);
+  if (!model) return undefined;
+  return model.includes("/") || !provider ? model : `${provider}/${model}`;
+}
+
+function resolveEffectiveModel(
+  profile: Pick<AgentProfile, "source" | "model">,
+  agentName: string,
+  settings: {
+    userSettings?: LazySubagentSettingsFile;
+    projectSettings?: LazySubagentSettingsFile;
+  },
+): string | undefined {
+  const projectOverride = profile.source === "builtin" ? getBuiltinAgentModelOverride(settings.projectSettings, agentName) : undefined;
+  const userOverride = profile.source === "builtin" && projectOverride === undefined
+    ? getBuiltinAgentModelOverride(settings.userSettings, agentName)
+    : undefined;
+  const explicitModel = projectOverride === false
+    ? undefined
+    : userOverride === false
+      ? undefined
+      : projectOverride ?? userOverride ?? profile.model;
+  return explicitModel ?? buildDefaultModelReference(settings.userSettings, settings.projectSettings);
+}
+
+function resolveEffectiveThinking(
+  profile: Pick<AgentProfile, "source" | "thinking">,
+  agentName: string,
+  settings: {
+    userSettings?: LazySubagentSettingsFile;
+    projectSettings?: LazySubagentSettingsFile;
+  },
+): string | undefined {
+  const projectOverride = profile.source === "builtin" ? getBuiltinAgentThinkingOverride(settings.projectSettings, agentName) : undefined;
+  const userOverride = profile.source === "builtin" && projectOverride === undefined
+    ? getBuiltinAgentThinkingOverride(settings.userSettings, agentName)
+    : undefined;
+  const explicitThinking = projectOverride === false
+    ? undefined
+    : userOverride === false
+      ? undefined
+      : projectOverride ?? userOverride ?? profile.thinking;
+  return explicitThinking
+    ?? normalizeText(settings.projectSettings?.defaultThinkingLevel)
+    ?? normalizeText(settings.userSettings?.defaultThinkingLevel);
+}
+
+function formatResolvedModelLabel(model: string | undefined, thinking: string | undefined): string | undefined {
+  if (!model) return thinking ? `(default) • ${thinking}` : undefined;
+  const separatorIndex = model.indexOf("/");
+  const formattedModel = separatorIndex > 0
+    ? `(${model.slice(0, separatorIndex)}) ${model.slice(separatorIndex + 1)}`
+    : model;
+  return thinking ? `${formattedModel} • ${thinking}` : formattedModel;
+}
+
+async function buildRunnerChildren(
+  children: Array<Pick<RunnerChildConfig, "agent" | "taskSummary" | "prompt"> & { cwd?: string }>,
+  baseCwd: string,
+  asyncDir: string,
+): Promise<RunnerChildConfig[]> {
+  const settingsCache = new Map<string, Promise<{
+    userSettings?: LazySubagentSettingsFile;
+    projectSettings?: LazySubagentSettingsFile;
+  }>>();
+
+  const loadSettingsForCwd = (cwd: string) => {
+    let promise = settingsCache.get(cwd);
+    if (!promise) {
+      promise = loadLazySubagentSettings(cwd);
+      settingsCache.set(cwd, promise);
+    }
+    return promise;
+  };
+
+  return await Promise.all(children.map(async (child, index) => {
+    const cwd = child.cwd ?? baseCwd;
+    const settings = await loadSettingsForCwd(cwd);
+    const profile = getAgentProfile(child.agent);
+    return {
+      agent: child.agent,
+      taskSummary: child.taskSummary,
+      prompt: child.prompt,
+      cwd,
+      sessionDir: childSessionDir(asyncDir, index),
+      outputFile: childOutputFile(index),
+      profile,
+      resolvedModel: resolveEffectiveModel(profile, child.agent, settings),
+      resolvedThinking: resolveEffectiveThinking(profile, child.agent, settings),
+    };
+  }));
+}
+
+function summarizeResolvedModels(children: RunnerChildConfig[]): string | undefined {
+  const resolved = children
+    .map((child) => ({ agent: child.agent, label: formatResolvedModelLabel(child.resolvedModel, child.resolvedThinking) }))
+    .filter((child): child is { agent: string; label: string } => typeof child.label === "string" && child.label.length > 0);
+
+  if (resolved.length === 0) return undefined;
+  const uniqueLabels = [...new Set(resolved.map((child) => child.label))];
+  if (uniqueLabels.length === 1) return uniqueLabels[0];
+  return resolved.map((child) => `${child.agent}: ${child.label}`).join(", ");
+}
+
+async function loadLazySubagentSettings(cwd: string): Promise<{
+  userSettings?: LazySubagentSettingsFile;
+  projectSettings?: LazySubagentSettingsFile;
+}> {
+  const userSettingsPath = path.join(getAgentDir(), "settings.json");
+  const projectSettingsPath = findNearestProjectSettingsPath(cwd);
+  const [userSettings, projectSettings] = await Promise.all([
+    readJsonFile<LazySubagentSettingsFile>(userSettingsPath),
+    readJsonFile<LazySubagentSettingsFile>(projectSettingsPath),
+  ]);
+  return { userSettings, projectSettings };
+}
+
 function buildEvent(runId: string, status: RunStatus, updatedAt: number, summary: string | undefined, attentionNeeded = false): RunEvent | undefined {
   const message = summary ?? `${runId} ${status}`;
   if (attentionNeeded) {
@@ -232,12 +395,19 @@ export function mapAsyncStateToRunStatus(state: DirectAsyncState): RunStatus {
   }
 }
 
-export function normalizeAsyncLaunchResult(runId: string, asyncId: string, asyncDir: string, resultsDir: string): LaunchResult {
+export function normalizeAsyncLaunchResult(
+  runId: string,
+  asyncId: string,
+  asyncDir: string,
+  resultsDir: string,
+  model?: string,
+): LaunchResult {
   return {
     runId,
     asyncId,
     asyncDir,
     resultPath: path.join(resultsDir, `${asyncId}.json`),
+    model,
   };
 }
 
@@ -391,10 +561,11 @@ export class PiSubagentsAdapter implements Launcher {
     await fsp.writeFile(configPath, JSON.stringify(config, null, 2), "utf8");
     await spawnDetachedRunner(configPath, cwd);
 
-    return normalizeAsyncLaunchResult(config.runId, config.runId, config.asyncDir, this.resultsDir);
+    return normalizeAsyncLaunchResult(config.runId, config.runId, config.asyncDir, this.resultsDir, summarizeResolvedModels(config.children));
   }
 
   async launchChild(request: LaunchChildRequest, runtime: LauncherRuntimeContext): Promise<LaunchResult> {
+    const cwd = request.cwd ?? runtime.cwd;
     const asyncDir = path.join(this.asyncDirRoot, request.runId);
     const config: RunnerConfig = {
       runId: request.runId,
@@ -405,23 +576,21 @@ export class PiSubagentsAdapter implements Launcher {
       resultPath: path.join(this.resultsDir, `${request.runId}.json`),
       statusPath: path.join(asyncDir, "status.json"),
       eventsPath: path.join(asyncDir, "events.jsonl"),
-      children: [
+      children: await buildRunnerChildren([
         {
           agent: request.agent,
           taskSummary: request.taskSummary,
           prompt: request.prompt,
-          cwd: request.cwd ?? runtime.cwd,
-          sessionDir: childSessionDir(asyncDir, 0),
-          outputFile: childOutputFile(0),
-          profile: getAgentProfile(request.agent),
+          cwd,
         },
-      ],
+      ], cwd, asyncDir),
     };
 
-    return await this.launch(config, request.cwd ?? runtime.cwd);
+    return await this.launch(config, cwd);
   }
 
   async launchGroup(request: LaunchGroupRequest, runtime: LauncherRuntimeContext): Promise<LaunchResult> {
+    const cwd = request.cwd ?? runtime.cwd;
     const asyncDir = path.join(this.asyncDirRoot, request.runId);
     const config: RunnerConfig = {
       runId: request.runId,
@@ -432,18 +601,10 @@ export class PiSubagentsAdapter implements Launcher {
       resultPath: path.join(this.resultsDir, `${request.runId}.json`),
       statusPath: path.join(asyncDir, "status.json"),
       eventsPath: path.join(asyncDir, "events.jsonl"),
-      children: request.children.map((child, index) => ({
-        agent: child.agent,
-        taskSummary: child.taskSummary,
-        prompt: child.prompt,
-        cwd: child.cwd ?? request.cwd ?? runtime.cwd,
-        sessionDir: childSessionDir(asyncDir, index),
-        outputFile: childOutputFile(index),
-        profile: getAgentProfile(child.agent),
-      })),
+      children: await buildRunnerChildren(request.children, cwd, asyncDir),
     };
 
-    return await this.launch(config, request.cwd ?? runtime.cwd);
+    return await this.launch(config, cwd);
   }
 
   async readUpdate(launch: LaunchResult): Promise<NormalizedRunUpdate | undefined> {
@@ -535,9 +696,13 @@ export class PiSubagentsAdapter implements Launcher {
 }
 
 export const __testHooks = {
+  buildRunnerChildren,
   mapAsyncStateToRunStatus,
   normalizeAsyncLaunchResult,
   normalizeAsyncStatus,
   normalizeAsyncResult,
+  resolveEffectiveModel,
+  resolveEffectiveThinking,
+  summarizeResolvedModels,
   resolveTempScopeId,
 };

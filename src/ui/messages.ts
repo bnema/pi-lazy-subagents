@@ -56,12 +56,22 @@ function makePayload(kind: RunMessageKind, run: RunRecord, preview?: string): Ru
   };
 }
 
+function normalizePreviewText(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+function distinctPreview(title: string, preview?: string): string | undefined {
+  if (!preview) return undefined;
+  return normalizePreviewText(title) === normalizePreviewText(preview) ? undefined : preview;
+}
+
 function completionActions(run: RunRecord): string {
   return `Use /lazy-subagents result ${run.id} or /lazy-subagents pickup ${run.id}`;
 }
 
 export function createLaunchMessagePayload(run: RunRecord): RunMessagePayload {
-  return makePayload("launch", run, run.taskSummary);
+  const title = run.title || run.taskSummary;
+  return makePayload("launch", run, distinctPreview(title, run.taskSummary) ?? `Use /lazy-subagents status ${run.id}`);
 }
 
 export function createCompletionMessagePayload(run: RunRecord): RunMessagePayload {
@@ -98,7 +108,6 @@ export function formatRunMessageBody(payload: RunMessagePayload, expanded: boole
 
   if (!preview) return summary;
   if (expanded) return `${summary}\n${preview}`;
-  if (payload.kind === "launch") return summary;
   return `${summary}\n${firstPreviewLine(preview) ?? ""}`.trimEnd();
 }
 
@@ -129,10 +138,10 @@ function messageKindColor(kind: RunMessageKind): "accent" | "success" | "error" 
   }
 }
 
-function messageKindLabel(kind: RunMessageKind): string {
-  switch (kind) {
+function messageKindLabel(payload: Pick<RunMessagePayload, "kind" | "run">): string {
+  switch (payload.kind) {
     case "launch":
-      return "LIVE";
+      return payload.run.status === "queued" ? "QUEUED" : "LIVE";
     case "completion":
       return "DONE";
     case "failure":
@@ -142,21 +151,26 @@ function messageKindLabel(kind: RunMessageKind): string {
   }
 }
 
-function renderRunMessageText(payload: RunMessagePayload, expanded: boolean, theme?: {
+export function renderRunMessageText(payload: RunMessagePayload, expanded: boolean, theme?: {
   fg(color: string, text: string): string;
   bold(text: string): string;
 }): string {
   const title = payload.run.title || payload.run.taskSummary;
+  const kindLabel = messageKindLabel(payload);
   const label = theme
-    ? theme.fg(messageKindColor(payload.kind), `[${messageKindLabel(payload.kind)}]`)
-    : `[${messageKindLabel(payload.kind)}]`;
+    ? theme.fg(messageKindColor(payload.kind), `[${kindLabel}]`)
+    : `[${kindLabel}]`;
   const header = `${label} ${theme ? theme.bold(title) : title}`;
-  const metaParts = [payload.run.agent, payload.run.status];
+  const metaParts = [`agent ${payload.run.agent}`, payload.run.status];
+  if (payload.kind === "launch") metaParts.push(`run ${payload.run.id}`);
   if (payload.run.totalTokens !== undefined && payload.run.totalTokens > 0) {
     metaParts.push(`${formatCompactThousands(payload.run.totalTokens)} tok`);
   }
 
   const lines = [header, theme ? theme.fg("muted", metaParts.join(" · ")) : metaParts.join(" · ")];
+  if (payload.run.model) {
+    lines.push(theme ? theme.fg("muted", `model ${payload.run.model}`) : `model ${payload.run.model}`);
+  }
   const preview = typeof payload.preview === "string" ? payload.preview : undefined;
   if (preview) {
     lines.push(expanded ? preview : firstPreviewLine(preview) ?? "");
@@ -182,6 +196,26 @@ function renderRunMessage(
   return box;
 }
 
+function createPinnedRunMessageComponent(
+  runId: string,
+  expanded: boolean,
+  theme: {
+    bg(color: string, text: string): string;
+  } | undefined,
+  getPinnedRunLines: (runId: string, expanded: boolean) => string[],
+) {
+  return {
+    render(width: number) {
+      const text = new Text(getPinnedRunLines(runId, expanded).join("\n"), 0, 0);
+      if (!theme) return text.render(width);
+      const box = new Box(1, 0, (value) => theme.bg("customMessageBg", value));
+      box.addChild(text);
+      return box.render(width);
+    },
+    invalidate() {},
+  };
+}
+
 export function registerRunMessageRenderers(
   pi: ExtensionAPI,
   options: { getPinnedRunLines?: (runId: string, expanded: boolean) => string[] } = {},
@@ -200,8 +234,6 @@ export function registerRunMessageRenderers(
       return new Text(typeof message.content === "string" ? message.content : "Pinned lazy subagent", 0, 0);
     }
 
-    const box = new Box(1, 0, (text) => theme.bg("customMessageBg", text));
-    box.addChild(new Text(options.getPinnedRunLines!(payload.runId, optionsArg.expanded).join("\n"), 0, 0));
-    return box as any;
+    return createPinnedRunMessageComponent(payload.runId, optionsArg.expanded, theme as any, options.getPinnedRunLines);
   });
 }

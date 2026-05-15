@@ -129,6 +129,7 @@ function normalizeRunRecord(value: unknown): RunRecord | undefined {
     currentTool: asString(value.currentTool),
     toolCount: asNumber(value.toolCount),
     totalTokens: asNumber(value.totalTokens),
+    model: asString(value.model),
     attentionNeeded,
     groupId: asString(value.groupId),
     children: Array.isArray(value.children) ? asStringArray(value.children) : undefined,

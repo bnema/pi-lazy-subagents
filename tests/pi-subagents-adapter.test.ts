@@ -6,7 +6,17 @@ import { describe, expect, test, vi } from "vitest";
 
 import { __testHooks, PiSubagentsAdapter } from "../src/launcher/pi-subagents-adapter.js";
 
-const { mapAsyncStateToRunStatus, normalizeAsyncLaunchResult, normalizeAsyncStatus, normalizeAsyncResult, resolveTempScopeId } = __testHooks;
+const {
+  buildRunnerChildren,
+  mapAsyncStateToRunStatus,
+  normalizeAsyncLaunchResult,
+  normalizeAsyncStatus,
+  normalizeAsyncResult,
+  resolveEffectiveModel,
+  resolveEffectiveThinking,
+  summarizeResolvedModels,
+  resolveTempScopeId,
+} = __testHooks;
 
 describe("PiSubagentsAdapter helpers", () => {
   test("maps pi-subagents async states into local run statuses", () => {
@@ -18,16 +28,86 @@ describe("PiSubagentsAdapter helpers", () => {
     expect(mapAsyncStateToRunStatus("cancelled")).toBe("cancelled");
   });
 
+  test("resolves effective models from builtin overrides, defaults, and grouped launches", () => {
+    const builtinProfile = { source: "builtin", model: undefined, thinking: undefined } as const;
+    const fileProfile = { source: "file", model: "openai/gpt-5", thinking: "high" } as const;
+
+    expect(resolveEffectiveModel(builtinProfile as any, "reviewer", {
+      userSettings: { defaultProvider: "openai-codex", defaultModel: "gpt-5.4", subagents: { agentOverrides: { reviewer: { model: "deepseek/deepseek-v4-pro" } } } },
+    })).toBe("deepseek/deepseek-v4-pro");
+
+    expect(resolveEffectiveModel(builtinProfile as any, "reviewer", {
+      userSettings: { defaultProvider: "openai-codex", defaultModel: "gpt-5.4", subagents: { agentOverrides: { reviewer: { model: "deepseek/deepseek-v4-pro" } } } },
+      projectSettings: { defaultProvider: "anthropic", defaultModel: "claude-sonnet-4-5", subagents: { agentOverrides: { reviewer: { model: "openai/gpt-5-mini" } } } },
+    })).toBe("openai/gpt-5-mini");
+
+    expect(resolveEffectiveModel(builtinProfile as any, "reviewer", {
+      userSettings: { defaultProvider: "openai-codex", defaultModel: "gpt-5.4", subagents: { agentOverrides: { reviewer: { model: false as any } } } },
+    })).toBe("openai-codex/gpt-5.4");
+
+    expect(resolveEffectiveModel(fileProfile as any, "reviewer", {
+      userSettings: { defaultProvider: "openai-codex", defaultModel: "gpt-5.4", subagents: { agentOverrides: { reviewer: { model: "deepseek/deepseek-v4-pro" } } } },
+    })).toBe("openai/gpt-5");
+
+    expect(resolveEffectiveThinking(builtinProfile as any, "reviewer", {
+      userSettings: { defaultThinkingLevel: "xhigh", subagents: { agentOverrides: { reviewer: { thinking: "medium" } } } },
+      projectSettings: { subagents: { agentOverrides: { reviewer: { thinking: "high" } } } },
+    })).toBe("high");
+
+    expect(resolveEffectiveThinking(fileProfile as any, "reviewer", {
+      userSettings: { defaultThinkingLevel: "xhigh" },
+    })).toBe("high");
+
+    expect(summarizeResolvedModels([
+      { agent: "reviewer", resolvedModel: "openai/gpt-5.4", resolvedThinking: "xhigh" },
+      { agent: "planner", resolvedModel: "openai/gpt-5.4", resolvedThinking: "xhigh" },
+    ] as any)).toBe("(openai) gpt-5.4 • xhigh");
+
+    expect(summarizeResolvedModels([
+      { agent: "reviewer", resolvedThinking: "xhigh" },
+    ] as any)).toBe("(default) • xhigh");
+
+    expect(summarizeResolvedModels([
+      { agent: "reviewer", resolvedModel: "openai/gpt-5.4", resolvedThinking: "xhigh" },
+      { agent: "planner", resolvedModel: "anthropic/claude-sonnet-4-5", resolvedThinking: "high" },
+    ] as any)).toBe("reviewer: (openai) gpt-5.4 • xhigh, planner: (anthropic) claude-sonnet-4-5 • high");
+  });
+
+  test("builds group children using each child cwd for project-scoped overrides", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-lazy-subagents-"));
+    const asyncDir = path.join(tempDir, "async");
+    const repoA = path.join(tempDir, "repo-a");
+    const repoB = path.join(tempDir, "repo-b");
+    await fs.mkdir(path.join(repoA, ".pi"), { recursive: true });
+    await fs.mkdir(path.join(repoB, ".pi"), { recursive: true });
+    await fs.writeFile(path.join(repoA, ".pi", "settings.json"), JSON.stringify({
+      subagents: { agentOverrides: { reviewer: { model: "openai/gpt-5.4", thinking: "xhigh" } } },
+    }), "utf8");
+    await fs.writeFile(path.join(repoB, ".pi", "settings.json"), JSON.stringify({
+      subagents: { agentOverrides: { reviewer: { model: "anthropic/claude-sonnet-4-5", thinking: "high" } } },
+    }), "utf8");
+
+    const children = await buildRunnerChildren([
+      { agent: "reviewer", taskSummary: "review a", prompt: "review a", cwd: repoA },
+      { agent: "reviewer", taskSummary: "review b", prompt: "review b", cwd: repoB },
+    ], tempDir, asyncDir);
+
+    expect(children.map((child: any) => child.cwd)).toEqual([repoA, repoB]);
+    expect(children.map((child: any) => child.resolvedModel)).toEqual(["openai/gpt-5.4", "anthropic/claude-sonnet-4-5"]);
+    expect(children.map((child: any) => child.resolvedThinking)).toEqual(["xhigh", "high"]);
+  });
+
   test("normalizes launch metadata and temp scoping", () => {
     expect(resolveTempScopeId({ env: { USER: "bnema" }, getuid: undefined })).toBe("user-bnema");
 
-    const result = normalizeAsyncLaunchResult("run-1", "run-1", "/tmp/async/run-1", "/tmp/results");
+    const result = normalizeAsyncLaunchResult("run-1", "run-1", "/tmp/async/run-1", "/tmp/results", "openai-codex/gpt-5.4");
 
     expect(result).toEqual({
       runId: "run-1",
       asyncId: "run-1",
       asyncDir: "/tmp/async/run-1",
       resultPath: path.join("/tmp/results", "run-1.json"),
+      model: "openai-codex/gpt-5.4",
     });
   });
 
