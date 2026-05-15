@@ -1,0 +1,50 @@
+{
+  "name": "pi-lazy-subagents",
+  "version": "0.0.0",
+  "description": "Pi package for asynchronous subagent orchestration with persistent visibility and completion routing.",
+  "license": "MIT",
+  "author": "bnema",
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "subagents",
+    "async",
+    "orchestration"
+  ],
+  "files": [
+    "extensions",
+    "src",
+    "README.md",
+    "LICENSE",
+    "tsconfig.json"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "^0.74.0",
+    "@earendil-works/pi-coding-agent": "^0.74.0",
+    "@earendil-works/pi-tui": "^0.74.0",
+    "typebox": "^1.1.24"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@earendil-works/pi-ai": "^0.74.0",
+    "@earendil-works/pi-coding-agent": "^0.74.0",
+    "@earendil-works/pi-tui": "^0.74.0",
+    "@types/node": "^24.3.0",
+    "typebox": "^1.1.24",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.4"
+  },
+  "engines": {
+    "node": ">=20.6.0"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests"
+  }
+}

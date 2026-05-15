@@ -1,0 +1,9 @@
+export const GLYPH_LAZY_SUBAGENTS = "\ueb08"; // nf-cod-hubot
+export const GLYPH_RUNNING = "\ueb19"; // nf-cod-loading
+export const GLYPH_WAITING = "\uea6c"; // nf-cod-warning
+export const GLYPH_READY = "\uea9a"; // nf-cod-arrow_down
+export const GLYPH_PAUSED = "\uead1"; // nf-cod-debug_pause
+export const GLYPH_FAILED = "\uea87"; // nf-cod-error
+export const GLYPH_PINNED = "\ueba0"; // nf-cod-pinned
+export const GLYPH_QUEUED = "\uebb5"; // nf-cod-circle_large
+export const GLYPH_INBOX = "\ueb09"; // nf-cod-inbox
