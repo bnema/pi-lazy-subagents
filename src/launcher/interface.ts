@@ -41,6 +41,7 @@ export interface LaunchResult {
   resultPath?: string;
   sessionFile?: string;
   artifactPath?: string;
+  model?: string;
 }
 
 export interface NormalizedRunUpdate {

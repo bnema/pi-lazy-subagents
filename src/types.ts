@@ -67,6 +67,7 @@ export interface RunRecord {
   currentTool?: string;
   toolCount?: number;
   totalTokens?: number;
+  model?: string;
   attentionNeeded: boolean;
   groupId?: string;
   children?: string[];

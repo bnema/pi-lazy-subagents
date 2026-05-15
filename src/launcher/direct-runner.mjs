@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { pathToFileURL } from "node:url";
 
 import { commitUsageTurn, createUsageTracker, finalizeUsageTracker, recordUsageSample } from "./usage-tracker.js";
 
@@ -68,6 +69,8 @@ function createInitialStatus(config) {
     steps: config.children.map((child, index) => ({
       index,
       agent: child.profile.name,
+      model: child.resolvedModel,
+      thinking: child.resolvedThinking,
       status: "pending",
       taskSummary: child.taskSummary,
       startedAt: undefined,
@@ -123,13 +126,40 @@ function extractUsageTotal(event) {
   return undefined;
 }
 
+export function createSerialLineProcessor(processLine, onError) {
+  let queue = Promise.resolve();
+
+  const enqueue = (lines) => {
+    if (!Array.isArray(lines) || lines.length === 0) return;
+    queue = queue
+      .then(async () => {
+        for (const line of lines) {
+          await processLine(line);
+        }
+      })
+      .catch((error) => {
+        onError?.(error);
+      });
+  };
+
+  return {
+    enqueue,
+    async flush(finalLine) {
+      if (typeof finalLine === "string" && finalLine.trim()) {
+        enqueue([finalLine]);
+      }
+      await queue;
+    },
+  };
+}
+
 function buildPiArgs(child) {
   const args = ["--mode", "json", "--session-dir", child.sessionDir];
-  if (child.profile.model) {
-    args.push("--model", child.profile.model);
+  if (child.resolvedModel) {
+    args.push("--model", child.resolvedModel);
   }
-  if (child.profile.thinking) {
-    args.push("--thinking", child.profile.thinking);
+  if (child.resolvedThinking) {
+    args.push("--thinking", child.resolvedThinking);
   }
   if (child.profile.tools?.length) {
     args.push("--tools", child.profile.tools.join(","));
@@ -220,14 +250,16 @@ async function runChild(config, statusPath, status, child, index) {
     }
   };
 
+  const stdoutProcessor = createSerialLineProcessor(processLine, (error) => {
+    const message = error instanceof Error ? error.stack ?? error.message : String(error);
+    console.error("[pi-lazy-subagents] failed to process child stdout line:", message);
+  });
+
   childProcess.stdout.on("data", (chunk) => {
     stdoutBuffer += chunk.toString();
     const lines = stdoutBuffer.split(/\r?\n/u);
     stdoutBuffer = lines.pop() ?? "";
-    void Promise.all(lines.map((line) => processLine(line))).catch((error) => {
-      const message = error instanceof Error ? error.stack ?? error.message : String(error);
-      console.error("[pi-lazy-subagents] failed to process child stdout line:", message);
-    });
+    stdoutProcessor.enqueue(lines);
   });
 
   childProcess.stderr.on("data", (chunk) => {
@@ -239,9 +271,9 @@ async function runChild(config, statusPath, status, child, index) {
     childProcess.once("close", (code) => resolve(code ?? 1));
   });
 
-  if (stdoutBuffer.trim()) {
-    await processLine(stdoutBuffer);
-  }
+  const trailingStdout = stdoutBuffer;
+  stdoutBuffer = "";
+  await stdoutProcessor.flush(trailingStdout);
 
   sessionFile = await findLatestSessionFile(child.sessionDir);
   step.sessionFile = sessionFile;
@@ -362,6 +394,9 @@ async function main() {
   await run(config);
 }
 
+const isMain = process.argv[1] ? pathToFileURL(process.argv[1]).href === import.meta.url : false;
+
+if (isMain) {
 main().catch(async (error) => {
   const message = error instanceof Error ? error.message : String(error);
   try {
@@ -418,3 +453,4 @@ main().catch(async (error) => {
   }
   process.exitCode = 1;
 });
+}

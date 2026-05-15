@@ -6,6 +6,7 @@ import {
   createFailureMessagePayload,
   createLaunchMessagePayload,
   formatRunMessageBody,
+  registerRunMessageRenderers,
   renderRunMessageText,
 } from "../src/ui/messages.js";
 import {
@@ -15,6 +16,7 @@ import {
   GLYPH_WAITING,
 } from "../src/ui/glyphs.js";
 import { buildWidgetLines } from "../src/ui/widget.js";
+import { MESSAGE_TYPE_PIN } from "../src/defaults.js";
 import type { RunRecord, RunRegistrySnapshot } from "../src/types.js";
 
 function createRun(overrides: Partial<RunRecord> = {}): RunRecord {
@@ -34,6 +36,7 @@ function createRun(overrides: Partial<RunRecord> = {}): RunRecord {
     artifactPath: overrides.artifactPath,
     resultPreview: overrides.resultPreview,
     errorPreview: overrides.errorPreview,
+    model: overrides.model,
     attentionNeeded: overrides.attentionNeeded ?? false,
     groupId: overrides.groupId,
     children: overrides.children,
@@ -145,6 +148,7 @@ describe("visibility helpers", () => {
       id: "run-9",
       status: "queued",
       agent: "reviewer",
+      model: "(openai-codex) gpt-5.4 • xhigh",
       title: "Narrow dumber audio-shutdown review",
       taskSummary: "Narrow dumber audio-shutdown review",
     }));
@@ -154,8 +158,31 @@ describe("visibility helpers", () => {
     expect(text).toContain("[QUEUED]");
     expect(text).toContain("agent reviewer");
     expect(text).toContain("run run-9");
+    expect(text).toContain("model (openai-codex) gpt-5.4 • xhigh");
     expect(text).toContain("/lazy-subagents status run-9");
     expect(text.match(/Narrow dumber audio-shutdown review/g)?.length).toBe(1);
+  });
+
+  test("renders pinned run messages from the latest getter output instead of freezing a snapshot", () => {
+    const renderers = new Map<string, Function>();
+    let lines = ["first progress line"];
+
+    registerRunMessageRenderers({
+      registerMessageRenderer: (customType: string, renderer: Function) => {
+        renderers.set(customType, renderer);
+      },
+    } as any, {
+      getPinnedRunLines: () => lines,
+    });
+
+    const renderer = renderers.get(MESSAGE_TYPE_PIN)!;
+    const component = renderer({ content: "Pinned lazy subagent", details: { runId: "run-1" } }, { expanded: false }, {
+      bg: (_color: string, text: string) => text,
+    });
+
+    expect(component.render(160).join("\n")).toContain("first progress line");
+    lines = ["updated progress line"];
+    expect(component.render(160).join("\n")).toContain("updated progress line");
   });
 
   test("tolerates malformed runtime message previews", () => {

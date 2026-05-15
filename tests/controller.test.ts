@@ -30,6 +30,7 @@ function createRun(overrides: Partial<RunRecord> = {}): RunRecord {
     errorPreview: overrides.errorPreview,
     currentTool: overrides.currentTool,
     toolCount: overrides.toolCount,
+    model: overrides.model,
     attentionNeeded: overrides.attentionNeeded ?? false,
     groupId: overrides.groupId,
     children: overrides.children,
@@ -55,6 +56,7 @@ class FakeLauncher implements Launcher {
       resultPath: override.resultPath ?? `/tmp/results/${request.runId}.json`,
       sessionFile: override.sessionFile,
       artifactPath: override.artifactPath,
+      model: override.model,
     };
   }
 
@@ -748,7 +750,7 @@ describe("LazySubagentsController", () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-lazy-subagents-pin-"));
     const eventsPath = path.join(tempDir, "events.jsonl");
     await fs.writeFile(eventsPath, [
-      JSON.stringify({ runId: "run-1", index: 0, raw: JSON.stringify({ type: "tool_execution_start", toolName: "read" }) }),
+      JSON.stringify({ runId: "run-1", index: 0, raw: JSON.stringify({ type: "tool_execution_start", toolName: "read", args: { path: "/repo/src/auth.ts" } }) }),
       JSON.stringify({ runId: "run-1", index: 0, raw: JSON.stringify({ type: "tool_execution_end", toolName: "read" }) }),
       JSON.stringify({
         runId: "run-1",
@@ -765,7 +767,7 @@ describe("LazySubagentsController", () => {
     ].join("\n"), "utf8");
 
     const launcher = new FakeLauncher();
-    launcher.launchResults.set("run-1", { asyncDir: tempDir, resultPath: path.join(tempDir, "result.json") });
+    launcher.launchResults.set("run-1", { asyncDir: tempDir, resultPath: path.join(tempDir, "result.json"), model: "(openai-codex) gpt-5.4 • xhigh" });
     const controller = new LazySubagentsController(api as any, { launcher, createRunId: () => "run-1", now: () => 100 });
     const { ctx } = createContext({ isIdle: true, hasPendingMessages: false });
 
@@ -792,7 +794,8 @@ describe("LazySubagentsController", () => {
 
     expect(await controller.pinRun("run-1")).toBe(true);
     expect(messages.at(-1)?.message.customType).toBe(MESSAGE_TYPE_PIN);
-    expect(controller.getPinnedRunLines("run-1").join("\n")).toContain("tool start · read");
+    expect(controller.getPinnedRunLines("run-1").join("\n")).toContain("model (openai-codex) gpt-5.4 • xhigh");
+    expect(controller.getPinnedRunLines("run-1").join("\n")).toContain("tool start · read · /repo/src/auth.ts");
     expect(controller.getPinnedRunLines("run-1").join("\n")).toContain("Looks good overall.");
   });
 

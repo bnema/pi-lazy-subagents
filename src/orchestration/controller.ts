@@ -297,6 +297,30 @@ function summarizeSingleLine(text: string | undefined, maxLength = 160): string 
   return singleLine.length <= maxLength ? singleLine : `${singleLine.slice(0, maxLength - 1).trimEnd()}…`;
 }
 
+function formatToolProgressDetail(event: Record<string, any>): string | undefined {
+  const args = event.args;
+  if (!args || typeof args !== "object") return undefined;
+
+  switch (event.toolName) {
+    case "bash":
+      return summarizeSingleLine(typeof args.command === "string" ? args.command : undefined, 120);
+    case "read":
+    case "write":
+    case "edit":
+      return summarizeSingleLine(typeof args.path === "string" ? args.path : undefined, 120);
+    case "grep":
+      return summarizeSingleLine(typeof args.pattern === "string" ? `/${args.pattern}/` : undefined, 80);
+    case "find":
+      return summarizeSingleLine(typeof args.pattern === "string" ? args.pattern : undefined, 80);
+    default:
+      try {
+        return summarizeSingleLine(JSON.stringify(args), 120);
+      } catch {
+        return undefined;
+      }
+  }
+}
+
 function formatProgressLine(rawLine: string): string | undefined {
   let envelope: { index?: number; raw?: string } | undefined;
   try {
@@ -321,13 +345,15 @@ function formatProgressLine(rawLine: string): string | undefined {
   })();
 
   switch (event.type) {
-    case "tool_execution_start":
-      return `${prefix}tool start · ${event.toolName ?? "unknown"}`;
+    case "tool_execution_start": {
+      const detail = formatToolProgressDetail(event);
+      return `${prefix}tool start · ${event.toolName ?? "unknown"}${detail ? ` · ${detail}` : ""}`;
+    }
     case "tool_execution_end":
       return `${prefix}tool end · ${event.toolName ?? "unknown"}`;
     case "message_end": {
-      const preview = summarizeSingleLine(extractAssistantText(event.message)) ?? "assistant message";
-      return `${prefix}assistant · ${preview}${tokenSuffix}`;
+      const preview = summarizeSingleLine(extractAssistantText(event.message));
+      return preview ? `${prefix}assistant · ${preview}${tokenSuffix}` : undefined;
     }
     case "turn_end":
       return `${prefix}turn end${tokenSuffix}`;
@@ -372,6 +398,7 @@ export class LazySubagentsController {
   private readonly createRunId: () => string;
   private readonly trackedLaunches = new Map<string, LaunchResult>();
   private readonly progressLines = new Map<string, string[]>();
+  private readonly progressStats = new Map<string, { turnCount: number; lastTurnTokens?: number }>();
   private readonly activeLoopAlertIds = new Map<string, string>();
   private currentCtx: ExtensionContext | undefined;
   private poller: ReturnType<typeof setInterval> | undefined;
@@ -419,6 +446,7 @@ export class LazySubagentsController {
   async handleSessionShutdown(ctx: ExtensionContext): Promise<void> {
     this.stopPoller();
     this.progressLines.clear();
+    this.progressStats.clear();
     this.activeLoopAlertIds.clear();
     if (ctx.hasUI) {
       ctx.ui.setStatus(STATUS_KEY, undefined);
@@ -457,6 +485,7 @@ export class LazySubagentsController {
         completionPolicy,
         sessionFile: launch.sessionFile,
         artifactPath: launch.artifactPath,
+        model: launch.model,
         attentionNeeded: false,
         launchRef: launch,
         recentEvents: [],
@@ -533,6 +562,7 @@ export class LazySubagentsController {
         completionPolicy,
         sessionFile: launch.sessionFile,
         artifactPath: launch.artifactPath,
+        model: launch.model,
         attentionNeeded: false,
         launchRef: launch,
         recentEvents: [],
@@ -641,7 +671,10 @@ export class LazySubagentsController {
     if (!run) return [`Pinned lazy subagent ${runId} not found.`];
 
     const title = run.title || run.taskSummary;
+    const stats = this.progressStats.get(runId);
     const metaParts = [run.agent, run.status];
+    if (stats?.turnCount) metaParts.push(`${stats.turnCount} turns`);
+    if (stats?.lastTurnTokens) metaParts.push(`last ${formatCompactThousands(stats.lastTurnTokens)} tok`);
     if (run.currentTool) metaParts.push(run.currentTool);
     if (run.toolCount !== undefined && run.toolCount > 0) metaParts.push(`${run.toolCount} tools`);
     if (run.totalTokens !== undefined && run.totalTokens > 0) metaParts.push(`${formatCompactThousands(run.totalTokens)} tokens`);
@@ -653,6 +686,7 @@ export class LazySubagentsController {
     return [
       `${GLYPH_PINNED} ${title}`,
       metaParts.join(" · "),
+      ...(run.model ? [`model ${run.model}`] : []),
       ...(expanded ? [`run ${run.id}`] : []),
       ...visibleLines.map((line) => `  ${line}`),
     ];
@@ -940,6 +974,7 @@ export class LazySubagentsController {
     for (const runId of removed) {
       this.trackedLaunches.delete(runId);
       this.progressLines.delete(runId);
+      this.progressStats.delete(runId);
       this.activeLoopAlertIds.delete(runId);
     }
 
@@ -951,6 +986,7 @@ export class LazySubagentsController {
     const persisted = readLatestPersistedState(ctx);
     this.registry = new RunRegistry({}, persisted);
     this.progressLines.clear();
+    this.progressStats.clear();
     this.activeLoopAlertIds.clear();
     const removedAcknowledgedRuns = this.cleanupAcknowledgedCompletedRuns();
     if (removedAcknowledgedRuns) this.persistState();
@@ -1011,16 +1047,35 @@ export class LazySubagentsController {
     const eventsPath = path.join(launch.asyncDir, "events.jsonl");
     try {
       const raw = await fsp.readFile(eventsPath, "utf8");
+      let turnCount = 0;
+      let lastTurnTokens: number | undefined;
       const lines = raw
         .split(/\r?\n/u)
         .map((line) => line.trim())
         .filter(Boolean)
-        .map((line) => formatProgressLine(line))
+        .map((line) => {
+          try {
+            const envelope = JSON.parse(line) as { raw?: string };
+            if (envelope?.raw) {
+              const event = JSON.parse(envelope.raw) as Record<string, any>;
+              if (event.type === "message_end" && event.message?.role === "assistant") {
+                turnCount += 1;
+                const totalTokens = extractEventTotalTokens(event);
+                if (totalTokens && totalTokens > 0) lastTurnTokens = totalTokens;
+              }
+            }
+          } catch {
+            // Best-effort metadata extraction only.
+          }
+          return formatProgressLine(line);
+        })
         .filter((line): line is string => Boolean(line));
 
-      if (lines.length > 0) {
-        this.progressLines.set(runId, lines.slice(Math.max(0, lines.length - 24)));
-      }
+      if (lines.length > 0) this.progressLines.set(runId, lines.slice(Math.max(0, lines.length - 24)));
+      else this.progressLines.delete(runId);
+
+      if (turnCount > 0 || lastTurnTokens !== undefined) this.progressStats.set(runId, { turnCount, lastTurnTokens });
+      else this.progressStats.delete(runId);
     } catch {
       // Best-effort pinned progress only.
     }
@@ -1047,6 +1102,7 @@ export class LazySubagentsController {
       WIDGET_KEY,
       createWidgetContent(snapshot, this.now(), 6, { isPinned: (runId) => this.registry.isPinned(runId) }),
     );
+    (ctx.ui as typeof ctx.ui & { requestRender?: () => void }).requestRender?.();
   }
 
   private queuePoll(): void {

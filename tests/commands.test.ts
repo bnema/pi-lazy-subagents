@@ -20,6 +20,7 @@ function createRun(overrides: Partial<RunRecord> = {}): RunRecord {
     artifactPath: overrides.artifactPath,
     resultPreview: overrides.resultPreview,
     errorPreview: overrides.errorPreview,
+    model: overrides.model,
     attentionNeeded: overrides.attentionNeeded ?? false,
     groupId: overrides.groupId,
     children: overrides.children,
@@ -101,7 +102,7 @@ describe("lazy-subagents command parsing", () => {
   });
 
   test("formats a richer status report for active and recent runs", () => {
-    const running = createRun({ id: "run-1", status: "running", startedAt: 50_000, updatedAt: 59_000, completedAt: undefined });
+    const running = createRun({ id: "run-1", status: "running", startedAt: 50_000, updatedAt: 59_000, completedAt: undefined, model: "(openai-codex) gpt-5.4 • xhigh" });
     (running as any).currentTool = "read";
     (running as any).toolCount = 3;
     running.recentEvents = [{ id: "progress-1", category: "progress", timestamp: 59_000, summary: "Inspecting auth.ts" }];
@@ -113,6 +114,7 @@ describe("lazy-subagents command parsing", () => {
     expect(report).toContain("Active runs: 1");
     expect(report).toContain("elapsed: 10s");
     expect(report).toContain("updated: 1s ago");
+    expect(report).toContain("model: (openai-codex) gpt-5.4 • xhigh");
     expect(report).toContain("tool: read");
     expect(report).toContain("tools used: 3");
     expect(report).toContain("last event: Inspecting auth.ts");
