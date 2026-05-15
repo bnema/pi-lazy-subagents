@@ -1,7 +1,10 @@
 import { describe, expect, test } from "vitest";
 
-// @ts-expect-error direct-runner is a plain .mjs script and exports this helper for runtime tests.
-import { createSerialLineProcessor } from "../src/launcher/direct-runner.mjs";
+import {
+  createSerialLineProcessor,
+  shouldPersistEvent,
+  shouldWriteStatusForUsageTotal,
+} from "../src/launcher/direct-runner.mjs";
 
 describe("direct runner stdout processing", () => {
   test("processes stdout lines serially in arrival order", async () => {
@@ -40,5 +43,17 @@ describe("direct runner stdout processing", () => {
 
     expect(seen).toEqual(["first", "turn_end"]);
     expect(errors).toEqual([{ message: "boom", line: "bad" }]);
+  });
+
+  test("drops streaming message updates from persisted event logs", () => {
+    expect(shouldPersistEvent({ type: "message_update", assistantMessageEvent: { type: "thinking_delta" } })).toBe(false);
+    expect(shouldPersistEvent({ type: "tool_execution_start", toolName: "bash" })).toBe(true);
+    expect(shouldPersistEvent({ type: "message_end", message: { role: "assistant" } })).toBe(true);
+  });
+
+  test("skips status writes for zero or unchanged token totals", () => {
+    expect(shouldWriteStatusForUsageTotal(undefined, 0)).toBe(false);
+    expect(shouldWriteStatusForUsageTotal(31_316, 31_316)).toBe(false);
+    expect(shouldWriteStatusForUsageTotal(31_316, 31_317)).toBe(true);
   });
 });

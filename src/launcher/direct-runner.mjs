@@ -57,6 +57,17 @@ function summarizeOutput(text, maxLength = 400) {
   return singleLine.length <= maxLength ? singleLine : `${singleLine.slice(0, maxLength - 1).trimEnd()}…`;
 }
 
+export function shouldPersistEvent(event) {
+  return event?.type !== "message_update";
+}
+
+export function shouldWriteStatusForUsageTotal(previousTotal, nextTotal) {
+  return typeof nextTotal === "number"
+    && Number.isFinite(nextTotal)
+    && nextTotal > 0
+    && previousTotal !== nextTotal;
+}
+
 function createInitialStatus(config) {
   const startedAt = now();
   return {
@@ -207,19 +218,25 @@ async function runChild(config, statusPath, status, child, index) {
     const trimmed = line.trim();
     if (!trimmed) return;
 
-    await appendLine(config.eventsPath, JSON.stringify({ runId: config.runId, index, raw: trimmed }));
-
     let event;
     try {
       event = JSON.parse(trimmed);
     } catch {
+      await appendLine(config.eventsPath, JSON.stringify({ runId: config.runId, index, raw: trimmed }));
       return;
+    }
+
+    if (shouldPersistEvent(event)) {
+      await appendLine(config.eventsPath, JSON.stringify({ runId: config.runId, index, raw: trimmed }));
     }
 
     const usageTotal = extractUsageTotal(event);
     if (usageTotal !== undefined) {
-      step.totalTokens = recordUsageSample(usageTracker, usageTotal);
-      await updateStatus(statusPath, status);
+      const nextTotalTokens = recordUsageSample(usageTracker, usageTotal);
+      if (shouldWriteStatusForUsageTotal(step.totalTokens, nextTotalTokens)) {
+        step.totalTokens = nextTotalTokens;
+        await updateStatus(statusPath, status);
+      }
     }
 
     if (event.type === "tool_execution_start") {
@@ -243,13 +260,17 @@ async function runChild(config, statusPath, status, child, index) {
       if (text) {
         finalOutput = text;
         await appendLine(path.join(config.asyncDir, child.outputFile), text);
+        await updateStatus(statusPath, status);
       }
       return;
     }
 
     if (event.type === "turn_end") {
-      step.totalTokens = commitUsageTurn(usageTracker);
-      await updateStatus(statusPath, status);
+      const committedTotalTokens = commitUsageTurn(usageTracker);
+      if (step.totalTokens !== committedTotalTokens) {
+        step.totalTokens = committedTotalTokens;
+        await updateStatus(statusPath, status);
+      }
       return;
     }
   };
