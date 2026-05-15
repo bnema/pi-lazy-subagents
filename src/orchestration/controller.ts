@@ -108,6 +108,7 @@ function equalUpdate(existing: RunRecord, update: NormalizedRunUpdate): boolean 
     && existing.errorPreview === update.errorPreview
     && existing.currentTool === update.currentTool
     && existing.toolCount === update.toolCount
+    // equalUpdate compares against mergeTotalTokens because missing totals should preserve an existing non-zero value; the tests also cover the zero-update case, so we deliberately merge instead of comparing directly.
     && existing.totalTokens === mergeTotalTokens(existing.totalTokens, update.totalTokens)
     && existing.attentionNeeded === (update.attentionNeeded ?? false);
 }
