@@ -38,6 +38,8 @@ pi --no-extensions -e /absolute/path/to/pi-lazy-subagents/extensions/index.ts
 ### Slash command
 
 ```text
+/lazy-subagents help
+/lazy-subagents list
 /lazy-subagents run <agent> <prompt> [--policy POLICY] [--title TITLE]
 /lazy-subagents status [runId]
 /lazy-subagents result <runId>
@@ -50,6 +52,7 @@ pi --no-extensions -e /absolute/path/to/pi-lazy-subagents/extensions/index.ts
 Examples:
 
 ```text
+/lazy-subagents list
 /lazy-subagents run scout "Inspect the package layout" --policy notify_only
 /lazy-subagents status
 /lazy-subagents result <runId>
@@ -63,6 +66,7 @@ The package also registers the `lazy_subagents` tool for Pi itself.
 
 Supported actions:
 - `help`
+- `list`
 - `run`
 - `parallel`
 - `status`
@@ -72,15 +76,7 @@ Supported actions:
 - `clear`
 - `cancel`
 
-Built-in agent profiles:
-- `delegate` — general-purpose fallback; good default when unsure
-- `scout` — read-only codebase inspection and file discovery
-- `researcher` — read-only evidence gathering, including external research when needed
-- `planner` — read-only planning and design work
-- `reviewer` — read-only review/verification
-- `worker` — implementation and edits
-
-File-based profiles discovered from `~/.agents/agents` and `~/.pi/agent/agents` override builtins with the same name, so you can shadow defaults like `reviewer` or `scout`.
+Use `action=list` or `/lazy-subagents list` to print the currently available sub agents, including file-based profiles discovered from `~/.agents/agents` and `~/.pi/agent/agents`.
 
 For tool calls, `action=run` defaults `agent` to `delegate` when omitted.
 
