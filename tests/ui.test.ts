@@ -12,6 +12,7 @@ import {
 import {
   GLYPH_INBOX,
   GLYPH_LAZY_SUBAGENTS,
+  GLYPH_PINNED,
   GLYPH_RUNNING,
   GLYPH_WAITING,
 } from "../src/ui/glyphs.js";
@@ -170,7 +171,13 @@ describe("visibility helpers", () => {
 
   test("renders pinned run messages from the latest getter output instead of freezing a snapshot", () => {
     const renderers = new Map<string, Function>();
-    let lines = ["first progress line"];
+    let lines = [
+      `${GLYPH_PINNED} Review auth diff`,
+      "reviewer · running · read · 2 tools · 6.1k tokens",
+      "model (openai-codex) gpt-5.4 • xhigh",
+      "  tool start · read · /repo/src/auth.ts",
+      "  assistant · first progress line",
+    ];
 
     registerRunMessageRenderers({
       registerMessageRenderer: (customType: string, renderer: Function) => {
@@ -182,17 +189,31 @@ describe("visibility helpers", () => {
 
     const renderer = renderers.get(MESSAGE_TYPE_PIN)!;
     const component = renderer({ content: "Pinned lazy subagent", details: { runId: "run-1" } }, { expanded: false }, {
+      fg: (color: string, text: string) => `<${color}:${text}>`,
       bg: (_color: string, text: string) => text,
+      bold: (text: string) => `*${text}*`,
     });
 
-    expect(component.render(160).join("\n")).toContain("first progress line");
-    lines = ["updated progress line"];
+    const firstRender = component.render(160).join("\n");
+    expect(firstRender).toContain("<accent:[PINNED]>");
+    expect(firstRender).toContain("*Review auth diff*");
+    expect(firstRender).toContain("<accent:RUNNING>");
+    expect(firstRender).toContain("<dim:progress>");
+    expect(firstRender).toContain("first progress line");
+
+    lines = [
+      `${GLYPH_PINNED} Review auth diff`,
+      "reviewer · running · read · 2 tools · 6.1k tokens",
+      "model (openai-codex) gpt-5.4 • xhigh",
+      "  tool start · read · /repo/src/auth.ts",
+      "  assistant · updated progress line",
+    ];
     expect(component.render(160).join("\n")).toContain("updated progress line");
   });
 
   test("renders pinned messages without a theme using the live pinned content", () => {
     const renderers = new Map<string, Function>();
-    let lines = ["live detail"];
+    let lines = [`${GLYPH_PINNED} Review auth diff`, "reviewer · running", "  live detail"];
 
     registerRunMessageRenderers({
       registerMessageRenderer: (customType: string, renderer: Function) => {
@@ -206,8 +227,61 @@ describe("visibility helpers", () => {
     const component = renderer({ content: "Pinned lazy subagent", details: { runId: "run-1" } }, { expanded: false }, undefined);
 
     expect(component.render(160).join("\n")).toContain("live detail");
-    lines = ["updated detail"];
+    lines = [`${GLYPH_PINNED} Review auth diff`, "reviewer · running", "  updated detail"];
     expect(component.render(160).join("\n")).toContain("updated detail");
+  });
+
+  test("renders prefixed pinned detail lines without duplicating the step marker", () => {
+    const renderers = new Map<string, Function>();
+    const lines = [
+      `${GLYPH_PINNED} Review auth diff`,
+      "reviewer · failed",
+      "  #2 · error · repeated step",
+      "  #3 · still waiting",
+    ];
+
+    registerRunMessageRenderers({
+      registerMessageRenderer: (customType: string, renderer: Function) => {
+        renderers.set(customType, renderer);
+      },
+    } as any, {
+      getPinnedRunLines: () => lines,
+    });
+
+    const renderer = renderers.get(MESSAGE_TYPE_PIN)!;
+    const component = renderer({ content: "Pinned lazy subagent", details: { runId: "run-1" } }, { expanded: false }, {
+      fg: (color: string, text: string) => `<${color}:${text}>`,
+      bg: (_color: string, text: string) => text,
+      bold: (text: string) => `*${text}*`,
+    });
+
+    const rendered = component.render(160).join("\n");
+    expect(rendered.match(/#2/g)?.length).toBe(1);
+    expect(rendered.match(/#3/g)?.length).toBe(1);
+  });
+
+  test("renders pinned meta lines safely when status is missing", () => {
+    const renderers = new Map<string, Function>();
+    const lines = [`${GLYPH_PINNED} Review auth diff`, "reviewer"];
+
+    registerRunMessageRenderers({
+      registerMessageRenderer: (customType: string, renderer: Function) => {
+        renderers.set(customType, renderer);
+      },
+    } as any, {
+      getPinnedRunLines: () => lines,
+    });
+
+    const renderer = renderers.get(MESSAGE_TYPE_PIN)!;
+    const component = renderer({ content: "Pinned lazy subagent", details: { runId: "run-1" } }, { expanded: false }, {
+      fg: (color: string, text: string) => `<${color}:${text}>`,
+      bg: (_color: string, text: string) => text,
+      bold: (text: string) => `*${text}*`,
+    });
+
+    const rendered = component.render(160).join("\n");
+    expect(rendered).toContain("<dim:agent>");
+    expect(rendered).toContain("*reviewer*");
   });
 
   test("tolerates malformed runtime message previews", () => {
