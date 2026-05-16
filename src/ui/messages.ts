@@ -286,7 +286,7 @@ function stylePinnedDetailLine(line: string, theme: PinnedThemeLike): string {
   if (!trimmed) return "";
 
   const parts = trimmed.split(" · ").map((part) => part.trim()).filter(Boolean);
-  const prefix = parts[0]?.startsWith("#") ? parts.shift() : undefined;
+  const prefix = parts.length > 1 && /^#\d+/.test(parts[0] ?? "") ? parts.shift() : undefined;
   const head = parts.shift() ?? trimmed;
   const body = [head, ...parts].filter(Boolean).join(" · ");
   const sep = pinnedColor(theme, "dim", " · ");

@@ -284,6 +284,29 @@ describe("visibility helpers", () => {
     expect(rendered).toContain("*reviewer*");
   });
 
+  test("does not treat non-step hash headings as pinned step prefixes", () => {
+    const renderers = new Map<string, Function>();
+    const lines = [`${GLYPH_PINNED} Review auth diff`, "reviewer · running", "  # Overview"];
+
+    registerRunMessageRenderers({
+      registerMessageRenderer: (customType: string, renderer: Function) => {
+        renderers.set(customType, renderer);
+      },
+    } as any, {
+      getPinnedRunLines: () => lines,
+    });
+
+    const renderer = renderers.get(MESSAGE_TYPE_PIN)!;
+    const component = renderer({ content: "Pinned lazy subagent", details: { runId: "run-1" } }, { expanded: false }, {
+      fg: (color: string, text: string) => `<${color}:${text}>`,
+      bg: (_color: string, text: string) => text,
+      bold: (text: string) => `*${text}*`,
+    });
+
+    const rendered = component.render(160).join("\n");
+    expect(rendered.match(/# Overview/g)?.length).toBe(1);
+  });
+
   test("tolerates malformed runtime message previews", () => {
     const malformed = {
       kind: "completion",
