@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { buildLazySubagentsHelp, executeLazySubagentsCommand, formatStatusReport, parseLazySubagentsCommand } from "../src/orchestration/commands.js";
+import { buildLazySubagentsAgentList, buildLazySubagentsHelp, executeLazySubagentsCommand, formatStatusReport, parseLazySubagentsCommand } from "../src/orchestration/commands.js";
 import type { RunRecord, RunRegistrySnapshot } from "../src/types.js";
 
 function createRun(overrides: Partial<RunRecord> = {}): RunRecord {
@@ -50,12 +50,12 @@ function createSnapshot(runs: RunRecord[]): RunRegistrySnapshot {
 }
 
 describe("lazy-subagents command parsing", () => {
-  test("help output includes slash-command usage, tool usage, built-in agent profiles, and wait guidance", () => {
+  test("help output includes list usage, tool usage, and wait guidance", () => {
     const help = buildLazySubagentsHelp();
 
-    expect(help).toContain("delegate");
-    expect(help).toContain("reviewer");
-    expect(help).toContain("scout");
+    expect(help).toContain("/lazy-subagents list");
+    expect(help).toContain("lazy_subagents action=list");
+    expect(help).toContain("inspect available sub agents before choosing one");
     expect(help).toContain("Slash command usage:");
     expect(help).toContain("Tool usage:");
     expect(help).toContain("action=parallel");
@@ -64,6 +64,21 @@ describe("lazy-subagents command parsing", () => {
     expect(help).toContain("emitted back into this session automatically");
     expect(help).toContain("Do not poll in a loop");
     expect(help).toContain("Use result after terminal completion");
+  });
+
+  test("list output prints available sub agents", () => {
+    const list = buildLazySubagentsAgentList();
+
+    expect(list).toContain("Available sub agents:");
+    expect(list).toContain("delegate");
+    expect(list).toContain("reviewer");
+    expect(list).toContain("worker");
+  });
+
+  test("list command returns the available sub-agent listing", async () => {
+    const message = await executeLazySubagentsCommand("list", {} as any, {} as any);
+
+    expect(message).toBe(buildLazySubagentsAgentList());
   });
 
   test("run command acknowledgement tells the caller to wait for emitted signals", async () => {
@@ -78,7 +93,7 @@ describe("lazy-subagents command parsing", () => {
     expect(message).toContain("polling right away");
   });
 
-  test("parses run, status, result, pickup, pin, clear, and cancel commands", () => {
+  test("parses list, run, status, result, pickup, pin, clear, and cancel commands", () => {
     expect(parseLazySubagentsCommand('run reviewer "Review the auth diff" --policy manual_pickup --title "Review auth diff"')).toEqual({
       action: "run",
       agent: "reviewer",
@@ -87,6 +102,7 @@ describe("lazy-subagents command parsing", () => {
       title: "Review auth diff",
     });
 
+    expect(parseLazySubagentsCommand("list")).toEqual({ action: "list" });
     expect(parseLazySubagentsCommand("status run-1")).toEqual({ action: "status", runId: "run-1" });
     expect(parseLazySubagentsCommand("result run-1")).toEqual({ action: "result", runId: "run-1" });
     expect(parseLazySubagentsCommand("pickup run-1")).toEqual({ action: "pickup", runId: "run-1" });

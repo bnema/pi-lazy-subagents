@@ -64,7 +64,7 @@ describe("extension entrypoint", () => {
     expect(events.has("turn_end")).toBe(true);
   });
 
-  test("tool guidance exposes help, agent selection, automatic completion signaling, and anti-polling guidance", () => {
+  test("tool guidance exposes help, list guidance, automatic completion signaling, and anti-polling guidance", () => {
     const { api, tools } = createPi();
     lazySubagentsExtension(api as any);
 
@@ -75,9 +75,9 @@ describe("extension entrypoint", () => {
     expect(tool?.description).toContain("completion or attention");
     expect(tool?.promptSnippet).toContain("wait for completion/attention signals");
     expect(guidance).toContain("action=help");
+    expect(guidance).toContain("action=list");
+    expect(guidance).toContain("list the sub agents and pick the appropriate one");
     expect(guidance).toContain("delegate");
-    expect(guidance).toContain("reviewer");
-    expect(guidance).toContain("worker");
     expect(guidance).toContain("emitted back into the same session automatically");
     expect(guidance).toContain("Do not call action=status in a loop");
     expect(guidance).toContain("60 seconds");

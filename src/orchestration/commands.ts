@@ -14,6 +14,7 @@ export const LAZY_SUBAGENTS_COMMANDS = [
 
 export type ParsedLazySubagentsCommand =
   | { action: "help" }
+  | { action: "list" }
   | { action: "status"; runId?: string }
   | { action: "result"; runId: string }
   | { action: "pickup"; runId: string }
@@ -106,6 +107,10 @@ export function parseLazySubagentsCommand(input: string): ParsedLazySubagentsCom
   const tokens = splitCliArgs(input);
   const action = tokens.shift();
   if (!action || action === "help") return { action: "help" };
+
+  if (action === "list") {
+    return { action };
+  }
 
   if (action === "status") {
     return { action, runId: tokens[0] };
@@ -211,9 +216,15 @@ function formatAgentHelpLines(): string[] {
   });
 }
 
+export function buildLazySubagentsAgentList(): string {
+  return ["Available sub agents:", ...formatAgentHelpLines()].join("\n");
+}
+
 export function buildLazySubagentsHelp(): string {
   return [
     "Slash command usage:",
+    "  /lazy-subagents help",
+    "  /lazy-subagents list",
     "  /lazy-subagents run <agent> <prompt> [--policy POLICY] [--title TITLE]",
     "  /lazy-subagents status [runId]",
     "  /lazy-subagents result <runId>",
@@ -224,6 +235,7 @@ export function buildLazySubagentsHelp(): string {
     "",
     "Tool usage:",
     "  lazy_subagents action=help",
+    "  lazy_subagents action=list",
     "  lazy_subagents action=run agent=<agent> prompt=<prompt> [completionPolicy=<policy>] [title=<title>]",
     "  lazy_subagents action=parallel children=[{agent,prompt,taskSummary?,cwd?}, ...] [completionPolicy=<policy>] [title=<title>]",
     "  lazy_subagents action=status [runId=<runId>]",
@@ -233,12 +245,13 @@ export function buildLazySubagentsHelp(): string {
     "  lazy_subagents action=cancel runId=<runId>",
     "  lazy_subagents action=clear [scope=completed|all] [runId=<runId>]",
     "",
-    "Available agent profiles:",
-    ...formatAgentHelpLines(),
+    "Use /lazy-subagents list or lazy_subagents action=list to inspect available sub agents before choosing one.",
     "",
     "Examples:",
+    "  /lazy-subagents list",
     "  /lazy-subagents run reviewer \"Review the auth diff\"",
     "  /lazy-subagents run scout \"Inspect the package layout\"",
+    "  lazy_subagents action=list",
     "  lazy_subagents action=run agent=worker prompt=\"Implement the requested fix\"",
     "  lazy_subagents action=parallel children=[{agent:\"scout\",prompt:\"Inspect the package layout\"},{agent:\"reviewer\",prompt:\"Review the auth diff\"}]",
     "",
@@ -259,6 +272,8 @@ export async function executeLazySubagentsCommand(
   switch (parsed.action) {
     case "help":
       return buildLazySubagentsHelp();
+    case "list":
+      return buildLazySubagentsAgentList();
     case "status":
       await controller.pollOnce();
       return formatStatusReport(controller.getSnapshot(), parsed.runId);
