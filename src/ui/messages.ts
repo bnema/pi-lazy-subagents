@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Box, Text } from "@earendil-works/pi-tui";
 
+import { GLYPH_PINNED } from "./glyphs.js";
 import { formatCompactThousands } from "../utils/time.js";
 import {
   MESSAGE_TYPE_ATTENTION,
@@ -196,17 +197,165 @@ function renderRunMessage(
   return box;
 }
 
+type PinnedThemeLike = {
+  bg(color: string, text: string): string;
+  fg?(color: string, text: string): string;
+  bold?(text: string): string;
+};
+
+function pinnedColor(theme: PinnedThemeLike | undefined, color: string, text: string): string {
+  return theme?.fg ? theme.fg(color, text) : text;
+}
+
+function pinnedBold(theme: PinnedThemeLike | undefined, text: string): string {
+  return theme?.bold ? theme.bold(text) : text;
+}
+
+function pinnedStatusColor(status: string): "accent" | "success" | "warning" | "error" | "muted" {
+  switch (status) {
+    case "running":
+      return "accent";
+    case "completed":
+      return "success";
+    case "blocked":
+    case "paused":
+    case "queued":
+      return "warning";
+    case "failed":
+      return "error";
+    default:
+      return "muted";
+  }
+}
+
+function stylePinnedMetaLine(line: string, theme: PinnedThemeLike): string {
+  const parts = line.split(" · ").map((part) => part.trim()).filter(Boolean);
+  if (parts.length === 0) return line;
+
+  const [agent, status, ...rest] = parts;
+  const sep = pinnedColor(theme, "dim", " · ");
+  const styled = [
+    `${pinnedColor(theme, "dim", "agent")} ${pinnedBold(theme, agent)}`,
+  ];
+
+  if (status) styled.push(pinnedColor(theme, pinnedStatusColor(status), status.toUpperCase()));
+  if (rest.length > 0) styled.push(pinnedColor(theme, "muted", rest.join(" · ")));
+  return styled.join(sep);
+}
+
+function stylePinnedAuxLine(line: string, label: "model" | "run", theme: PinnedThemeLike): string {
+  const value = line.slice(label.length).trim();
+  return `${pinnedColor(theme, "dim", `${label} `)}${pinnedColor(theme, label === "model" ? "muted" : "dim", value)}`;
+}
+
+function stylePinnedToolLine(
+  head: string,
+  parts: string[],
+  prefixText: string,
+  sep: string,
+  theme: PinnedThemeLike,
+): string {
+  const color = head === "tool end" ? "success" : "accent";
+  const icon = pinnedColor(theme, color, head === "tool end" ? "✓" : "↗");
+  const [tool, ...detailParts] = parts;
+  const detail = detailParts.join(" · ");
+  return `${prefixText}${icon} ${pinnedColor(theme, color, head)}${tool ? `${sep}${pinnedBold(theme, tool)}` : ""}${detail ? `${sep}${pinnedColor(theme, "muted", detail)}` : ""}`;
+}
+
+function stylePinnedAssistantLine(parts: string[], prefixText: string, sep: string, theme: PinnedThemeLike): string {
+  const icon = pinnedColor(theme, "success", "✦");
+  const detail = parts.join(" · ");
+  return `${prefixText}${icon} ${pinnedColor(theme, "muted", "assistant")}${detail ? `${sep}${detail}` : ""}`;
+}
+
+function stylePinnedTurnEndLine(parts: string[], prefixText: string, sep: string, theme: PinnedThemeLike): string {
+  const detail = parts.join(" · ");
+  return `${prefixText}${pinnedColor(theme, "muted", "•")} ${pinnedColor(theme, "muted", "turn end")}${detail ? `${sep}${pinnedColor(theme, "muted", detail)}` : ""}`;
+}
+
+function stylePinnedErrorLine(body: string, prefixText: string, theme: PinnedThemeLike): string {
+  return `${prefixText}${pinnedColor(theme, "error", "!")}${body ? ` ${pinnedColor(theme, "error", body)}` : ""}`;
+}
+
+function stylePinnedDefaultLine(body: string, prefixText: string, theme: PinnedThemeLike): string {
+  return `${prefixText}${pinnedColor(theme, "muted", "•")}${body ? ` ${pinnedColor(theme, "muted", body)}` : ""}`;
+}
+
+function stylePinnedDetailLine(line: string, theme: PinnedThemeLike): string {
+  const trimmed = line.trim();
+  if (!trimmed) return "";
+
+  const parts = trimmed.split(" · ").map((part) => part.trim()).filter(Boolean);
+  const prefix = parts.length > 1 && /^#\d+/.test(parts[0] ?? "") ? parts.shift() : undefined;
+  const head = parts.shift() ?? trimmed;
+  const body = [head, ...parts].filter(Boolean).join(" · ");
+  const sep = pinnedColor(theme, "dim", " · ");
+  const prefixText = prefix ? `${pinnedColor(theme, "dim", prefix)}${sep}` : "";
+
+  if (head === "tool start" || head === "tool end") {
+    return stylePinnedToolLine(head, parts, prefixText, sep, theme);
+  }
+
+  if (head === "assistant") {
+    return stylePinnedAssistantLine(parts, prefixText, sep, theme);
+  }
+
+  if (head === "turn end") {
+    return stylePinnedTurnEndLine(parts, prefixText, sep, theme);
+  }
+
+  if (head.includes("fail") || head.includes("error")) {
+    return stylePinnedErrorLine(body, prefixText, theme);
+  }
+
+  return stylePinnedDefaultLine(body, prefixText, theme);
+}
+
+function stylePinnedRunLines(lines: string[], theme: PinnedThemeLike | undefined): string[] {
+  if (!theme?.fg || !theme.bold) return lines;
+  if (lines.length === 0) return lines;
+
+  const [headerLine, metaLine, ...rest] = lines;
+  const title = headerLine.startsWith(`${GLYPH_PINNED} `) ? headerLine.slice(GLYPH_PINNED.length + 1) : headerLine;
+  const styled = [
+    `${pinnedColor(theme, "accent", "[PINNED]")} ${pinnedBold(theme, title)}`,
+  ];
+
+  if (metaLine) styled.push(stylePinnedMetaLine(metaLine, theme));
+
+  const auxLines: string[] = [];
+  const detailLines: string[] = [];
+  for (const line of rest) {
+    if (line.startsWith("model ")) {
+      auxLines.push(stylePinnedAuxLine(line, "model", theme));
+      continue;
+    }
+    if (line.startsWith("run ")) {
+      auxLines.push(stylePinnedAuxLine(line, "run", theme));
+      continue;
+    }
+    detailLines.push(stylePinnedDetailLine(line, theme));
+  }
+
+  styled.push(...auxLines);
+  if (detailLines.length > 0) {
+    styled.push(pinnedColor(theme, "dim", "progress"));
+    styled.push(...detailLines.filter(Boolean));
+  }
+
+  return styled;
+}
+
 function createPinnedRunMessageComponent(
   runId: string,
   expanded: boolean,
-  theme: {
-    bg(color: string, text: string): string;
-  } | undefined,
+  theme: PinnedThemeLike | undefined,
   getPinnedRunLines: (runId: string, expanded: boolean) => string[],
 ) {
   return {
     render(width: number) {
-      const text = new Text(getPinnedRunLines(runId, expanded).join("\n"), 0, 0);
+      const lines = stylePinnedRunLines(getPinnedRunLines(runId, expanded), theme);
+      const text = new Text(lines.join("\n"), 0, 0);
       if (!theme) return text.render(width);
       const box = new Box(1, 0, (value) => theme.bg("customMessageBg", value));
       box.addChild(text);
