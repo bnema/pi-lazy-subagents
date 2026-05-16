@@ -7,8 +7,6 @@ import {
   DEFAULT_COMPLETION_POLICY,
   DEFAULT_POLL_INTERVAL_MS,
   DEFAULT_ACKNOWLEDGED_SUCCESS_TTL_MS,
-  DEFAULT_LOOP_ALERT_MAX_PATTERN_LENGTH,
-  DEFAULT_LOOP_ALERT_REPETITIONS,
   DEFAULT_STALE_RUN_MS,
   DEFAULT_SUCCESS_VISIBILITY_GRACE_MS,
   MESSAGE_TYPE_ATTENTION,
@@ -142,7 +140,6 @@ function mergeTotalTokens(existing: number | undefined, incoming: number | undef
 }
 
 interface RunHealthAlert {
-  kind: "stale" | "loop";
   event: RunEvent;
   status?: RunStatus;
 }
@@ -150,70 +147,6 @@ interface RunHealthAlert {
 interface ApplyUpdateResult {
   stateChanged: boolean;
   recordedEvent: boolean;
-}
-
-const GENERIC_LOOP_SIGNALS = new Set([
-  "queued",
-  "running",
-  "blocked",
-  "paused",
-  "completed",
-  "failed",
-  "cancelled",
-  "needs attention",
-]);
-
-function normalizeLoopSignal(run: RunRecord, summary: string): string | undefined {
-  const trimmed = summary.replace(/\s+/g, " ").trim();
-  if (!trimmed) return undefined;
-  const withoutRunId = trimmed.startsWith(`${run.id} `) ? trimmed.slice(run.id.length + 1) : trimmed;
-  return GENERIC_LOOP_SIGNALS.has(withoutRunId.toLowerCase()) ? undefined : withoutRunId;
-}
-
-function canonicalizePattern(pattern: string[]): string[] {
-  if (pattern.length <= 1) return pattern;
-
-  // Bounded by DEFAULT_LOOP_ALERT_MAX_PATTERN_LENGTH, so the simple rotation scan is fine here.
-  const rotations = pattern.map((_, start) => pattern.slice(start).concat(pattern.slice(0, start)));
-  return rotations.reduce((best, candidate) => {
-    const candidateKey = candidate.join("\u0000");
-    const bestKey = best.join("\u0000");
-    return candidateKey.localeCompare(bestKey) < 0 ? candidate : best;
-  });
-}
-
-function detectRepeatedActivityPattern(run: RunRecord): { id: string; summary: string } | undefined {
-  const signals = run.recentEvents
-    .filter((event) => event.category === "progress" || event.category === "tool")
-    .map((event) => normalizeLoopSignal(run, event.summary))
-    .filter((value): value is string => Boolean(value));
-
-  for (let patternLength = 1; patternLength <= DEFAULT_LOOP_ALERT_MAX_PATTERN_LENGTH; patternLength += 1) {
-    const windowLength = patternLength * DEFAULT_LOOP_ALERT_REPETITIONS;
-    if (signals.length < windowLength) continue;
-
-    const window = signals.slice(-windowLength);
-    const pattern = window.slice(0, patternLength);
-    if (patternLength > 1 && new Set(pattern).size < 2) continue;
-
-    let matches = true;
-    for (let index = 0; index < window.length; index += 1) {
-      if (window[index] !== pattern[index % patternLength]) {
-        matches = false;
-        break;
-      }
-    }
-    if (!matches) continue;
-
-    const canonicalPattern = canonicalizePattern(pattern);
-    const fingerprint = canonicalPattern.join(" -> ");
-    return {
-      id: `${run.id}:health:loop:${patternLength}:${fingerprint}`,
-      summary: `${run.agent} may be looping: recent activity repeated the same ${patternLength}-step cycle ${DEFAULT_LOOP_ALERT_REPETITIONS} times (${canonicalPattern.join(" → ")}). Inspect /lazy-subagents status ${run.id} or /lazy-subagents cancel ${run.id}.`,
-    };
-  }
-
-  return undefined;
 }
 
 function buildRunHealthAlerts(run: RunRecord, now: number): RunHealthAlert[] {
@@ -224,7 +157,6 @@ function buildRunHealthAlerts(run: RunRecord, now: number): RunHealthAlert[] {
   if (silenceMs >= DEFAULT_STALE_RUN_MS) {
     const staleWindow = Math.floor(silenceMs / DEFAULT_STALE_RUN_MS);
     alerts.push({
-      kind: "stale",
       status: "blocked",
       event: {
         id: `${run.id}:health:stale:${run.updatedAt}:${staleWindow}`,
@@ -232,20 +164,6 @@ function buildRunHealthAlerts(run: RunRecord, now: number): RunHealthAlert[] {
         timestamp: run.updatedAt,
         summary: `No progress from ${run.agent} for ${formatDuration(silenceMs)}. The child may be stuck; inspect /lazy-subagents status ${run.id}.`,
         status: "blocked",
-      },
-    });
-  }
-
-  const repeatedPattern = detectRepeatedActivityPattern(run);
-  if (repeatedPattern) {
-    alerts.push({
-      kind: "loop",
-      event: {
-        id: repeatedPattern.id,
-        category: "attention",
-        timestamp: run.updatedAt,
-        summary: repeatedPattern.summary,
-        status: run.status,
       },
     });
   }
@@ -404,7 +322,6 @@ export class LazySubagentsController {
   private readonly trackedLaunches = new Map<string, LaunchResult>();
   private readonly progressLines = new Map<string, string[]>();
   private readonly progressStats = new Map<string, { turnCount: number; lastTurnTokens?: number }>();
-  private readonly activeLoopAlertIds = new Map<string, string>();
   private currentCtx: ExtensionContext | undefined;
   private poller: ReturnType<typeof setInterval> | undefined;
   private activePoll: Promise<void> | undefined;
@@ -452,7 +369,6 @@ export class LazySubagentsController {
     this.stopPoller();
     this.progressLines.clear();
     this.progressStats.clear();
-    this.activeLoopAlertIds.clear();
     if (ctx.hasUI) {
       ctx.ui.setStatus(STATUS_KEY, undefined);
       ctx.ui.setWidget(WIDGET_KEY, undefined);
@@ -708,7 +624,6 @@ export class LazySubagentsController {
 
     const timestamp = this.now();
     this.trackedLaunches.delete(runId);
-    this.activeLoopAlertIds.delete(runId);
     this.registry.updateRun(runId, {
       status: "cancelled",
       updatedAt: timestamp,
@@ -738,7 +653,6 @@ export class LazySubagentsController {
     for (const id of removed) {
       this.trackedLaunches.delete(id);
       this.progressLines.delete(id);
-      this.activeLoopAlertIds.delete(id);
     }
 
     if (removed.length > 0) {
@@ -845,7 +759,6 @@ export class LazySubagentsController {
     if (hasStateChange) {
       if (isTerminalStatus(next.status)) {
         this.trackedLaunches.delete(runId);
-        this.activeLoopAlertIds.delete(runId);
         this.handleTerminalTransition(next);
       } else if ((!previousAttention && next.attentionNeeded) || (previousStatus !== "blocked" && next.status === "blocked")) {
         this.sendVisiblePayload(createAttentionMessagePayload(next));
@@ -991,7 +904,6 @@ export class LazySubagentsController {
       this.trackedLaunches.delete(runId);
       this.progressLines.delete(runId);
       this.progressStats.delete(runId);
-      this.activeLoopAlertIds.delete(runId);
     }
 
     return removed.length > 0;
@@ -1003,7 +915,6 @@ export class LazySubagentsController {
     this.registry = new RunRegistry({}, persisted);
     this.progressLines.clear();
     this.progressStats.clear();
-    this.activeLoopAlertIds.clear();
     const removedAcknowledgedRuns = this.cleanupAcknowledgedCompletedRuns();
     if (removedAcknowledgedRuns) this.persistState();
     this.syncTrackedLaunchesFromSnapshot();
@@ -1027,13 +938,8 @@ export class LazySubagentsController {
       const current = this.registry.get(run.id);
       if (!current) continue;
 
-      let hasLoopAlert = false;
       for (const alert of buildRunHealthAlerts(current, this.now())) {
-        if (alert.kind === "loop") {
-          hasLoopAlert = true;
-          if (this.activeLoopAlertIds.get(run.id) === alert.event.id) continue;
-          this.activeLoopAlertIds.set(run.id, alert.event.id);
-        } else if (current.recentEvents.some((event) => event.id === alert.event.id)) {
+        if (current.recentEvents.some((event) => event.id === alert.event.id)) {
           continue;
         }
 
@@ -1044,10 +950,6 @@ export class LazySubagentsController {
         this.registry.recordEvent(run.id, alert.event);
         this.sendVisiblePayload(createAttentionMessagePayload(this.registry.get(run.id)!), { triggerTurn: true });
         changed = true;
-      }
-
-      if (!hasLoopAlert) {
-        this.activeLoopAlertIds.delete(run.id);
       }
     }
 

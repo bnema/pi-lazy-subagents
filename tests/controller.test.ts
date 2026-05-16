@@ -517,7 +517,7 @@ describe("LazySubagentsController", () => {
     expect(messages.some((entry) => entry.message.customType === MESSAGE_TYPE_ATTENTION)).toBe(false);
   });
 
-  test("surfaces a loop alert when recent activity repeats the same multi-step cycle", async () => {
+  test("does not surface attention when recent activity repeats the same multi-step cycle", async () => {
     const { api, messages } = createPi();
     const launcher = new FakeLauncher();
     const controller = new LazySubagentsController(api as any, { launcher, createRunId: () => "run-1", now: () => 100 });
@@ -558,13 +558,12 @@ describe("LazySubagentsController", () => {
       });
       await controller.pollOnce();
     }
-    expect(controller.getSnapshot().activeRuns[0]?.attentionNeeded).toBe(true);
-    expect(messages.at(-1)?.message.customType).toBe(MESSAGE_TYPE_ATTENTION);
-    expect(messages.at(-1)?.options?.triggerTurn).toBe(true);
-    expect(messages.at(-1)?.message.content).toContain("repeated");
+
+    expect(controller.getSnapshot().activeRuns[0]?.attentionNeeded).toBe(false);
+    expect(messages.some((entry) => entry.message.customType === MESSAGE_TYPE_ATTENTION)).toBe(false);
   });
 
-  test("surfaces a loop alert for the same signal repeated many times", async () => {
+  test("does not surface attention when the same signal repeats many times", async () => {
     const { api, messages } = createPi();
     const launcher = new FakeLauncher();
     const controller = new LazySubagentsController(api as any, { launcher, createRunId: () => "run-1", now: () => 100 });
@@ -599,100 +598,8 @@ describe("LazySubagentsController", () => {
       await controller.pollOnce();
     }
 
-    expect(controller.getSnapshot().activeRuns[0]?.attentionNeeded).toBe(true);
-    expect(messages.at(-1)?.message.customType).toBe(MESSAGE_TYPE_ATTENTION);
-    expect(messages.at(-1)?.message.content).toContain("1-step cycle");
-  });
-
-  test("can re-alert when the same loop pattern disappears and later returns", async () => {
-    const { api, messages } = createPi();
-    const launcher = new FakeLauncher();
-    const controller = new LazySubagentsController(api as any, { launcher, createRunId: () => "run-1", now: () => 100 });
-    const { ctx } = createContext({ isIdle: true, hasPendingMessages: false });
-
-    await controller.handleSessionStart(ctx);
-    await controller.launchChild(
-      {
-        agent: "reviewer",
-        title: "Review auth diff",
-        taskSummary: "Review auth diff",
-        prompt: "Review the auth diff and summarize the issues.",
-      },
-      ctx,
-    );
-
-    const loopPattern = [
-      { updatedAt: 110, currentTool: "read", toolCount: 0, summary: "run-1 running · read" },
-      { updatedAt: 111, currentTool: undefined, toolCount: 1, summary: "run-1 running · summarize findings" },
-      { updatedAt: 112, currentTool: "read", toolCount: 1, summary: "run-1 running · read" },
-      { updatedAt: 113, currentTool: undefined, toolCount: 2, summary: "run-1 running · summarize findings" },
-      { updatedAt: 114, currentTool: "read", toolCount: 2, summary: "run-1 running · read" },
-      { updatedAt: 115, currentTool: undefined, toolCount: 3, summary: "run-1 running · summarize findings" },
-    ];
-
-    for (const update of loopPattern) {
-      launcher.updates.set("run-1", {
-        runId: "run-1",
-        status: "running",
-        updatedAt: update.updatedAt,
-        currentTool: update.currentTool,
-        toolCount: update.toolCount,
-        event: {
-          id: `run-1:${update.updatedAt}:progress`,
-          category: "progress",
-          timestamp: update.updatedAt,
-          summary: update.summary,
-          status: "running",
-        },
-      });
-      await controller.pollOnce();
-    }
-
-    for (const update of [
-      { updatedAt: 120, currentTool: "grep", toolCount: 4, summary: "run-1 running · grep" },
-      { updatedAt: 121, currentTool: "write", toolCount: 5, summary: "run-1 running · write" },
-      { updatedAt: 122, currentTool: undefined, toolCount: 6, summary: "run-1 running · summarize" },
-    ]) {
-      launcher.updates.set("run-1", {
-        runId: "run-1",
-        status: "running",
-        updatedAt: update.updatedAt,
-        currentTool: update.currentTool,
-        toolCount: update.toolCount,
-        event: {
-          id: `run-1:${update.updatedAt}:progress`,
-          category: "progress",
-          timestamp: update.updatedAt,
-          summary: update.summary,
-          status: "running",
-        },
-      });
-      await controller.pollOnce();
-    }
-
-    for (const update of loopPattern.map((entry) => ({
-      ...entry,
-      updatedAt: entry.updatedAt + 20,
-      toolCount: entry.toolCount + 6,
-    }))) {
-      launcher.updates.set("run-1", {
-        runId: "run-1",
-        status: "running",
-        updatedAt: update.updatedAt,
-        currentTool: update.currentTool,
-        toolCount: update.toolCount,
-        event: {
-          id: `run-1:${update.updatedAt}:progress`,
-          category: "progress",
-          timestamp: update.updatedAt,
-          summary: update.summary,
-          status: "running",
-        },
-      });
-      await controller.pollOnce();
-    }
-
-    expect(messages.filter((entry) => entry.message.customType === MESSAGE_TYPE_ATTENTION)).toHaveLength(2);
+    expect(controller.getSnapshot().activeRuns[0]?.attentionNeeded).toBe(false);
+    expect(messages.some((entry) => entry.message.customType === MESSAGE_TYPE_ATTENTION)).toBe(false);
   });
 
   test("ignores stale in-flight running updates after cancel", async () => {
