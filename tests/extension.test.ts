@@ -77,6 +77,9 @@ describe("extension entrypoint", () => {
     expect(guidance).toContain("action=help");
     expect(guidance).toContain("action=list");
     expect(guidance).toContain("list the sub agents and pick the appropriate one");
+    expect(guidance).toContain("action=parallel with children=[...]");
+    expect(guidance).toContain("two or more independent tasks");
+    expect(guidance).toContain("action=run for a single background child");
     expect(guidance).toContain("delegate");
     expect(guidance).toContain("emitted back into the same session automatically");
     expect(guidance).toContain("Do not call action=status in a loop");

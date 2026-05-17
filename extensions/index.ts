@@ -27,7 +27,7 @@ const ToolParamsSchema = Type.Object({
     Type.Literal("clear"),
     Type.Literal("cancel"),
   ], {
-    description: "Operation to perform. Use help for usage/examples and list to inspect available sub agents before choosing one.",
+    description: "Operation to perform. Use action=parallel to launch multiple independent children at the same time; use help for examples and list to inspect available sub agents before choosing one.",
   }),
   agent: Type.Optional(Type.String({
     description: `Single-run agent profile. Use action=list to inspect available sub agents. When omitted for action=run, defaults to ${DEFAULT_AGENT_PROFILE_NAME}.`,
@@ -49,7 +49,7 @@ const ToolParamsSchema = Type.Object({
     Type.Array(
       Type.Object({
         agent: Type.String({ description: "Child profile name for this parallel child. Use action=list to inspect available sub agents." }),
-        prompt: Type.String({ description: "Task for this child." }),
+        prompt: Type.String({ description: "Independent task for this child. With action=parallel, all children are launched at the same time." }),
         taskSummary: Type.Optional(Type.String({ description: "Optional shorter label for this child in status surfaces." })),
         cwd: Type.Optional(Type.String()),
       }),
@@ -105,7 +105,8 @@ export default function lazySubagentsExtension(pi: ExtensionAPI): void {
     promptGuidelines: [
       "Use lazy_subagents action=help when you need exact usage or examples before launching work.",
       "Use lazy_subagents action=list to list the sub agents and pick the appropriate one.",
-      "Use lazy_subagents action=run when the human wants parallelism without blocking the main session.",
+      "Use lazy_subagents action=parallel with children=[...] when you have two or more independent tasks that can run at the same time.",
+      "Use lazy_subagents action=run for a single background child when the human wants non-blocking work without parallel fan-out.",
       "For lazy_subagents action=run, omit agent or use delegate when unsure; delegate is the general-purpose fallback.",
       "After action=run or action=parallel, usually stop polling and wait; launch, completion, and attention messages are emitted back into the same session automatically.",
       "Do not call action=status in a loop. Use it only when the human asks, when about 60 seconds have passed with no signal and you need a health check, or when you suspect a stall.",
