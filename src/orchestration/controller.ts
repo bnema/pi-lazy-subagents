@@ -384,9 +384,9 @@ export class LazySubagentsController {
     if (ctx.hasUI) {
       ctx.ui.setStatus(STATUS_KEY, undefined);
       ctx.ui.setWidget(WIDGET_KEY, undefined);
-      this.renderedStatus = undefined;
-      this.renderedWidgetSignature = undefined;
     }
+    this.renderedStatus = undefined;
+    this.renderedWidgetSignature = undefined;
     this.currentCtx = undefined;
   }
 
