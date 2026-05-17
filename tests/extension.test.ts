@@ -72,20 +72,17 @@ describe("extension entrypoint", () => {
 
     const guidance = tool?.promptGuidelines.join("\n") ?? "";
 
-    expect(tool?.description).toContain("completion or attention");
-    expect(tool?.promptSnippet).toContain("wait for completion/attention signals");
-    expect(guidance).toContain("action=help");
+    expect(tool?.description).toContain("completion/attention signals");
+    expect(tool?.promptSnippet).toContain("asynchronously");
     expect(guidance).toContain("action=list");
-    expect(guidance).toContain("list the sub agents and pick the appropriate one");
-    expect(guidance).toContain("action=parallel with children=[...]");
-    expect(guidance).toContain("two or more independent tasks");
-    expect(guidance).toContain("action=run for a single background child");
-    expect(guidance).toContain("delegate");
-    expect(guidance).toContain("emitted back into the same session automatically");
-    expect(guidance).toContain("call action=wait once");
-    expect(guidance).toContain("Do not call action=status in a loop");
-    expect(guidance).toContain("60 seconds");
-    expect(guidance).toContain("action=pin");
+    expect(guidance).toContain("action=run defaults to delegate");
+    expect(guidance).toContain("action=parallel");
+    expect(guidance).toContain("do not call wait or status right away");
+    expect(guidance).toContain("Use action=wait only");
+    expect(guidance).toContain("Do not poll");
+    expect(guidance).toContain("60s");
+    expect(guidance).toContain("action=result");
+    expect(guidance).toContain("pin");
   });
 
   test("clears footer and widget state on shutdown", async () => {
