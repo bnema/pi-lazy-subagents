@@ -2,6 +2,9 @@ export interface UsageTracker {
   committedTokens: number;
   currentTurnTokens: number;
   totalTokens: number;
+  lastCommittedSample?: number;
+  currentTurnLatestSample?: number;
+  currentTurnMaxDelta: number;
 }
 
 export function createUsageTracker(): UsageTracker;
