@@ -12,6 +12,7 @@ Current features:
 - persistent run registry stored in the Pi session;
 - richer footer + widget visibility with elapsed time, update age, current tool, and recent activity context;
 - durable launch / completion / failure / attention cards;
+- explicit blocking wait for completion/attention when the parent really needs to pause;
 - explicit result retrieval for completed runs;
 - pickup that injects the completed result back into chat now;
 - completion policies:
@@ -19,7 +20,7 @@ Current features:
   - `follow_up_when_idle`
   - `wake_if_idle`
   - `manual_pickup`
-- manual controls for status, result, pickup, clear, and cancel;
+- manual controls for wait, status, result, pickup, clear, and cancel;
 - self-contained direct launcher; `pi-subagents` is **not required**.
 
 ## Install locally
@@ -43,6 +44,7 @@ pi --no-extensions -e /absolute/path/to/pi-lazy-subagents/extensions/index.ts
 /lazy-subagents list
 /lazy-subagents run <agent> <prompt> [--policy POLICY] [--title TITLE]
 /lazy-subagents status [runId]
+/lazy-subagents wait [runId] [--timeout-ms MS]
 /lazy-subagents result <runId>
 /lazy-subagents pickup <runId>
 /lazy-subagents pin <runId>
@@ -56,6 +58,7 @@ Examples:
 /lazy-subagents list
 /lazy-subagents run scout "Inspect the package layout" --policy notify_only
 /lazy-subagents status
+/lazy-subagents wait [runId]
 /lazy-subagents result <runId>
 /lazy-subagents pickup <runId>
 /lazy-subagents pin <runId>
@@ -71,6 +74,7 @@ Supported actions:
 - `run`
 - `parallel`
 - `status`
+- `wait`
 - `result`
 - `pickup`
 - `pin`
@@ -92,8 +96,9 @@ lazy_subagents action=parallel children=[{agent:"reviewer",prompt:"Review the di
 ## UX notes
 
 - normal orchestration flow is: launch once, then wait. Launch, completion, and attention cards are emitted back into the same parent session automatically.
+- `wait` is the intentional blocking action: use it once when the human explicitly asks the parent to wait. It returns when the selected run completes, needs attention, or the timeout expires.
 - `status` is for later health checks: it reports elapsed time, last update age, current tool when known, tool count when known, and the last recorded event.
-- do not poll `status` in a loop; use it only when the human asks, when about 60 seconds have passed with no signal and you need a health check, or when you suspect a stall.
+- do not poll `status` in a loop; if you need to block, use `wait` instead. Use `status` only when the human asks, when about 60 seconds have passed with no signal and you need a health check, or when you suspect a stall.
 - `result` returns the full final output for a completed run and acknowledges it for live-UI cleanup; it is not meant to be a live tail.
 - `pickup` injects that completed result back into the current Pi chat so the parent/orchestrator can act on it immediately.
 - `pin` posts a durable chat card that shows detailed subagent progress lines and keeps that run visible in live UI surfaces, which is usually better than repeated status checks.
@@ -115,7 +120,7 @@ lazy_subagents action=parallel children=[{agent:"reviewer",prompt:"Review the di
    - a launch card appears;
    - the footer shows an active run;
    - the widget shows elapsed/update/tool context.
-4. Wait for the completion signal. Do not poll immediately on this fast smoke test.
+4. Wait for the completion signal. Do not poll immediately on this fast smoke test. If you need a blocking smoke check, run `/lazy-subagents wait [runId]` once instead of repeating status.
 5. Confirm:
    - the footer/widget move the run into recent/completed state;
    - a completion card appears exactly once.
@@ -155,7 +160,7 @@ Example launch + wait + result flow:
 SMOKE_DIR=$(mktemp -d)
 RUN_OUT=$(pi --session-dir "$SMOKE_DIR" --no-extensions -e ./extensions/index.ts --tools lazy_subagents -p "Use lazy_subagents with action=run, agent=delegate, prompt='Reply with exactly DONE and nothing else.', completionPolicy='notify_only'. Answer only with the exact tool result text.")
 RUN_ID=$(printf '%s' "$RUN_OUT" | grep -oE '[0-9a-f-]{36}' | head -n1)
-sleep 5
+pi --session-dir "$SMOKE_DIR" -c --no-extensions -e ./extensions/index.ts --tools lazy_subagents -p "Use lazy_subagents with action=wait, runId='$RUN_ID' and answer only with its result."
 pi --session-dir "$SMOKE_DIR" -c --no-extensions -e ./extensions/index.ts --tools lazy_subagents -p "Use lazy_subagents with action=result, runId='$RUN_ID' and answer only with its result."
 ```
 

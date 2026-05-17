@@ -82,6 +82,7 @@ describe("extension entrypoint", () => {
     expect(guidance).toContain("action=run for a single background child");
     expect(guidance).toContain("delegate");
     expect(guidance).toContain("emitted back into the same session automatically");
+    expect(guidance).toContain("call action=wait once");
     expect(guidance).toContain("Do not call action=status in a loop");
     expect(guidance).toContain("60 seconds");
     expect(guidance).toContain("action=pin");
