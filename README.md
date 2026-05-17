@@ -58,7 +58,7 @@ Examples:
 /lazy-subagents list
 /lazy-subagents run scout "Inspect the package layout" --policy notify_only
 /lazy-subagents status
-/lazy-subagents wait <runId>
+/lazy-subagents wait [runId]
 /lazy-subagents result <runId>
 /lazy-subagents pickup <runId>
 /lazy-subagents pin <runId>
@@ -120,7 +120,7 @@ lazy_subagents action=parallel children=[{agent:"reviewer",prompt:"Review the di
    - a launch card appears;
    - the footer shows an active run;
    - the widget shows elapsed/update/tool context.
-4. Wait for the completion signal. Do not poll immediately on this fast smoke test. If you need a blocking smoke check, run `/lazy-subagents wait <runId>` once instead of repeating status.
+4. Wait for the completion signal. Do not poll immediately on this fast smoke test. If you need a blocking smoke check, run `/lazy-subagents wait [runId]` once instead of repeating status.
 5. Confirm:
    - the footer/widget move the run into recent/completed state;
    - a completion card appears exactly once.

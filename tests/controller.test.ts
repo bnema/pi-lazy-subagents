@@ -268,6 +268,30 @@ describe("LazySubagentsController", () => {
     expect(result.run.status).toBe("completed");
   });
 
+  test("waitForRunSignal latches the only active run before it completes during polling", async () => {
+    const { api } = createPi();
+    const launcher = new FakeLauncher();
+    const controller = new LazySubagentsController(api as any, { launcher, createRunId: () => "run-1", now: () => 100 });
+    const { ctx } = createContext({ isIdle: true, hasPendingMessages: false });
+
+    await controller.handleSessionStart(ctx);
+    await controller.launchChild({ agent: "reviewer", title: "Review auth diff", taskSummary: "Review auth diff", prompt: "Review it" }, ctx);
+    launcher.updates.set("run-1", {
+      runId: "run-1",
+      status: "completed",
+      updatedAt: 130,
+      completedAt: 130,
+      resultPreview: "Done",
+    });
+
+    const result = await controller.waitForRunSignal(undefined, { timeoutMs: Number.NaN });
+
+    expect(result.status).toBe("ready");
+    if (result.status !== "ready") throw new Error(`Expected ready, got ${result.status}`);
+    expect(result.run.id).toBe("run-1");
+    expect(result.run.status).toBe("completed");
+  });
+
   test("waitForRunSignal asks for a run id when multiple runs are active", async () => {
     const { api } = createPi();
     const launcher = new FakeLauncher();

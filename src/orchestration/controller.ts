@@ -544,18 +544,24 @@ export class LazySubagentsController {
     runId?: string,
     options: { timeoutMs?: number; signal?: AbortSignal } = {},
   ): Promise<WaitForRunSignalResult> {
-    const timeoutMs = Math.min(options.timeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS, MAX_WAIT_TIMEOUT_MS);
+    const requestedTimeoutMs = options.timeoutMs;
+    const normalizedTimeoutMs = typeof requestedTimeoutMs === "number" && Number.isFinite(requestedTimeoutMs) && requestedTimeoutMs > 0
+      ? requestedTimeoutMs
+      : DEFAULT_WAIT_TIMEOUT_MS;
+    const timeoutMs = Math.min(normalizedTimeoutMs, MAX_WAIT_TIMEOUT_MS);
     const startedWaitingAt = this.now();
+    let latchedSelectedRunId = runId;
 
     const selectRun = (): WaitForRunSignalResult => {
       const snapshot = this.registry.snapshot();
-      if (runId) {
-        const run = snapshot.runs.find((candidate) => candidate.id === runId);
+      if (latchedSelectedRunId) {
+        const run = snapshot.runs.find((candidate) => candidate.id === latchedSelectedRunId);
         return run ? { status: "ready", run } : { status: "not_found" };
       }
 
       if (snapshot.activeRuns.length === 0) return { status: "no_active_runs" };
       if (snapshot.activeRuns.length > 1) return { status: "ambiguous", activeRuns: snapshot.activeRuns };
+      latchedSelectedRunId = snapshot.activeRuns[0].id;
       return { status: "ready", run: snapshot.activeRuns[0] };
     };
 
@@ -564,9 +570,13 @@ export class LazySubagentsController {
     while (true) {
       if (options.signal?.aborted) return { status: "aborted" };
 
+      let selected = selectRun();
+      if (selected.status !== "ready") return selected;
+      if (isReady(selected.run)) return selected;
+
       await this.pollOnce();
-      const selected = selectRun();
-      if (selected.status !== "ready" || !selected.run) return selected;
+      selected = selectRun();
+      if (selected.status !== "ready") return selected;
       if (isReady(selected.run)) return selected;
 
       const remaining = timeoutMs - (this.now() - startedWaitingAt);
