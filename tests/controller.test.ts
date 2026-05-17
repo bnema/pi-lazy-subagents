@@ -242,6 +242,50 @@ describe("LazySubagentsController", () => {
     ).toBe(true);
   });
 
+  test("waitForRunSignal blocks via polling until a run is completed or needs attention", async () => {
+    const { api } = createPi();
+    const launcher = new FakeLauncher();
+    const controller = new LazySubagentsController(api as any, { launcher, createRunId: () => "run-1", pollIntervalMs: 5 });
+    const { ctx } = createContext({ isIdle: true, hasPendingMessages: false });
+
+    await controller.handleSessionStart(ctx);
+    await controller.launchChild({ agent: "reviewer", title: "Review auth diff", taskSummary: "Review auth diff", prompt: "Review it" }, ctx);
+
+    setTimeout(() => {
+      launcher.updates.set("run-1", {
+        runId: "run-1",
+        status: "completed",
+        updatedAt: Date.now(),
+        completedAt: Date.now(),
+        resultPreview: "Done",
+      });
+    }, 10);
+
+    const result = await controller.waitForRunSignal("run-1", { timeoutMs: 1_000 });
+
+    expect(result.status).toBe("ready");
+    if (result.status !== "ready") throw new Error(`Expected ready, got ${result.status}`);
+    expect(result.run.status).toBe("completed");
+  });
+
+  test("waitForRunSignal asks for a run id when multiple runs are active", async () => {
+    const { api } = createPi();
+    const launcher = new FakeLauncher();
+    let nextRun = 0;
+    const controller = new LazySubagentsController(api as any, { launcher, createRunId: () => `run-${++nextRun}`, now: () => 100 });
+    const { ctx } = createContext({ isIdle: true, hasPendingMessages: false });
+
+    await controller.handleSessionStart(ctx);
+    await controller.launchChild({ agent: "reviewer", title: "Run one", taskSummary: "Run one", prompt: "one" }, ctx);
+    await controller.launchChild({ agent: "reviewer", title: "Run two", taskSummary: "Run two", prompt: "two" }, ctx);
+
+    const result = await controller.waitForRunSignal(undefined, { timeoutMs: 100 });
+
+    expect(result.status).toBe("ambiguous");
+    if (result.status !== "ambiguous") throw new Error(`Expected ambiguous, got ${result.status}`);
+    expect(result.activeRuns.map((run) => run.id)).toEqual(["run-1", "run-2"]);
+  });
+
   test("skips timed-out launcher reads and continues polling other tracked runs", async () => {
     const { api } = createPi();
     const launcher = new FakeLauncher();

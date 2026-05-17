@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { buildLazySubagentsAgentList, buildLazySubagentsHelp, executeLazySubagentsCommand, formatStatusReport, parseLazySubagentsCommand } from "../src/orchestration/commands.js";
+import { buildLazySubagentsAgentList, buildLazySubagentsHelp, executeLazySubagentsCommand, formatStatusReport, formatWaitReport, parseLazySubagentsCommand } from "../src/orchestration/commands.js";
 import type { RunRecord, RunRegistrySnapshot } from "../src/types.js";
 
 function createRun(overrides: Partial<RunRecord> = {}): RunRecord {
@@ -64,6 +64,8 @@ describe("lazy-subagents command parsing", () => {
     expect(help).toContain("emitted back into this session automatically");
     expect(help).toContain("Do not poll in a loop");
     expect(help).toContain("Use result after terminal completion");
+    expect(help).toContain("action=wait");
+    expect(help).toContain("explicitly asks you to wait");
   });
 
   test("list output prints available sub agents", () => {
@@ -93,7 +95,7 @@ describe("lazy-subagents command parsing", () => {
     expect(message).toContain("polling right away");
   });
 
-  test("parses list, run, status, result, pickup, pin, clear, and cancel commands", () => {
+  test("parses list, run, status, wait, result, pickup, pin, clear, and cancel commands", () => {
     expect(parseLazySubagentsCommand('run reviewer "Review the auth diff" --policy manual_pickup --title "Review auth diff"')).toEqual({
       action: "run",
       agent: "reviewer",
@@ -104,11 +106,24 @@ describe("lazy-subagents command parsing", () => {
 
     expect(parseLazySubagentsCommand("list")).toEqual({ action: "list" });
     expect(parseLazySubagentsCommand("status run-1")).toEqual({ action: "status", runId: "run-1" });
+    expect(parseLazySubagentsCommand("wait run-1 --timeout-ms 1234")).toEqual({ action: "wait", runId: "run-1", timeoutMs: 1234 });
+    expect(parseLazySubagentsCommand("wait run-1")).toEqual({ action: "wait", runId: "run-1" });
+    expect(parseLazySubagentsCommand("wait --timeout-ms 5000")).toEqual({ action: "wait", timeoutMs: 5000 });
+    expect(parseLazySubagentsCommand("wait")).toEqual({ action: "wait" });
     expect(parseLazySubagentsCommand("result run-1")).toEqual({ action: "result", runId: "run-1" });
     expect(parseLazySubagentsCommand("pickup run-1")).toEqual({ action: "pickup", runId: "run-1" });
     expect(parseLazySubagentsCommand("pin run-1")).toEqual({ action: "pin", runId: "run-1" });
     expect(parseLazySubagentsCommand("clear all")).toEqual({ action: "clear", scope: "all" });
     expect(parseLazySubagentsCommand("cancel run-1")).toEqual({ action: "cancel", runId: "run-1" });
+  });
+
+  test("formats wait reports for ready, timeout, and ambiguous waits", () => {
+    const completed = createRun({ id: "run-1", status: "completed", resultPreview: "Done" });
+    const running = createRun({ id: "run-2", status: "running", completedAt: undefined });
+
+    expect(formatWaitReport({ status: "ready", run: completed }, 60_000)).toContain("Lazy subagent finished: run-1");
+    expect(formatWaitReport({ status: "timeout", run: running }, 60_000)).toContain("Do not poll status repeatedly");
+    expect(formatWaitReport({ status: "ambiguous", activeRuns: [running] }, 60_000)).toContain("call action=wait with runId");
   });
 
   test("returns a clear message when a scoped run id is missing", () => {

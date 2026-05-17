@@ -1,6 +1,7 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { listAvailableAgentProfiles, resolveAgentProfileName } from "../launcher/agent-profiles.js";
+import { DEFAULT_WAIT_TIMEOUT_MS, MAX_WAIT_TIMEOUT_MS } from "../defaults.js";
 import type { CompletionPolicy, RunEvent, RunRecord, RunRegistrySnapshot } from "../types.js";
 import { formatAge, formatCompactThousands, formatDuration } from "../utils/time.js";
 import type { LazySubagentsController } from "./controller.js";
@@ -16,6 +17,7 @@ export type ParsedLazySubagentsCommand =
   | { action: "help" }
   | { action: "list" }
   | { action: "status"; runId?: string }
+  | { action: "wait"; runId?: string; timeoutMs?: number }
   | { action: "result"; runId: string }
   | { action: "pickup"; runId: string }
   | { action: "pin"; runId: string }
@@ -83,7 +85,14 @@ function shortTitle(text: string): string {
   return singleLine.length <= 72 ? singleLine : `${singleLine.slice(0, 71).trimEnd()}…`;
 }
 
-export const WAIT_FOR_SIGNAL_GUIDANCE = "Wait for completion/attention messages instead of polling right away.";
+export const WAIT_FOR_SIGNAL_GUIDANCE = "Wait for completion/attention messages instead of polling right away; if you truly need to block, use action=wait instead of repeated status calls.";
+
+function normalizeWaitTimeoutMs(value: unknown): number | undefined {
+  if (typeof value !== "string") return undefined;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return undefined;
+  return Math.min(Math.floor(parsed), MAX_WAIT_TIMEOUT_MS);
+}
 
 export function formatLaunchAcknowledgement(summary: string): string {
   return `${summary} ${WAIT_FOR_SIGNAL_GUIDANCE}`;
@@ -114,6 +123,26 @@ export function parseLazySubagentsCommand(input: string): ParsedLazySubagentsCom
 
   if (action === "status") {
     return { action, runId: tokens[0] };
+  }
+
+  if (action === "wait") {
+    let runId: string | undefined;
+    let timeoutMs: number | undefined;
+
+    while (tokens.length > 0) {
+      const token = tokens.shift()!;
+      if (token === "--timeout-ms") {
+        timeoutMs = normalizeWaitTimeoutMs(tokens.shift());
+        continue;
+      }
+      if (token.startsWith("--timeout-ms=")) {
+        timeoutMs = normalizeWaitTimeoutMs(token.slice("--timeout-ms=".length));
+        continue;
+      }
+      runId ??= token;
+    }
+
+    return { action, runId, timeoutMs };
   }
 
   if (action === "result" || action === "pickup" || action === "pin" || action === "cancel") {
@@ -189,6 +218,40 @@ function formatRunStatus(run: RunRecord, now: number): string[] {
   return lines;
 }
 
+export function formatWaitReport(result: Awaited<ReturnType<LazySubagentsController["waitForRunSignal"]>>, now = Date.now()): string {
+  switch (result.status) {
+    case "ready":
+      // Defensive guard: the ready discriminant should carry a run today, but keep the formatter robust if future orchestration paths decouple those states.
+      if (!result.run) return "Lazy subagent wait ended, but no run was selected.";
+      return [
+        result.run.attentionNeeded || result.run.status === "blocked" || result.run.status === "paused"
+          ? `Lazy subagent needs attention: ${result.run.id}`
+          : `Lazy subagent finished: ${result.run.id}`,
+        ...formatRunStatus(result.run, now),
+        result.run.status === "completed" ? `Use action=result runId=${result.run.id} to read the result.` : undefined,
+      ].filter((line): line is string => Boolean(line)).join("\n");
+    case "timeout":
+      return result.run
+        ? `Still waiting for ${result.run.id} after timeout. Do not poll status repeatedly; either call action=wait again with a longer timeout, continue other work, or wait for the automatic completion/attention message.`
+        : "Timed out waiting for a lazy subagent signal.";
+    case "not_found":
+      return "No run found for that id.";
+    case "ambiguous":
+      return [
+        "Multiple active lazy subagent runs; call action=wait with runId for one of:",
+        ...(result.activeRuns ?? []).map((run) => `  ${run.id} · ${run.agent} · ${run.title || run.taskSummary}`),
+      ].join("\n");
+    case "no_active_runs":
+      return "No active lazy subagent runs to wait for.";
+    case "aborted":
+      return "Stopped waiting for lazy subagent signal because the tool call was aborted.";
+    default: {
+      const _exhaustive: never = result;
+      throw new Error(`Unhandled waitForRunSignal status: ${JSON.stringify(_exhaustive)}`);
+    }
+  }
+}
+
 export function formatStatusReport(snapshot: RunRegistrySnapshot, runId?: string, now = Date.now()): string {
   if (snapshot.runs.length === 0) return "No tracked lazy subagent runs.";
 
@@ -228,6 +291,7 @@ export function buildLazySubagentsHelp(): string {
     "  /lazy-subagents run <agent> <prompt> [--policy POLICY] [--title TITLE]",
     "  (parallel launch is available through the lazy_subagents tool action=parallel)",
     "  /lazy-subagents status [runId]",
+    "  /lazy-subagents wait [runId] [--timeout-ms MS]",
     "  /lazy-subagents result <runId>",
     "  /lazy-subagents pickup <runId>",
     "  /lazy-subagents pin <runId>",
@@ -240,6 +304,7 @@ export function buildLazySubagentsHelp(): string {
     "  lazy_subagents action=run agent=<agent> prompt=<prompt> [completionPolicy=<policy>] [title=<title>]",
     "  lazy_subagents action=parallel children=[{agent,prompt,taskSummary?,cwd?}, ...] [completionPolicy=<policy>] [title=<title>]",
     "  lazy_subagents action=status [runId=<runId>]",
+    `  lazy_subagents action=wait [runId=<runId>] [timeoutMs=${DEFAULT_WAIT_TIMEOUT_MS}]`,
     "  lazy_subagents action=result runId=<runId>",
     "  lazy_subagents action=pickup runId=<runId>",
     "  lazy_subagents action=pin runId=<runId>",
@@ -260,6 +325,7 @@ export function buildLazySubagentsHelp(): string {
     "",
     "Tool note: lazy_subagents action=run defaults agent to delegate when omitted.",
     "Normal flow: launch once, then wait. Launch, completion, and attention messages are emitted back into this session automatically.",
+    "If the human explicitly asks you to wait, use lazy_subagents action=wait rather than calling status repeatedly.",
     "Do not poll in a loop. Use status only when the human asks, when about 60s have passed with no signal and you need a health check, or when you suspect a stall.",
     "Use result after terminal completion, pickup to inject the final result into chat, and pin when you want durable live progress in chat without repeated status checks.",
   ].join("\n");
@@ -280,6 +346,8 @@ export async function executeLazySubagentsCommand(
     case "status":
       await controller.pollOnce();
       return formatStatusReport(controller.getSnapshot(), parsed.runId);
+    case "wait":
+      return formatWaitReport(await controller.waitForRunSignal(parsed.runId, { timeoutMs: parsed.timeoutMs }));
     case "result": {
       const result = await controller.getRunResult(parsed.runId);
       if (result) controller.acknowledgeRun(parsed.runId);

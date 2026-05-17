@@ -1,10 +1,10 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-import { DEFAULT_COMPLETION_POLICY, TOOL_NAME } from "../src/defaults.js";
+import { DEFAULT_COMPLETION_POLICY, DEFAULT_WAIT_TIMEOUT_MS, MAX_WAIT_TIMEOUT_MS, TOOL_NAME } from "../src/defaults.js";
 import { DEFAULT_AGENT_PROFILE_NAME, resolveAgentProfileName } from "../src/launcher/agent-profiles.js";
 import { LazySubagentsController } from "../src/orchestration/controller.js";
-import { buildLazySubagentsAgentList, buildLazySubagentsHelp, executeLazySubagentsCommand, formatLaunchAcknowledgement, formatStatusReport } from "../src/orchestration/commands.js";
+import { buildLazySubagentsAgentList, buildLazySubagentsHelp, executeLazySubagentsCommand, formatLaunchAcknowledgement, formatStatusReport, formatWaitReport } from "../src/orchestration/commands.js";
 import { registerRunMessageRenderers } from "../src/ui/messages.js";
 
 const CompletionPolicySchema = Type.Union([
@@ -21,6 +21,7 @@ const ToolParamsSchema = Type.Object({
     Type.Literal("run"),
     Type.Literal("parallel"),
     Type.Literal("status"),
+    Type.Literal("wait"),
     Type.Literal("result"),
     Type.Literal("pickup"),
     Type.Literal("pin"),
@@ -40,7 +41,12 @@ const ToolParamsSchema = Type.Object({
   })),
   completionPolicy: Type.Optional(CompletionPolicySchema),
   runId: Type.Optional(Type.String({
-    description: "Existing run id for status, result, pickup, clear, or cancel operations. Use this sparingly for later health checks or final-result retrieval, not tight polling loops.",
+    description: "Existing run id for wait, status, result, pickup, clear, or cancel operations. Use this sparingly for later health checks or final-result retrieval, not tight polling loops.",
+  })),
+  timeoutMs: Type.Optional(Type.Number({
+    minimum: 1,
+    maximum: MAX_WAIT_TIMEOUT_MS,
+    description: `Maximum time for action=wait to block before returning. Defaults to ${DEFAULT_WAIT_TIMEOUT_MS}ms. Prefer wait over repeated status polling when the user asks you to wait.`,
   })),
   scope: Type.Optional(Type.Union([Type.Literal("completed"), Type.Literal("all")], {
     description: "Clear only completed runs or all tracked runs.",
@@ -109,9 +115,10 @@ export default function lazySubagentsExtension(pi: ExtensionAPI): void {
       "Use lazy_subagents action=run for a single background child when the human wants non-blocking work without parallel fan-out.",
       "For lazy_subagents action=run, omit agent or use delegate when unsure; delegate is the general-purpose fallback.",
       "After action=run or action=parallel, usually stop polling and wait; launch, completion, and attention messages are emitted back into the same session automatically.",
+      "When the human explicitly asks you to wait, call action=wait once. It blocks until completion/attention or timeout, so do not simulate waiting with repeated status calls.",
       "Do not call action=status in a loop. Use it only when the human asks, when about 60 seconds have passed with no signal and you need a health check, or when you suspect a stall.",
       "Use action=result only after a run reaches a terminal state, use action=pickup to inject that final result into chat, and use action=pin when you want durable live progress in chat.",
-      "Use lazy_subagents action=status, action=result, action=pickup, action=pin, action=clear, or action=cancel to inspect or manage existing runs.",
+      "Use lazy_subagents action=wait to block for a signal, or action=status, action=result, action=pickup, action=pin, action=clear, or action=cancel to inspect or manage existing runs.",
     ],
     parameters: ToolParamsSchema,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -164,6 +171,11 @@ export default function lazySubagentsExtension(pi: ExtensionAPI): void {
         case "status":
           await controller.pollOnce();
           return { content: [{ type: "text", text: formatStatusReport(controller.getSnapshot(), params.runId) }], details: { action: params.action, runId: params.runId } };
+        case "wait":
+          return {
+            content: [{ type: "text", text: formatWaitReport(await controller.waitForRunSignal(params.runId, { timeoutMs: params.timeoutMs, signal: _signal })) }],
+            details: { action: params.action, runId: params.runId, timeoutMs: params.timeoutMs },
+          };
         case "result": {
           const text = params.runId ? await controller.getRunResult(params.runId) : undefined;
           if (text && params.runId) controller.acknowledgeRun(params.runId);

@@ -9,6 +9,8 @@ import {
   DEFAULT_ACKNOWLEDGED_SUCCESS_TTL_MS,
   DEFAULT_STALE_RUN_MS,
   DEFAULT_SUCCESS_VISIBILITY_GRACE_MS,
+  DEFAULT_WAIT_TIMEOUT_MS,
+  MAX_WAIT_TIMEOUT_MS,
   MESSAGE_TYPE_ATTENTION,
   MESSAGE_TYPE_COMPLETION,
    MESSAGE_TYPE_PIN,
@@ -50,6 +52,14 @@ export interface LazySubagentsControllerOptions {
 
 export type ControllerLaunchChildRequest = Omit<LaunchChildRequest, "runId">;
 export type ControllerLaunchGroupRequest = Omit<LaunchGroupRequest, "runId">;
+
+export type WaitForRunSignalResult =
+  | { status: "ready"; run: RunRecord }
+  | { status: "timeout"; run?: RunRecord }
+  | { status: "not_found" }
+  | { status: "ambiguous"; activeRuns: RunRecord[] }
+  | { status: "no_active_runs" }
+  | { status: "aborted" };
 
 const DEFAULT_READ_UPDATE_TIMEOUT_MS = 500;
 
@@ -527,6 +537,44 @@ export class LazySubagentsController {
       this.persistState();
       this.renderUi(ctx);
       return stored;
+    }
+  }
+
+  async waitForRunSignal(
+    runId?: string,
+    options: { timeoutMs?: number; signal?: AbortSignal } = {},
+  ): Promise<WaitForRunSignalResult> {
+    const timeoutMs = Math.min(options.timeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS, MAX_WAIT_TIMEOUT_MS);
+    const startedWaitingAt = this.now();
+
+    const selectRun = (): WaitForRunSignalResult => {
+      const snapshot = this.registry.snapshot();
+      if (runId) {
+        const run = snapshot.runs.find((candidate) => candidate.id === runId);
+        return run ? { status: "ready", run } : { status: "not_found" };
+      }
+
+      if (snapshot.activeRuns.length === 0) return { status: "no_active_runs" };
+      if (snapshot.activeRuns.length > 1) return { status: "ambiguous", activeRuns: snapshot.activeRuns };
+      return { status: "ready", run: snapshot.activeRuns[0] };
+    };
+
+    const isReady = (run: RunRecord): boolean => isTerminalStatus(run.status) || run.attentionNeeded || run.status === "blocked";
+
+    while (true) {
+      if (options.signal?.aborted) return { status: "aborted" };
+
+      await this.pollOnce();
+      const selected = selectRun();
+      if (selected.status !== "ready" || !selected.run) return selected;
+      if (isReady(selected.run)) return selected;
+
+      const remaining = timeoutMs - (this.now() - startedWaitingAt);
+      if (remaining <= 0) return { status: "timeout", run: selected.run };
+
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, Math.min(this.pollIntervalMs, remaining));
+      });
     }
   }
 
