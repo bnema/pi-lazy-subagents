@@ -8,6 +8,7 @@ Pi package for asynchronous child-session orchestration with persistent visibili
 
 Current features:
 - async child launches with immediate return to the parent session;
+- parallel child groups via `lazy_subagents action=parallel` for multiple independent tasks at the same time;
 - persistent run registry stored in the Pi session;
 - richer footer + widget visibility with elapsed time, update age, current tool, and recent activity context;
 - durable launch / completion / failure / attention cards;
@@ -79,6 +80,14 @@ Supported actions:
 Use `action=list` or `/lazy-subagents list` to print the currently available sub agents, including file-based profiles discovered from `~/.agents/agents` and `~/.pi/agent/agents`.
 
 For tool calls, `action=run` defaults `agent` to `delegate` when omitted.
+
+Use `action=parallel` when there are two or more independent tasks that should run at the same time. Each entry in `children` is launched at the same time and the group reports completion/attention back to the parent session like a single tracked run.
+
+Example parallel launch:
+
+```text
+lazy_subagents action=parallel children=[{agent:"reviewer",prompt:"Review the diff for correctness"},{agent:"scout",prompt:"Find related docs and prior art"},{agent:"worker",prompt:"Prototype the isolated parser change"}]
+```
 
 ## UX notes
 
