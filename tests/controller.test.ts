@@ -89,6 +89,7 @@ function createContext(options: {
   const statuses: Array<[string, string | undefined]> = [];
   const widgets: Array<[string, string[] | undefined]> = [];
   const notifications: Array<[string, string | undefined]> = [];
+  const renderRequests: number[] = [];
   const theme = {
     fg: (_color: string, text: string) => text,
     dim: (text: string) => text,
@@ -115,6 +116,9 @@ function createContext(options: {
       notify: (message: string, level?: string) => {
         notifications.push([message, level]);
       },
+      requestRender: () => {
+        renderRequests.push(Date.now());
+      },
     },
     sessionManager: {
       getEntries: () => options.entries ?? [],
@@ -127,7 +131,7 @@ function createContext(options: {
     hasPendingMessages: () => options.hasPendingMessages ?? false,
   };
 
-  return { ctx: ctx as any, statuses, widgets, notifications };
+  return { ctx: ctx as any, statuses, widgets, notifications, renderRequests };
 }
 
 function createPi() {
@@ -192,6 +196,74 @@ describe("LazySubagentsController", () => {
     expect(controller.getSnapshot().activeRuns.map((run: RunRecord) => run.id)).toEqual(["branch-run"]);
     expect(statuses.at(-1)).toEqual([STATUS_KEY, expect.stringContaining("1 live")]);
     expect(widgets.at(-1)?.[0]).toBe(WIDGET_KEY);
+  });
+
+  test("does not re-send unchanged UI on repeated session tree events", async () => {
+    const registry = new RunRegistry();
+    registry.upsert(createRun({
+      id: "branch-run",
+      status: "completed",
+      updatedAt: 10,
+      completedAt: 10,
+      completionPolicy: "manual_pickup",
+    }));
+
+    const persisted = createPersistedState(registry.serialize(), 10);
+    const { api } = createPi();
+    const controller = new LazySubagentsController(api as any, { launcher: new FakeLauncher(), createRunId: () => "ignored", now: () => 10 });
+    const { ctx, statuses, widgets, renderRequests } = createContext({ branchEntries: [{ type: "custom", customType: PERSISTED_STATE_ENTRY, data: persisted }] });
+
+    await controller.handleSessionStart(ctx);
+    expect(statuses).toHaveLength(1);
+    expect(widgets).toHaveLength(1);
+    expect(renderRequests).toHaveLength(1);
+
+    await controller.handleSessionTree(ctx);
+    await controller.handleSessionTree(ctx);
+
+    expect(statuses).toHaveLength(1);
+    expect(widgets).toHaveLength(1);
+    expect(renderRequests).toHaveLength(1);
+  });
+
+  test("re-sends UI when restored session tree state changes", async () => {
+    const firstRegistry = new RunRegistry();
+    firstRegistry.upsert(createRun({
+      id: "branch-run-1",
+      title: "First ready run",
+      status: "completed",
+      updatedAt: 10,
+      completedAt: 10,
+      completionPolicy: "manual_pickup",
+    }));
+
+    const secondRegistry = new RunRegistry();
+    secondRegistry.upsert(createRun({
+      id: "branch-run-2",
+      title: "Second ready run",
+      status: "completed",
+      updatedAt: 20,
+      completedAt: 20,
+      completionPolicy: "manual_pickup",
+    }));
+
+    const branchEntries = [
+      { type: "custom", customType: PERSISTED_STATE_ENTRY, data: createPersistedState(firstRegistry.serialize(), 10) },
+    ];
+    const { api } = createPi();
+    const controller = new LazySubagentsController(api as any, { launcher: new FakeLauncher(), createRunId: () => "ignored", now: () => 30 });
+    const { ctx, statuses, widgets, renderRequests } = createContext({ branchEntries });
+
+    await controller.handleSessionStart(ctx);
+    expect(widgets.at(-1)?.[1]?.join("\n")).toContain("First ready run");
+
+    branchEntries.push({ type: "custom", customType: PERSISTED_STATE_ENTRY, data: createPersistedState(secondRegistry.serialize(), 20) });
+    await controller.handleSessionTree(ctx);
+
+    expect(statuses).toHaveLength(1);
+    expect(widgets).toHaveLength(2);
+    expect(renderRequests).toHaveLength(2);
+    expect(widgets.at(-1)?.[1]?.join("\n")).toContain("Second ready run");
   });
 
   test("launches a child, emits a launch card, persists state, and routes completion once", async () => {

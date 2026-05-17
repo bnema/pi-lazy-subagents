@@ -39,7 +39,7 @@ import {
 } from "../ui/messages.js";
 import { buildFooterStatus } from "../ui/status.js";
 import { GLYPH_PINNED } from "../ui/glyphs.js";
-import { createWidgetContent } from "../ui/widget.js";
+import { buildWidgetLines, createWidgetContent } from "../ui/widget.js";
 import { formatCompactThousands, formatDuration } from "../utils/time.js";
 
 export interface LazySubagentsControllerOptions {
@@ -332,6 +332,8 @@ export class LazySubagentsController {
   private readonly trackedLaunches = new Map<string, LaunchResult>();
   private readonly progressLines = new Map<string, string[]>();
   private readonly progressStats = new Map<string, { turnCount: number; lastTurnTokens?: number }>();
+  private renderedStatus: string | undefined;
+  private renderedWidgetSignature: string | undefined;
   private currentCtx: ExtensionContext | undefined;
   private poller: ReturnType<typeof setInterval> | undefined;
   private activePoll: Promise<void> | undefined;
@@ -383,6 +385,8 @@ export class LazySubagentsController {
       ctx.ui.setStatus(STATUS_KEY, undefined);
       ctx.ui.setWidget(WIDGET_KEY, undefined);
     }
+    this.renderedStatus = undefined;
+    this.renderedWidgetSignature = undefined;
     this.currentCtx = undefined;
   }
 
@@ -1072,12 +1076,27 @@ export class LazySubagentsController {
 
   private renderUi(ctx = this.currentCtx): void {
     if (!ctx?.hasUI) return;
+
     const snapshot = this.getLiveUiSnapshot();
-    ctx.ui.setStatus(STATUS_KEY, buildFooterStatus(snapshot, ctx.ui.theme));
-    ctx.ui.setWidget(
-      WIDGET_KEY,
-      createWidgetContent(snapshot, this.now(), 6, { isPinned: (runId) => this.registry.isPinned(runId) }),
-    );
+    const timestamp = this.now();
+    const widgetOptions = { isPinned: (runId: string) => this.registry.isPinned(runId) };
+    const status = buildFooterStatus(snapshot, ctx.ui.theme);
+    const widgetLines = buildWidgetLines(snapshot, timestamp, 6, ctx.ui.theme, widgetOptions);
+    const widgetSignature = widgetLines.length > 0 ? JSON.stringify(widgetLines) : undefined;
+
+    const statusChanged = status !== this.renderedStatus;
+    const widgetChanged = widgetSignature !== this.renderedWidgetSignature;
+    if (!statusChanged && !widgetChanged) return;
+
+    if (statusChanged) {
+      ctx.ui.setStatus(STATUS_KEY, status);
+      this.renderedStatus = status;
+    }
+    if (widgetChanged) {
+      ctx.ui.setWidget(WIDGET_KEY, createWidgetContent(snapshot, timestamp, 6, widgetOptions));
+      this.renderedWidgetSignature = widgetSignature;
+    }
+
     (ctx.ui as typeof ctx.ui & { requestRender?: () => void }).requestRender?.();
   }
 
