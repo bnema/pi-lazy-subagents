@@ -85,7 +85,7 @@ function shortTitle(text: string): string {
   return singleLine.length <= 72 ? singleLine : `${singleLine.slice(0, 71).trimEnd()}…`;
 }
 
-export const WAIT_FOR_SIGNAL_GUIDANCE = "Wait for completion/attention messages instead of polling right away; if you truly need to block, use action=wait instead of repeated status calls.";
+export const WAIT_FOR_SIGNAL_GUIDANCE = "Return to the user or continue other work. Signals arrive automatically; do not wait or poll right away.";
 
 function normalizeWaitTimeoutMs(value: unknown): number | undefined {
   if (typeof value !== "string") return undefined;
@@ -232,7 +232,7 @@ export function formatWaitReport(result: Awaited<ReturnType<LazySubagentsControl
       ].filter((line): line is string => Boolean(line)).join("\n");
     case "timeout":
       return result.run
-        ? `Still waiting for ${result.run.id} after timeout. Do not poll status repeatedly; either call action=wait again with a longer timeout, continue other work, or wait for the automatic completion/attention message.`
+        ? `Still waiting for ${result.run.id}. Return to the user, continue other work, or wait for the automatic signal.`
         : "Timed out waiting for a lazy subagent signal.";
     case "not_found":
       return "No run found for that id.";
@@ -323,11 +323,11 @@ export function buildLazySubagentsHelp(): string {
     "  lazy_subagents action=parallel children=[{agent:\"scout\",prompt:\"Inspect the package layout\"},{agent:\"reviewer\",prompt:\"Review the auth diff\"}]",
     "  lazy_subagents action=parallel children=[{agent:\"reviewer\",prompt:\"Review the diff\"},{agent:\"scout\",prompt:\"Find related docs\"},{agent:\"worker\",prompt:\"Prototype the isolated parser change\"}]",
     "",
-    "Tool note: lazy_subagents action=run defaults agent to delegate when omitted.",
-    "Normal flow: launch once, then wait. Launch, completion, and attention messages are emitted back into this session automatically.",
-    "If the human explicitly asks you to wait, use lazy_subagents action=wait rather than calling status repeatedly.",
-    "Do not poll in a loop. Use status only when the human asks, when about 60s have passed with no signal and you need a health check, or when you suspect a stall.",
-    "Use result after terminal completion, pickup to inject the final result into chat, and pin when you want durable live progress in chat without repeated status checks.",
+    "Tool note: action=run defaults agent to delegate.",
+    "Default flow: launch, then return to the user or continue work. Signals arrive automatically.",
+    "wait blocks the main turn. Use it only for explicit blocking requests or scripts.",
+    "status is for human-requested health checks, suspected stalls, or after about 60s with no signal. Do not poll.",
+    "Use result after completion, pickup to inject the result, and pin for durable live progress.",
   ].join("\n");
 }
 

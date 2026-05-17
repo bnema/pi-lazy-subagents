@@ -61,11 +61,10 @@ describe("lazy-subagents command parsing", () => {
     expect(help).toContain("action=parallel");
     expect(help).toContain("Examples:");
     expect(help).toContain("defaults agent to delegate");
-    expect(help).toContain("emitted back into this session automatically");
-    expect(help).toContain("Do not poll in a loop");
-    expect(help).toContain("Use result after terminal completion");
-    expect(help).toContain("action=wait");
-    expect(help).toContain("explicitly asks you to wait");
+    expect(help).toContain("Signals arrive automatically");
+    expect(help).toContain("Do not poll");
+    expect(help).toContain("Use result after completion");
+    expect(help).toContain("wait blocks");
   });
 
   test("list output prints available sub agents", () => {
@@ -83,7 +82,7 @@ describe("lazy-subagents command parsing", () => {
     expect(message).toBe(buildLazySubagentsAgentList());
   });
 
-  test("run command acknowledgement tells the caller to wait for emitted signals", async () => {
+  test("run command acknowledgement tells the caller not to block after launch", async () => {
     const controller = {
       launchChild: async (request: { agent: string }) => ({ id: "run-1", agent: request.agent }),
     };
@@ -91,8 +90,8 @@ describe("lazy-subagents command parsing", () => {
     const message = await executeLazySubagentsCommand('run reviewer "Review the auth diff"', controller as any, {} as any);
 
     expect(message).toContain("Launched run-1 (reviewer).");
-    expect(message).toContain("completion/attention messages");
-    expect(message).toContain("polling right away");
+    expect(message).toContain("Signals arrive automatically");
+    expect(message).toContain("do not wait or poll right away");
   });
 
   test("parses list, run, status, wait, result, pickup, pin, clear, and cancel commands", () => {
@@ -122,7 +121,7 @@ describe("lazy-subagents command parsing", () => {
     const running = createRun({ id: "run-2", status: "running", completedAt: undefined });
 
     expect(formatWaitReport({ status: "ready", run: completed }, 60_000)).toContain("Lazy subagent finished: run-1");
-    expect(formatWaitReport({ status: "timeout", run: running }, 60_000)).toContain("Do not poll status repeatedly");
+    expect(formatWaitReport({ status: "timeout", run: running }, 60_000)).toContain("automatic signal");
     expect(formatWaitReport({ status: "ambiguous", activeRuns: [running] }, 60_000)).toContain("call action=wait with runId");
   });
 

@@ -46,7 +46,7 @@ const ToolParamsSchema = Type.Object({
   timeoutMs: Type.Optional(Type.Number({
     minimum: 1,
     maximum: MAX_WAIT_TIMEOUT_MS,
-    description: `Maximum time for action=wait to block before returning. Defaults to ${DEFAULT_WAIT_TIMEOUT_MS}ms. Prefer wait over repeated status polling when the user asks you to wait.`,
+    description: `action=wait timeout. Defaults to ${DEFAULT_WAIT_TIMEOUT_MS}ms. Wait is blocking; use it only when explicitly needed.`,
   })),
   scope: Type.Optional(Type.Union([Type.Literal("completed"), Type.Literal("all")], {
     description: "Clear only completed runs or all tracked runs.",
@@ -106,19 +106,15 @@ export default function lazySubagentsExtension(pi: ExtensionAPI): void {
   pi.registerTool({
     name: TOOL_NAME,
     label: "Lazy Subagents",
-    description: "Launch or manage background lazy subagent runs that emit completion or attention back into the current session without blocking it.",
-    promptSnippet: "Launch background child work and wait for completion/attention signals, or inspect results/help only when needed.",
+    description: "Launch background subagents; completion/attention signals return to this session automatically.",
+    promptSnippet: "Launch child work asynchronously. Do not wait or poll unless explicitly needed.",
     promptGuidelines: [
-      "Use lazy_subagents action=help when you need exact usage or examples before launching work.",
-      "Use lazy_subagents action=list to list the sub agents and pick the appropriate one.",
-      "Use lazy_subagents action=parallel with children=[...] when you have two or more independent tasks that can run at the same time.",
-      "Use lazy_subagents action=run for a single background child when the human wants non-blocking work without parallel fan-out.",
-      "For lazy_subagents action=run, omit agent or use delegate when unsure; delegate is the general-purpose fallback.",
-      "After action=run or action=parallel, usually stop polling and wait; launch, completion, and attention messages are emitted back into the same session automatically.",
-      "When the human explicitly asks you to wait, call action=wait once. It blocks until completion/attention or timeout, so do not simulate waiting with repeated status calls.",
-      "Do not call action=status in a loop. Use it only when the human asks, when about 60 seconds have passed with no signal and you need a health check, or when you suspect a stall.",
-      "Use action=result only after a run reaches a terminal state, use action=pickup to inject that final result into chat, and use action=pin when you want durable live progress in chat.",
-      "Use lazy_subagents action=wait to block for a signal, or action=status, action=result, action=pickup, action=pin, action=clear, or action=cancel to inspect or manage existing runs.",
+      "Use action=list to choose an agent; action=run defaults to delegate.",
+      "Use action=run for one child, action=parallel for independent children.",
+      "After run/parallel, do not call wait or status right away. Return to the user or continue other work.",
+      "Use action=wait only for explicit blocking requests or non-interactive scripts.",
+      "Use action=status only for human-requested health checks, suspected stalls, or after about 60s with no signal. Do not poll.",
+      "Use action=result after terminal completion, pickup to inject the result, pin for durable live progress, and clear/cancel to manage runs.",
     ],
     parameters: ToolParamsSchema,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {

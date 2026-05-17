@@ -7,14 +7,13 @@ Pi package for asynchronous child-session orchestration with persistent visibili
 `pi-lazy-subagents` lets Pi launch background child work without blocking the main session while keeping the work legible enough to manage.
 
 Current features:
-- async child launches with immediate return to the parent session;
-- parallel child groups via `lazy_subagents action=parallel` for multiple independent tasks at the same time;
-- persistent run registry stored in the Pi session;
-- richer footer + widget visibility with elapsed time, update age, current tool, and recent activity context;
-- durable launch / completion / failure / attention cards;
-- explicit blocking wait for completion/attention when the parent really needs to pause;
-- explicit result retrieval for completed runs;
-- pickup that injects the completed result back into chat now;
+- async child launches;
+- parallel child groups;
+- persistent run registry;
+- footer/widget progress;
+- launch, completion, failure, and attention cards;
+- blocking `wait` when explicitly needed;
+- result retrieval and pickup;
 - completion policies:
   - `notify_only`
   - `follow_up_when_idle`
@@ -81,11 +80,11 @@ Supported actions:
 - `clear`
 - `cancel`
 
-Use `action=list` or `/lazy-subagents list` to print the currently available sub agents, including file-based profiles discovered from `~/.agents/agents` and `~/.pi/agent/agents`.
+Use `action=list` or `/lazy-subagents list` to print available sub agents. File profiles are discovered from `~/.agents/agents` and `~/.pi/agent/agents`.
 
-For tool calls, `action=run` defaults `agent` to `delegate` when omitted.
+For tool calls, `action=run` defaults to `delegate`.
 
-Use `action=parallel` when there are two or more independent tasks that should run at the same time. Each entry in `children` is launched at the same time and the group reports completion/attention back to the parent session like a single tracked run.
+Use `action=parallel` for independent tasks that can run together. The group reports completion/attention as one tracked run.
 
 Example parallel launch:
 
@@ -95,15 +94,13 @@ lazy_subagents action=parallel children=[{agent:"reviewer",prompt:"Review the di
 
 ## UX notes
 
-- normal orchestration flow is: launch once, then wait. Launch, completion, and attention cards are emitted back into the same parent session automatically.
-- `wait` is the intentional blocking action: use it once when the human explicitly asks the parent to wait. It returns when the selected run completes, needs attention, or the timeout expires.
-- `status` is for later health checks: it reports elapsed time, last update age, current tool when known, tool count when known, and the last recorded event.
-- do not poll `status` in a loop; if you need to block, use `wait` instead. Use `status` only when the human asks, when about 60 seconds have passed with no signal and you need a health check, or when you suspect a stall.
-- `result` returns the full final output for a completed run and acknowledges it for live-UI cleanup; it is not meant to be a live tail.
-- `pickup` injects that completed result back into the current Pi chat so the parent/orchestrator can act on it immediately.
-- `pin` posts a durable chat card that shows detailed subagent progress lines and keeps that run visible in live UI surfaces, which is usually better than repeated status checks.
-- routine completed runs are collapsed into one inbox row so active and attention-needed runs stay visible.
-- plain successful runs auto-hide from the footer/widget after a short grace window; failed, paused, manual-pickup, and pinned runs stay visible until resolved or cleared.
+- Default flow: launch, then return to the user or continue work. Signals arrive automatically.
+- `wait` blocks. Use it only for explicit blocking requests or non-interactive scripts.
+- `status` is for health checks: human request, suspected stall, or about 60 seconds with no signal. Do not poll.
+- `result` reads final output; it is not a live tail.
+- `pickup` injects a completed result into chat.
+- `pin` keeps live progress visible without repeated status checks.
+- completed successes auto-hide after a grace window; failed, paused, manual-pickup, and pinned runs stay until resolved or cleared.
 
 ## Manual smoke test
 
@@ -120,7 +117,7 @@ lazy_subagents action=parallel children=[{agent:"reviewer",prompt:"Review the di
    - a launch card appears;
    - the footer shows an active run;
    - the widget shows elapsed/update/tool context.
-4. Wait for the completion signal. Do not poll immediately on this fast smoke test. If you need a blocking smoke check, run `/lazy-subagents wait [runId]` once instead of repeating status.
+4. Return to chat. Do not poll or call blocking `wait`; the completion card should arrive automatically.
 5. Confirm:
    - the footer/widget move the run into recent/completed state;
    - a completion card appears exactly once.
@@ -138,7 +135,7 @@ lazy_subagents action=parallel children=[{agent:"reviewer",prompt:"Review the di
    ```
 
 9. Confirm the completed result is injected back into chat.
-10. Optional health-check smoke test for a slower run: launch a longer task, wait about 60 seconds with no signal, then run:
+10. Optional slower-run health check: after about 60 seconds with no signal, run:
 
    ```text
    /lazy-subagents status
@@ -154,7 +151,7 @@ Verify the tool is callable:
 pi --no-session --no-extensions -e ./extensions/index.ts --tools lazy_subagents -p "Use lazy_subagents with action=status and answer only with its result."
 ```
 
-Example launch + wait + result flow:
+Example non-interactive launch + wait + result flow:
 
 ```bash
 SMOKE_DIR=$(mktemp -d)
