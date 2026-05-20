@@ -3,18 +3,18 @@ import { Type } from "typebox";
 
 import { DEFAULT_COMPLETION_POLICY, DEFAULT_WAIT_TIMEOUT_MS, MAX_WAIT_TIMEOUT_MS, TOOL_NAME } from "../src/defaults.js";
 import { DEFAULT_AGENT_PROFILE_NAME, resolveAgentProfileName } from "../src/launcher/agent-profiles.js";
+import { COMPLETION_POLICIES, type CompletionPolicy } from "../src/types.js";
 import { LazySubagentsController } from "../src/orchestration/controller.js";
 import { buildLazySubagentsAgentList, buildLazySubagentsHelp, executeLazySubagentsCommand, formatLaunchAcknowledgement, formatStatusReport, formatWaitReport } from "../src/orchestration/commands.js";
 import { registerRunMessageRenderers } from "../src/ui/messages.js";
 
-const CompletionPolicySchema = Type.Union([
-  Type.Literal("notify_only"),
-  Type.Literal("follow_up_when_idle"),
-  Type.Literal("wake_if_idle"),
-  Type.Literal("manual_pickup"),
-]);
+const CompletionPolicySchema = Type.Unsafe<CompletionPolicy>({
+  type: "string",
+  enum: [...COMPLETION_POLICIES],
+  description: "Completion behavior. One of: notify_only, follow_up_when_idle, wake_if_idle, manual_pickup.",
+});
 
-const ToolParamsSchema = Type.Object({
+export const ToolParamsSchema = Type.Object({
   action: Type.Union([
     Type.Literal("help"),
     Type.Literal("list"),
