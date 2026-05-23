@@ -57,6 +57,141 @@ function summarizeOutput(text, maxLength = 400) {
   return singleLine.length <= maxLength ? singleLine : `${singleLine.slice(0, maxLength - 1).trimEnd()}…`;
 }
 
+function toErrorMessage(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function getStructuredValue(structuredOutput, pathExpression) {
+  if (!structuredOutput || typeof structuredOutput !== "object") return undefined;
+  const segments = pathExpression.split(".").filter(Boolean);
+  let current = structuredOutput;
+  for (const segment of segments) {
+    if (!current || typeof current !== "object" || !(segment in current)) {
+      return undefined;
+    }
+    current = current[segment];
+  }
+  return current;
+}
+
+export function parseStructuredStepOutput(output, outputMode) {
+  if (outputMode !== "json") return undefined;
+  const trimmed = String(output ?? "").trim();
+  if (!trimmed) {
+    throw new Error("Expected a JSON object response, but the workflow step returned an empty output.");
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch (error) {
+    throw new Error(`Expected a JSON object response, but parsing failed: ${toErrorMessage(error)}`);
+  }
+
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Expected a JSON object response for structured workflow output.");
+  }
+
+  return parsed;
+}
+
+export async function runWorkflowStepWithRetries({
+  maxAttempts,
+  executeAttempt,
+  isSuccessful = (result) => result?.success !== false,
+  onAttemptFailure,
+}) {
+  const attempts = [];
+  let lastResult;
+  let lastError;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const result = await executeAttempt(attempt);
+      const success = isSuccessful(result);
+      attempts.push({ attempt, success, result, error: success ? undefined : toErrorMessage(result?.error ?? "Workflow step failed") });
+      lastResult = result;
+      if (success) {
+        return { attemptCount: attempt, attempts, finalResult: result };
+      }
+      if (attempt < maxAttempts) {
+        await onAttemptFailure?.({ attempt, retriesRemaining: maxAttempts - attempt, result });
+      }
+    } catch (error) {
+      lastError = error;
+      attempts.push({ attempt, success: false, error: toErrorMessage(error) });
+      if (error?.nonRetryable) {
+        break;
+      }
+      if (attempt < maxAttempts) {
+        await onAttemptFailure?.({ attempt, retriesRemaining: maxAttempts - attempt, error });
+        continue;
+      }
+    }
+  }
+
+  if (lastResult !== undefined) {
+    return { attemptCount: maxAttempts, attempts, finalResult: lastResult };
+  }
+
+  const terminalError = lastError instanceof Error ? lastError : new Error(toErrorMessage(lastError ?? "Workflow step failed"));
+  terminalError.attempts = attempts;
+  terminalError.attemptCount = maxAttempts;
+  throw terminalError;
+}
+
+export function renderWorkflowPrompt(template, results) {
+  return String(template).replace(/\{\{\s*([A-Za-z0-9_-]+)\.([A-Za-z0-9_.-]+)\s*\}\}/g, (_match, stepId, fieldPath) => {
+    const stepResult = results?.[stepId];
+    if (!stepResult) {
+      throw new Error(`Unknown workflow step reference: ${stepId}`);
+    }
+
+    if (fieldPath === "summary") {
+      const summary = stepResult.summary ?? summarizeOutput(stepResult.output) ?? "";
+      return summary;
+    }
+
+    if (fieldPath === "output") {
+      return stepResult.output ?? "";
+    }
+
+    if (fieldPath === "json") {
+      if (!stepResult.structuredOutput) {
+        throw new Error(`Workflow step ${stepId} has no structured output.`);
+      }
+      return JSON.stringify(stepResult.structuredOutput);
+    }
+
+    const normalizedPath = fieldPath.startsWith("structured.") ? fieldPath.slice("structured.".length) : fieldPath;
+    const structuredValue = getStructuredValue(stepResult.structuredOutput, normalizedPath);
+    if (structuredValue === undefined) {
+      throw new Error(`Workflow step ${stepId} is missing structured field ${normalizedPath}.`);
+    }
+
+    return typeof structuredValue === "string" ? structuredValue : JSON.stringify(structuredValue);
+  });
+}
+
+export function getReadyWorkflowStepIds(steps, maxConcurrency) {
+  const runningCount = steps.filter((step) => step.status === "running").length;
+  const availableSlots = Math.max(0, maxConcurrency - runningCount);
+  if (availableSlots === 0) return [];
+
+  const completedIds = new Set(
+    steps
+      .filter((step) => step.status === "completed" && typeof step.id === "string" && step.id.length > 0)
+      .map((step) => step.id),
+  );
+
+  return steps
+    .filter((step) => step.status === "pending")
+    .filter((step) => (step.dependsOn ?? []).every((dependencyId) => completedIds.has(dependencyId)))
+    .slice(0, availableSlots)
+    .map((step) => step.id)
+    .filter((stepId) => typeof stepId === "string" && stepId.length > 0);
+}
+
 export function shouldPersistEvent(event) {
   return event?.type !== "message_update";
 }
@@ -79,11 +214,20 @@ function createInitialStatus(config) {
     lastUpdate: startedAt,
     steps: config.children.map((child, index) => ({
       index,
+      id: child.id,
       agent: child.profile.name,
       model: child.resolvedModel,
       thinking: child.resolvedThinking,
       status: "pending",
       taskSummary: child.taskSummary,
+      dependsOn: child.dependsOn,
+      retries: child.retries ?? 0,
+      maxAttempts: (child.retries ?? 0) + 1,
+      attempt: 0,
+      outputMode: child.outputMode ?? "text",
+      outputSchema: child.outputSchema,
+      summary: undefined,
+      structuredOutput: undefined,
       startedAt: undefined,
       endedAt: undefined,
       currentTool: undefined,
@@ -100,6 +244,7 @@ function deriveRootState(status) {
   if (steps.some((step) => step.status === "running" || step.status === "pending")) return "running";
   if (steps.some((step) => step.status === "failed")) return "failed";
   if (steps.some((step) => step.status === "paused")) return "paused";
+  if (steps.some((step) => step.status === "cancelled")) return "cancelled";
   return "complete";
 }
 
@@ -168,7 +313,7 @@ export function createSerialLineProcessor(processLine, onError) {
   };
 }
 
-function buildPiArgs(child) {
+function buildPiArgs(child, promptOverride) {
   const args = ["--mode", "json", "--session-dir", child.sessionDir];
   if (child.resolvedModel) {
     args.push("--model", child.resolvedModel);
@@ -188,17 +333,29 @@ function buildPiArgs(child) {
   if (child.profile.systemPrompt) {
     args.push(child.profile.systemPromptMode === "replace" ? "--system-prompt" : "--append-system-prompt", child.profile.systemPrompt);
   }
-  args.push(child.prompt);
+  const basePrompt = promptOverride ?? child.prompt;
+  const structuredOutputInstruction = child.outputMode === "json"
+    ? `\n\nReturn ONLY a valid JSON object in your final answer.${child.outputSchema ? ` Match this schema guidance exactly:\n${child.outputSchema}` : ""}`
+    : "";
+  args.push(`${basePrompt}${structuredOutputInstruction}`);
   return args;
 }
 
-async function runChild(config, statusPath, status, child, index) {
+async function runChild(config, statusPath, status, child, index, promptOverride, attemptNumber = 1) {
   const step = status.steps[index];
   step.status = "running";
+  step.attempt = attemptNumber;
   step.startedAt = now();
+  step.endedAt = undefined;
+  step.durationMs = undefined;
+  step.error = undefined;
+  step.summary = undefined;
+  step.structuredOutput = undefined;
+  step.currentTool = undefined;
+  step.currentToolStartedAt = undefined;
   await updateStatus(statusPath, status);
 
-  const args = buildPiArgs(child);
+  const args = buildPiArgs(child, promptOverride);
   const childProcess = spawn(config.piBin, args, {
     cwd: child.cwd,
     stdio: ["ignore", "pipe", "pipe"],
@@ -309,21 +466,45 @@ async function runChild(config, statusPath, status, child, index) {
   step.exitCode = exitCode;
   step.totalTokens = finalizeUsageTracker(usageTracker);
 
+  let structuredOutput;
+  let summary;
   if (exitCode === 0) {
-    step.status = "completed";
-    step.error = undefined;
+    try {
+      structuredOutput = parseStructuredStepOutput(finalOutput, child.outputMode);
+      summary = structuredOutput?.summary && typeof structuredOutput.summary === "string"
+        ? structuredOutput.summary
+        : summarizeOutput(finalOutput);
+      step.status = "completed";
+      step.error = undefined;
+      step.summary = summary;
+      step.structuredOutput = structuredOutput;
+    } catch (error) {
+      step.status = "failed";
+      step.error = toErrorMessage(error);
+      step.summary = undefined;
+      step.structuredOutput = undefined;
+    }
   } else {
     step.status = "failed";
     step.error = summarizeOutput(stderrBuffer) ?? `pi exited with code ${exitCode}`;
+    step.summary = undefined;
+    step.structuredOutput = undefined;
   }
 
   await updateStatus(statusPath, status);
 
   return {
+    stepId: child.id,
+    taskSummary: child.taskSummary,
+    dependsOn: child.dependsOn,
     agent: child.profile.name,
     output: finalOutput,
-    error: exitCode === 0 ? undefined : step.error,
-    success: exitCode === 0,
+    summary,
+    structuredOutput,
+    error: step.status === "completed" ? undefined : step.error,
+    success: step.status === "completed",
+    attempt: attemptNumber,
+    maxAttempts: (child.retries ?? 0) + 1,
     sessionFile,
     totalTokens: step.totalTokens,
     toolCount: step.toolCount,
@@ -333,12 +514,18 @@ async function runChild(config, statusPath, status, child, index) {
   };
 }
 
-function failedChildResult(config, child, error, sessionFile) {
+function failedChildResult(config, child, error, sessionFile, attempt = 1, attempts = []) {
   return {
+    stepId: child.id,
+    taskSummary: child.taskSummary,
+    dependsOn: child.dependsOn,
     agent: child.profile.name,
     output: "",
     error,
     success: false,
+    attempt,
+    maxAttempts: (child.retries ?? 0) + 1,
+    attempts,
     sessionFile,
     totalTokens: 0,
     toolCount: 0,
@@ -348,12 +535,44 @@ function failedChildResult(config, child, error, sessionFile) {
   };
 }
 
+function formatResultLabel(result) {
+  return result.stepId ?? result.taskSummary ?? result.agent ?? "step";
+}
+
+function buildWorkflowResultsMap(results) {
+  return Object.fromEntries(
+    results
+      .filter((result) => typeof result?.stepId === "string" && result.stepId.length > 0)
+      .map((result) => [result.stepId, {
+        summary: result.summary ?? summarizeOutput(result.output || result.error || "") ?? "",
+        output: result.output ?? result.error ?? "",
+        structuredOutput: result.structuredOutput,
+      }]),
+  );
+}
+
+function markWorkflowStepsCancelled(status, stepIds, reason) {
+  let changed = false;
+  const wanted = new Set(stepIds);
+  for (const step of status.steps ?? []) {
+    if (!wanted.has(step.id) || (step.status !== "pending" && step.status !== "running")) continue;
+    step.status = "cancelled";
+    step.error = reason;
+    step.summary = undefined;
+    step.structuredOutput = undefined;
+    step.endedAt = now();
+    step.durationMs = step.startedAt ? Math.max(0, step.endedAt - step.startedAt) : 0;
+    changed = true;
+  }
+  return changed;
+}
+
 async function writeResult(config, status, results) {
   const timestamp = now();
   const success = results.every((result) => result.success);
   const summary = summarizeOutput(
     results
-      .map((result) => `${result.agent}: ${result.output || result.error || "(no output)"}`)
+      .map((result) => `${formatResultLabel(result)}: ${result.output || result.error || "(no output)"}`)
       .join("\n\n"),
   );
 
@@ -374,6 +593,124 @@ async function writeResult(config, status, results) {
   status.endedAt = timestamp;
   status.lastUpdate = timestamp;
   await writeJson(config.statusPath, status);
+}
+
+async function runWorkflow(config, status) {
+  const results = [];
+  const active = new Map();
+  const maxConcurrency = Math.max(1, config.maxConcurrency ?? config.children.length);
+
+  while (results.length < config.children.length) {
+    const failedIds = new Set(results.filter((result) => !result.success).map((result) => result.stepId));
+
+    const dependencyBlockedChildren = config.children.filter((child) => !results.some((result) => result.stepId === child.id))
+      .filter((child) => (child.dependsOn ?? []).some((dependencyId) => failedIds.has(dependencyId)));
+
+    if (dependencyBlockedChildren.length > 0) {
+      const changed = markWorkflowStepsCancelled(
+        status,
+        dependencyBlockedChildren.map((child) => child.id),
+        "Skipped because a dependency failed.",
+      );
+      if (changed) {
+        await updateStatus(config.statusPath, status);
+      }
+      for (const child of dependencyBlockedChildren) {
+        if (results.some((result) => result.stepId === child.id)) continue;
+        results.push(failedChildResult(config, child, "Skipped because a dependency failed.", undefined, 0, []));
+      }
+      continue;
+    }
+
+    const readyStepIds = getReadyWorkflowStepIds(
+      (status.steps ?? []).filter((step) => !(step.dependsOn ?? []).some((dependencyId) => failedIds.has(dependencyId))),
+      maxConcurrency,
+    );
+
+    for (const stepId of readyStepIds) {
+      if (active.has(stepId) || results.some((result) => result.stepId === stepId)) continue;
+      const index = config.children.findIndex((child) => child.id === stepId);
+      if (index < 0) continue;
+      const child = config.children[index];
+      const task = runWorkflowStepWithRetries({
+        maxAttempts: (child.retries ?? 0) + 1,
+        executeAttempt: async (attempt) => {
+          const workflowResults = buildWorkflowResultsMap(results);
+          let renderedPrompt;
+          try {
+            renderedPrompt = renderWorkflowPrompt(child.prompt, workflowResults);
+          } catch (error) {
+            const promptError = error instanceof Error ? error : new Error(String(error));
+            promptError.nonRetryable = true;
+            throw promptError;
+          }
+          return await runChild(config, config.statusPath, status, child, index, renderedPrompt, attempt);
+        },
+        onAttemptFailure: async ({ retriesRemaining, result, error }) => {
+          if (retriesRemaining <= 0) return;
+          const step = status.steps[index];
+          step.status = "pending";
+          step.error = result?.error ?? toErrorMessage(error ?? "Workflow step failed");
+          step.summary = undefined;
+          step.structuredOutput = undefined;
+          step.currentTool = undefined;
+          step.currentToolStartedAt = undefined;
+          step.endedAt = now();
+          step.durationMs = step.startedAt ? Math.max(0, step.endedAt - step.startedAt) : undefined;
+          await updateStatus(config.statusPath, status);
+        },
+      })
+        .then(({ attemptCount, attempts, finalResult }) => ({
+          stepId,
+          result: {
+            ...finalResult,
+            attempt: attemptCount,
+            attempts,
+          },
+        }))
+        .catch(async (error) => {
+          const message = toErrorMessage(error);
+          const attempts = Array.isArray(error?.attempts) ? error.attempts : [];
+          const step = status.steps[index];
+          step.status = "failed";
+          step.error = message;
+          step.summary = undefined;
+          step.structuredOutput = undefined;
+          step.endedAt = now();
+          step.durationMs = step.startedAt ? Math.max(0, step.endedAt - step.startedAt) : undefined;
+          await updateStatus(config.statusPath, status);
+          return {
+            stepId,
+            result: failedChildResult(config, child, message, step.sessionFile, error?.attemptCount ?? step.attempt ?? 1, attempts),
+          };
+        });
+      active.set(stepId, task);
+    }
+
+    if (active.size === 0) {
+      const unresolvedChildren = config.children.filter((child) => !results.some((result) => result.stepId === child.id));
+      if (unresolvedChildren.length === 0) break;
+      const changed = markWorkflowStepsCancelled(
+        status,
+        unresolvedChildren.map((child) => child.id),
+        "Skipped because workflow dependencies could not be satisfied.",
+      );
+      if (changed) {
+        await updateStatus(config.statusPath, status);
+      }
+      for (const child of unresolvedChildren) {
+        if (results.some((result) => result.stepId === child.id)) continue;
+        results.push(failedChildResult(config, child, "Skipped because workflow dependencies could not be satisfied.", undefined, 0, []));
+      }
+      break;
+    }
+
+    const { stepId, result } = await Promise.race(active.values());
+    active.delete(stepId);
+    results.push(result);
+  }
+
+  return results;
 }
 
 async function run(config) {
@@ -403,7 +740,9 @@ async function run(config) {
           }
         }),
       )
-    : [await runChild(config, config.statusPath, status, config.children[0], 0)];
+    : config.mode === "workflow"
+      ? await runWorkflow(config, status)
+      : [await runChild(config, config.statusPath, status, config.children[0], 0)];
 
   await writeResult(config, status, results);
 }

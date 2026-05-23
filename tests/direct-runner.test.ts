@@ -2,6 +2,10 @@ import { describe, expect, test } from "vitest";
 
 import {
   createSerialLineProcessor,
+  getReadyWorkflowStepIds,
+  parseStructuredStepOutput,
+  renderWorkflowPrompt,
+  runWorkflowStepWithRetries,
   shouldPersistEvent,
   shouldWriteStatusForUsageTotal,
 } from "../src/launcher/direct-runner.mjs";
@@ -55,5 +59,85 @@ describe("direct runner stdout processing", () => {
     expect(shouldWriteStatusForUsageTotal(undefined, 0)).toBe(false);
     expect(shouldWriteStatusForUsageTotal(31_316, 31_316)).toBe(false);
     expect(shouldWriteStatusForUsageTotal(31_316, 31_317)).toBe(true);
+  });
+
+  test("renders workflow prompts from prior step summaries, outputs, and structured fields", () => {
+    const rendered = renderWorkflowPrompt(
+      "Research summary: {{research.summary}}\n\nResearch output:\n{{research.output}}\n\nJSON:\n{{research.json}}\n\nTitle: {{research.structured.title}}",
+      {
+        research: {
+          summary: "Found the best extension seam in controller.ts",
+          output: "Detailed workflow findings go here.",
+          structuredOutput: { title: "Controller refactor", severity: "high" },
+        },
+      },
+    );
+
+    expect(rendered).toBe(
+      "Research summary: Found the best extension seam in controller.ts\n\nResearch output:\nDetailed workflow findings go here.\n\nJSON:\n{\"title\":\"Controller refactor\",\"severity\":\"high\"}\n\nTitle: Controller refactor",
+    );
+  });
+
+  test("parses structured JSON step outputs when json mode is requested", () => {
+    expect(parseStructuredStepOutput('{"summary":"done","next":"implement"}', "json")).toEqual({
+      summary: "done",
+      next: "implement",
+    });
+  });
+
+  test("rejects invalid structured JSON outputs", () => {
+    expect(() => parseStructuredStepOutput("", "json")).toThrow("Expected a JSON object response");
+    expect(() => parseStructuredStepOutput("[]", "json")).toThrow("Expected a JSON object response");
+  });
+
+  test("retries a workflow step until an attempt succeeds", async () => {
+    let attempts = 0;
+
+    const result = await runWorkflowStepWithRetries({
+      maxAttempts: 3,
+      executeAttempt: async () => {
+        attempts += 1;
+        if (attempts < 2) {
+          throw new Error("transient failure");
+        }
+        return { success: true, output: "DONE" };
+      },
+    });
+
+    expect(attempts).toBe(2);
+    expect(result).toMatchObject({
+      attemptCount: 2,
+      finalResult: { success: true, output: "DONE" },
+    });
+  });
+
+  test("stops retrying on non-retryable workflow failures", async () => {
+    let attempts = 0;
+
+    await expect(runWorkflowStepWithRetries({
+      maxAttempts: 3,
+      executeAttempt: async () => {
+        attempts += 1;
+        throw Object.assign(new Error("prompt resolution failed"), { nonRetryable: true });
+      },
+    })).rejects.toThrow("prompt resolution failed");
+
+    expect(attempts).toBe(1);
+  });
+
+  test("throws when a workflow prompt references an unknown step id", () => {
+    expect(() => renderWorkflowPrompt("{{missing.summary}}", {})).toThrow("Unknown workflow step reference: missing");
+  });
+
+  test("selects ready workflow steps from dependency-complete pending work", () => {
+    const ready = getReadyWorkflowStepIds([
+      { id: "research", status: "completed" },
+      { id: "plan", status: "pending", dependsOn: ["research"] },
+      { id: "docs", status: "pending", dependsOn: ["research"] },
+      { id: "review", status: "pending", dependsOn: ["plan"] },
+      { id: "verify", status: "running" },
+    ], 3);
+
+    expect(ready).toEqual(["plan", "docs"]);
   });
 });

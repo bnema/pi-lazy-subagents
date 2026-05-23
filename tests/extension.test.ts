@@ -77,11 +77,13 @@ describe("extension entrypoint", () => {
     expect(guidance).toContain("action=list");
     expect(guidance).toContain("action=run defaults to delegate");
     expect(guidance).toContain("action=parallel");
+    expect(guidance).toContain("action=workflow");
     expect(guidance).toContain("do not call wait or status right away");
     expect(guidance).toContain("Use action=wait only");
     expect(guidance).toContain("Do not poll");
     expect(guidance).toContain("60s");
     expect(guidance).toContain("action=result");
+    expect(guidance).toContain("Use action=workflow for dependent pipelines");
     expect(guidance).toContain("pin");
   });
 

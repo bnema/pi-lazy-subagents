@@ -41,6 +41,7 @@ function createRun(overrides: Partial<RunRecord> = {}): RunRecord {
 
 class FakeLauncher implements Launcher {
   public readonly launches: LaunchChildRequest[] = [];
+  public readonly workflowLaunches: Array<{ runId: string; title: string; taskSummary: string; steps: Array<{ id: string; agent: string; prompt: string; taskSummary: string; dependsOn?: string[]; retries?: number; outputMode?: "text" | "json"; outputSchema?: string }>; maxConcurrency?: number }> = [];
   public readonly updates = new Map<string, NormalizedRunUpdate | undefined>();
   public readonly launchResults = new Map<string, Partial<LaunchResult>>();
   public launchGroupError: Error | undefined;
@@ -62,6 +63,16 @@ class FakeLauncher implements Launcher {
 
   async launchGroup(request: { runId: string }): Promise<LaunchResult> {
     if (this.launchGroupError) throw this.launchGroupError;
+    return {
+      runId: request.runId,
+      asyncId: request.runId,
+      asyncDir: `/tmp/${request.runId}`,
+      resultPath: `/tmp/results/${request.runId}.json`,
+    };
+  }
+
+  async launchWorkflow(request: { runId: string; title: string; taskSummary: string; steps: Array<{ id: string; agent: string; prompt: string; taskSummary: string; dependsOn?: string[]; retries?: number; outputMode?: "text" | "json"; outputSchema?: string }>; maxConcurrency?: number }): Promise<LaunchResult> {
+    this.workflowLaunches.push(request);
     return {
       runId: request.runId,
       asyncId: request.runId,
@@ -956,6 +967,139 @@ describe("LazySubagentsController", () => {
     }
   });
 
+  test("launches a workflow run through the workflow launcher path", async () => {
+    const { api, messages } = createPi();
+    const launcher = new FakeLauncher();
+    const controller = new LazySubagentsController(api as any, { launcher: launcher as any, createRunId: () => "workflow-1", now: () => 140 });
+    const { ctx } = createContext({ isIdle: true, hasPendingMessages: false });
+
+    await controller.handleSessionStart(ctx);
+    const run = await controller.launchWorkflow(
+      {
+        title: "Refactor workflow",
+        taskSummary: "Refactor workflow",
+        maxConcurrency: 2,
+        steps: [
+          { id: "research", agent: "scout", prompt: "Inspect the codebase", taskSummary: "Inspect the codebase", outputMode: "json", outputSchema: "{ summary: string }" },
+          { id: "plan", agent: "reviewer", prompt: "Draft the plan", taskSummary: "Draft the plan", dependsOn: ["research"], retries: 2 },
+        ],
+      },
+      ctx,
+    );
+
+    expect(launcher.workflowLaunches).toHaveLength(1);
+    expect(launcher.workflowLaunches[0]).toMatchObject({
+      runId: "workflow-1",
+      maxConcurrency: 2,
+      steps: [
+        expect.objectContaining({ id: "research", agent: "scout", outputMode: "json", outputSchema: "{ summary: string }" }),
+        expect.objectContaining({ id: "plan", agent: "reviewer", dependsOn: ["research"], retries: 2 }),
+      ],
+    });
+    expect(run.kind).toBe("workflow");
+    expect(messages[0]?.message.customType).toBe(MESSAGE_TYPE_LAUNCH);
+  });
+
+  test("rejects invalid workflow definitions before launch", async () => {
+    const { api } = createPi();
+    const launcher = new FakeLauncher();
+    const launchWorkflowSpy = vi.spyOn(launcher, "launchWorkflow");
+    const controller = new LazySubagentsController(api as any, { launcher, createRunId: () => "workflow-2", now: () => 145 });
+    const { ctx } = createContext({ isIdle: true, hasPendingMessages: false });
+
+    await controller.handleSessionStart(ctx);
+
+    await expect(controller.launchWorkflow(
+      {
+        title: "Invalid workflow",
+        taskSummary: "Invalid workflow",
+        maxConcurrency: 1.5,
+        steps: [{ id: "research", agent: "scout", prompt: "Inspect the codebase", taskSummary: "Inspect the codebase" }],
+      },
+      ctx,
+    )).rejects.toThrow("maxConcurrency must be an integer");
+
+    await expect(controller.launchWorkflow(
+      {
+        title: "Empty workflow",
+        taskSummary: "Empty workflow",
+        steps: [],
+      },
+      ctx,
+    )).rejects.toThrow("at least one step");
+
+    await expect(controller.launchWorkflow(
+      {
+        title: "Blank id",
+        taskSummary: "Blank id",
+        steps: [{ id: "   ", agent: "scout", prompt: "Inspect", taskSummary: "Inspect" }],
+      },
+      ctx,
+    )).rejects.toThrow("non-empty strings");
+
+    await expect(controller.launchWorkflow(
+      {
+        title: "Duplicate ids",
+        taskSummary: "Duplicate ids",
+        steps: [
+          { id: "research", agent: "scout", prompt: "Inspect", taskSummary: "Inspect" },
+          { id: " research ", agent: "reviewer", prompt: "Plan", taskSummary: "Plan" },
+        ],
+      },
+      ctx,
+    )).rejects.toThrow("Duplicate workflow step id: research");
+
+    await expect(controller.launchWorkflow(
+      {
+        title: "Missing dependency",
+        taskSummary: "Missing dependency",
+        steps: [{ id: "plan", agent: "reviewer", prompt: "Plan", taskSummary: "Plan", dependsOn: [" research "] }],
+      },
+      ctx,
+    )).rejects.toThrow("depends on unknown step research");
+
+    await expect(controller.launchWorkflow(
+      {
+        title: "Blank dependency",
+        taskSummary: "Blank dependency",
+        steps: [{ id: "plan", agent: "reviewer", prompt: "Plan", taskSummary: "Plan", dependsOn: ["   "] }],
+      },
+      ctx,
+    )).rejects.toThrow("empty dependency id");
+
+    await expect(controller.launchWorkflow(
+      {
+        title: "Self dependency",
+        taskSummary: "Self dependency",
+        steps: [{ id: "plan", agent: "reviewer", prompt: "Plan", taskSummary: "Plan", dependsOn: [" plan "] }],
+      },
+      ctx,
+    )).rejects.toThrow("cannot depend on itself");
+
+    await expect(controller.launchWorkflow(
+      {
+        title: "Cycle",
+        taskSummary: "Cycle",
+        steps: [
+          { id: " research ", agent: "scout", prompt: "Inspect", taskSummary: "Inspect", dependsOn: [" plan "] },
+          { id: "plan", agent: "reviewer", prompt: "Plan", taskSummary: "Plan", dependsOn: ["research"] },
+        ],
+      },
+      ctx,
+    )).rejects.toThrow("Workflow dependency cycle detected");
+
+    await expect(controller.launchWorkflow(
+      {
+        title: "Invalid retries",
+        taskSummary: "Invalid retries",
+        steps: [{ id: "research", agent: "scout", prompt: "Inspect", taskSummary: "Inspect", retries: -1 }],
+      },
+      ctx,
+    )).rejects.toThrow("invalid retries value");
+
+    expect(launchWorkflowSpy).not.toHaveBeenCalled();
+  });
+
   test("records a failed group launch instead of throwing away state", async () => {
     const { api, messages } = createPi();
     const launcher = new FakeLauncher();
@@ -975,6 +1119,31 @@ describe("LazySubagentsController", () => {
 
     expect(controller.getSnapshot().recentRuns[0]?.status).toBe("failed");
     expect(messages.at(-1)?.message.customType).toBe(MESSAGE_TYPE_FAILURE);
+  });
+
+  test("prefers step errors when a step output is blank", async () => {
+    const { api } = createPi();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-lazy-subagents-controller-"));
+    const resultPath = path.join(tempDir, "run-blank.json");
+    await fs.writeFile(resultPath, JSON.stringify({
+      id: "run-blank",
+      runId: "run-blank",
+      results: [{ stepId: "plan", output: "   ", error: "plan step failed" }],
+    }), "utf8");
+
+    const controller = new LazySubagentsController(api as any, { launcher: new FakeLauncher(), createRunId: () => "ignored", now: () => 210 });
+    const { ctx } = createContext({ isIdle: true, hasPendingMessages: false });
+
+    await controller.handleSessionStart(ctx);
+    (controller as any).registry.upsert(createRun({
+      id: "run-blank",
+      kind: "workflow",
+      status: "failed",
+      launchRef: { runId: "run-blank", asyncId: "run-blank", resultPath },
+      recentEvents: [],
+    }));
+
+    await expect(controller.getRunResult("run-blank")).resolves.toBe("[plan]\nplan step failed");
   });
 
   test("supports result retrieval, pickup injection, cancel, and clear control actions", async () => {

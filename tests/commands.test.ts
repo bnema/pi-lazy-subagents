@@ -59,11 +59,13 @@ describe("lazy-subagents command parsing", () => {
     expect(help).toContain("Slash command usage:");
     expect(help).toContain("Tool usage:");
     expect(help).toContain("action=parallel");
+    expect(help).toContain("action=workflow");
     expect(help).toContain("Examples:");
     expect(help).toContain("defaults agent to delegate");
     expect(help).toContain("Signals arrive automatically");
     expect(help).toContain("Do not poll");
     expect(help).toContain("Use result after completion");
+    expect(help).toContain("workflow is for dependent pipelines");
     expect(help).toContain("wait blocks");
   });
 

@@ -23,6 +23,8 @@ export interface LaunchChildRequest extends LaunchRequestBase {
   sessionFile?: string;
 }
 
+export type WorkflowStepOutputMode = "text" | "json";
+
 export interface LaunchGroupChildRequest {
   agent: string;
   prompt: string;
@@ -30,8 +32,21 @@ export interface LaunchGroupChildRequest {
   cwd?: string;
 }
 
+export interface LaunchWorkflowStepRequest extends LaunchGroupChildRequest {
+  id: string;
+  dependsOn?: string[];
+  retries?: number;
+  outputMode?: WorkflowStepOutputMode;
+  outputSchema?: string;
+}
+
 export interface LaunchGroupRequest extends LaunchRequestBase {
   children: LaunchGroupChildRequest[];
+}
+
+export interface LaunchWorkflowRequest extends LaunchRequestBase {
+  steps: LaunchWorkflowStepRequest[];
+  maxConcurrency?: number;
 }
 
 export interface LaunchResult {
@@ -63,6 +78,7 @@ export interface NormalizedRunUpdate {
 export interface Launcher {
   launchChild(request: LaunchChildRequest, runtime: LauncherRuntimeContext): Promise<LaunchResult>;
   launchGroup(request: LaunchGroupRequest, runtime: LauncherRuntimeContext): Promise<LaunchResult>;
+  launchWorkflow(request: LaunchWorkflowRequest, runtime: LauncherRuntimeContext): Promise<LaunchResult>;
   readUpdate(launch: LaunchResult): Promise<NormalizedRunUpdate | undefined>;
   cancel?(launch: LaunchResult): Promise<boolean>;
 }

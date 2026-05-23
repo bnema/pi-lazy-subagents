@@ -21,7 +21,7 @@ import {
   STATUS_KEY,
   WIDGET_KEY,
 } from "../defaults.js";
-import type { LaunchChildRequest, LaunchGroupRequest, LaunchResult, Launcher, LauncherRuntimeContext, NormalizedRunUpdate } from "../launcher/interface.js";
+import type { LaunchChildRequest, LaunchGroupRequest, LaunchResult, LaunchWorkflowRequest, Launcher, LauncherRuntimeContext, NormalizedRunUpdate } from "../launcher/interface.js";
 import { PiSubagentsAdapter } from "../launcher/pi-subagents-adapter.js";
 import { createPersistedState, restorePersistedState } from "../state/persistence.js";
 import { RunRegistry } from "../state/run-registry.js";
@@ -52,6 +52,7 @@ export interface LazySubagentsControllerOptions {
 
 export type ControllerLaunchChildRequest = Omit<LaunchChildRequest, "runId">;
 export type ControllerLaunchGroupRequest = Omit<LaunchGroupRequest, "runId">;
+export type ControllerLaunchWorkflowRequest = Omit<LaunchWorkflowRequest, "runId">;
 
 export type WaitForRunSignalResult =
   | { status: "ready"; run: RunRecord }
@@ -104,6 +105,76 @@ function buildLaunchEvent(run: RunRecord, timestamp: number): RunEvent {
     summary: `Launched ${run.agent} · ${run.title || run.taskSummary}`,
     status: run.status,
   };
+}
+
+function assertValidWorkflowRequest(request: ControllerLaunchWorkflowRequest): void {
+  if (request.maxConcurrency !== undefined && (!Number.isInteger(request.maxConcurrency) || request.maxConcurrency < 1)) {
+    throw new Error("maxConcurrency must be an integer greater than or equal to 1.");
+  }
+
+  const steps = request.steps;
+  if (steps.length === 0) {
+    throw new Error("Workflow requests must include at least one step.");
+  }
+
+  const normalizedSteps = steps.map((step) => ({
+    step,
+    id: step.id.trim(),
+    dependsOn: (step.dependsOn ?? []).map((dependencyId) => dependencyId.trim()),
+  }));
+
+  const ids = new Set<string>();
+  for (const { step, id, dependsOn } of normalizedSteps) {
+    if (!id) {
+      throw new Error("Workflow step ids must be non-empty strings.");
+    }
+    if (ids.has(id)) {
+      throw new Error(`Duplicate workflow step id: ${id}`);
+    }
+    ids.add(id);
+    step.id = id;
+    step.dependsOn = dependsOn;
+
+    if (step.retries !== undefined && (!Number.isInteger(step.retries) || step.retries < 0)) {
+      throw new Error(`Workflow step ${id} has an invalid retries value. Expected a non-negative integer.`);
+    }
+  }
+
+  for (const { id, dependsOn } of normalizedSteps) {
+    for (const dependencyId of dependsOn) {
+      if (!dependencyId) {
+        throw new Error(`Workflow step ${id} has an empty dependency id.`);
+      }
+      if (!ids.has(dependencyId)) {
+        throw new Error(`Workflow step ${id} depends on unknown step ${dependencyId}.`);
+      }
+      if (dependencyId === id) {
+        throw new Error(`Workflow step ${id} cannot depend on itself.`);
+      }
+    }
+  }
+
+  const stepsById = new Map(normalizedSteps.map(({ id, dependsOn }) => [id, dependsOn]));
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+
+  const visit = (stepId: string): void => {
+    if (visited.has(stepId)) return;
+    if (visiting.has(stepId)) {
+      throw new Error(`Workflow dependency cycle detected at step ${stepId}.`);
+    }
+
+    visiting.add(stepId);
+    for (const dependencyId of stepsById.get(stepId) ?? []) {
+      visit(dependencyId);
+    }
+    visiting.delete(stepId);
+    visited.add(stepId);
+  };
+
+  for (const { id } of normalizedSteps) {
+    visit(id);
+  }
 }
 
 function equalUpdate(existing: RunRecord, update: NormalizedRunUpdate): boolean {
@@ -544,6 +615,84 @@ export class LazySubagentsController {
     }
   }
 
+  async launchWorkflow(request: ControllerLaunchWorkflowRequest, ctx: ExtensionContext): Promise<RunRecord> {
+    this.captureContext(ctx);
+    assertValidWorkflowRequest(request);
+
+    const runId = this.createRunId();
+    const timestamp = this.now();
+    const completionPolicy = request.completionPolicy ?? DEFAULT_COMPLETION_POLICY;
+
+    try {
+      const launch = await this.launcher.launchWorkflow(
+        {
+          ...request,
+          runId,
+          title: request.title,
+          taskSummary: request.taskSummary,
+        },
+        runtimeContext(this.pi, ctx),
+      );
+
+      const run: RunRecord = {
+        id: runId,
+        kind: "workflow",
+        agent: request.steps.map((step) => step.agent).join(", "),
+        title: request.title,
+        taskSummary: request.taskSummary,
+        status: "queued",
+        startedAt: timestamp,
+        updatedAt: timestamp,
+        completionPolicy,
+        sessionFile: launch.sessionFile,
+        artifactPath: launch.artifactPath,
+        model: launch.model,
+        attentionNeeded: false,
+        launchRef: launch,
+        recentEvents: [],
+      };
+
+      this.registry.upsert(run);
+      this.registry.recordEvent(run.id, buildLaunchEvent(run, timestamp));
+      this.trackedLaunches.set(run.id, launch);
+      const stored = this.registry.get(run.id)!;
+      this.sendVisiblePayload(createLaunchMessagePayload(stored));
+      this.persistState();
+      this.renderUi(ctx);
+      this.refreshPoller();
+      this.queuePoll();
+      return stored;
+    } catch (error) {
+      const failed: RunRecord = {
+        id: runId,
+        kind: "workflow",
+        agent: request.steps.map((step) => step.agent).join(", "),
+        title: request.title,
+        taskSummary: request.taskSummary,
+        status: "failed",
+        startedAt: timestamp,
+        updatedAt: timestamp,
+        completedAt: timestamp,
+        completionPolicy,
+        errorPreview: error instanceof Error ? error.message : String(error),
+        attentionNeeded: true,
+        recentEvents: [],
+      };
+      this.registry.upsert(failed);
+      this.registry.recordEvent(failed.id, {
+        id: `${failed.id}:${timestamp}:launch`,
+        category: "launch",
+        timestamp,
+        summary: `Failed to launch ${failed.agent} · ${failed.title || failed.taskSummary}`,
+      });
+      const stored = this.registry.get(failed.id)!;
+      this.sendVisiblePayload(createFailureMessagePayload(stored));
+      this.persistState();
+      this.renderUi(ctx);
+      return stored;
+    }
+  }
+
   async waitForRunSignal(
     runId?: string,
     options: { timeoutMs?: number; signal?: AbortSignal } = {},
@@ -895,14 +1044,16 @@ export class LazySubagentsController {
       const raw = await fsp.readFile(resultPath, "utf8");
       const parsed = JSON.parse(raw) as {
         summary?: string;
-        results?: Array<{ agent?: string; output?: string; error?: string }>;
+        results?: Array<{ stepId?: string; taskSummary?: string; agent?: string; output?: string; error?: string }>;
       };
 
       const outputs = parsed.results
         ?.map((entry) => {
-          const text = normalizeResultText(entry.output ?? entry.error);
+          const rawText = entry.output?.trim() ? entry.output : entry.error;
+          const text = normalizeResultText(rawText);
           if (!text) return undefined;
-          return entry.agent ? `[${entry.agent}]\n${text}` : text;
+          const label = entry.stepId ?? entry.taskSummary ?? entry.agent;
+          return label ? `[${label}]\n${text}` : text;
         })
         .filter((entry): entry is string => Boolean(entry));
 

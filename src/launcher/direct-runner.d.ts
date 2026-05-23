@@ -8,5 +8,39 @@ export function createSerialLineProcessor(
   onError?: (error: unknown, context?: { line?: string }) => void,
 ): SerialLineProcessor;
 
+export type WorkflowPromptResult = {
+  summary?: string;
+  output?: string;
+  structuredOutput?: Record<string, unknown>;
+};
+
+export type WorkflowStatusStep = {
+  id?: string;
+  status?: "pending" | "running" | "completed" | "failed" | "paused" | "cancelled";
+  dependsOn?: string[];
+};
+
+export interface WorkflowRetryAttemptResult<T = unknown> {
+  attempt: number;
+  success: boolean;
+  result?: T;
+  error?: string;
+}
+
+export interface WorkflowRetryExecutionResult<T = unknown> {
+  attemptCount: number;
+  attempts: WorkflowRetryAttemptResult<T>[];
+  finalResult: T;
+}
+
+export function renderWorkflowPrompt(template: string, results: Record<string, WorkflowPromptResult> | undefined): string;
+export function parseStructuredStepOutput(output: string, outputMode: "json" | "text" | undefined): Record<string, unknown> | undefined;
+export function getReadyWorkflowStepIds(steps: WorkflowStatusStep[], maxConcurrency: number): string[];
+export function runWorkflowStepWithRetries<T>(options: {
+  maxAttempts: number;
+  executeAttempt: (attempt: number) => Promise<T>;
+  isSuccessful?: (result: T) => boolean;
+  onAttemptFailure?: (details: { attempt: number; retriesRemaining: number; result?: T; error?: unknown }) => Promise<void> | void;
+}): Promise<WorkflowRetryExecutionResult<T>>;
 export function shouldPersistEvent(event: Record<string, unknown> | undefined): boolean;
 export function shouldWriteStatusForUsageTotal(previousTotal: number | undefined, nextTotal: number | undefined): boolean;

@@ -12,6 +12,7 @@ import type {
   LaunchChildRequest,
   LaunchGroupRequest,
   LaunchResult,
+  LaunchWorkflowRequest,
   Launcher,
   LauncherRuntimeContext,
   NormalizedRunUpdate,
@@ -22,7 +23,17 @@ type DirectAsyncState = "queued" | "running" | "complete" | "failed" | "paused" 
 type DirectActivityState = "active_long_running" | "needs_attention";
 
 type DirectAsyncStatusStep = {
+  id?: string;
   agent?: string;
+  taskSummary?: string;
+  dependsOn?: string[];
+  retries?: number;
+  maxAttempts?: number;
+  attempt?: number;
+  outputMode?: "text" | "json";
+  outputSchema?: string;
+  summary?: string;
+  structuredOutput?: Record<string, unknown>;
   status?: "pending" | "running" | "completed" | "failed" | "paused" | "cancelled";
   currentTool?: string;
   toolCount?: number;
@@ -33,7 +44,7 @@ type DirectAsyncStatusStep = {
 
 type DirectAsyncStatus = {
   runId?: string;
-  mode: "single" | "parallel";
+  mode: "single" | "parallel" | "workflow";
   state: DirectAsyncState;
   activityState?: DirectActivityState;
   startedAt: number;
@@ -58,7 +69,15 @@ type DirectResultFile = {
   toolCount?: number;
   totalTokens?: number;
   results?: Array<{
+    stepId?: string;
+    taskSummary?: string;
+    dependsOn?: string[];
     agent?: string;
+    summary?: string;
+    structuredOutput?: Record<string, unknown>;
+    attempt?: number;
+    maxAttempts?: number;
+    attempts?: Array<{ attempt: number; success: boolean; error?: string }>;
     error?: string;
     output?: string;
     sessionFile?: string;
@@ -77,9 +96,14 @@ export interface PiSubagentsAdapterOptions {
 }
 
 interface RunnerChildConfig {
+  id?: string;
   agent: string;
   taskSummary: string;
   prompt: string;
+  dependsOn?: string[];
+  retries?: number;
+  outputMode?: "text" | "json";
+  outputSchema?: string;
   cwd: string;
   sessionDir: string;
   outputFile: string;
@@ -90,7 +114,8 @@ interface RunnerChildConfig {
 
 interface RunnerConfig {
   runId: string;
-  mode: "single" | "parallel";
+  mode: "single" | "parallel" | "workflow";
+  maxConcurrency?: number;
   piBin: string;
   asyncDir: string;
   resultsDir: string;
@@ -277,7 +302,7 @@ function formatResolvedModelLabel(model: string | undefined, thinking: string | 
 }
 
 async function buildRunnerChildren(
-  children: Array<Pick<RunnerChildConfig, "agent" | "taskSummary" | "prompt"> & { cwd?: string }>,
+  children: Array<Pick<RunnerChildConfig, "id" | "agent" | "taskSummary" | "prompt" | "dependsOn" | "retries" | "outputMode" | "outputSchema"> & { cwd?: string }>,
   baseCwd: string,
   asyncDir: string,
 ): Promise<RunnerChildConfig[]> {
@@ -300,9 +325,14 @@ async function buildRunnerChildren(
     const settings = await loadSettingsForCwd(cwd);
     const profile = getAgentProfile(child.agent);
     return {
+      id: child.id,
       agent: child.agent,
       taskSummary: child.taskSummary,
       prompt: child.prompt,
+      dependsOn: child.dependsOn,
+      retries: child.retries,
+      outputMode: child.outputMode,
+      outputSchema: child.outputSchema,
       cwd,
       sessionDir: childSessionDir(asyncDir, index),
       outputFile: childOutputFile(index),
@@ -607,6 +637,25 @@ export class PiSubagentsAdapter implements Launcher {
     return await this.launch(config, cwd);
   }
 
+  async launchWorkflow(request: LaunchWorkflowRequest, runtime: LauncherRuntimeContext): Promise<LaunchResult> {
+    const cwd = request.cwd ?? runtime.cwd;
+    const asyncDir = path.join(this.asyncDirRoot, request.runId);
+    const config: RunnerConfig = {
+      runId: request.runId,
+      mode: "workflow",
+      maxConcurrency: request.maxConcurrency,
+      piBin: this.piBin,
+      asyncDir,
+      resultsDir: this.resultsDir,
+      resultPath: path.join(this.resultsDir, `${request.runId}.json`),
+      statusPath: path.join(asyncDir, "status.json"),
+      eventsPath: path.join(asyncDir, "events.jsonl"),
+      children: await buildRunnerChildren(request.steps, cwd, asyncDir),
+    };
+
+    return await this.launch(config, cwd);
+  }
+
   async readUpdate(launch: LaunchResult): Promise<NormalizedRunUpdate | undefined> {
     const result = await readJsonFile<DirectResultFile>(launch.resultPath);
     if (result) {
@@ -625,11 +674,11 @@ export class PiSubagentsAdapter implements Launcher {
     const resultPath = launch.resultPath ?? path.join(this.resultsDir, `${launch.asyncId}.json`);
     const status = await readJsonFile<{
       runId?: string;
-      mode?: "single" | "parallel";
+      mode?: "single" | "parallel" | "workflow";
       startedAt?: number;
       sessionFile?: string;
       pid?: number;
-      steps?: Array<{ agent?: string; pid?: number; sessionFile?: string; outputFile?: string }>;
+      steps?: Array<{ id?: string; taskSummary?: string; dependsOn?: string[]; agent?: string; pid?: number; sessionFile?: string; outputFile?: string }>;
     }>(statusPath);
     const pids = [...new Set([status?.pid, ...(status?.steps?.map((step) => step.pid) ?? [])])].filter(
       (value): value is number => typeof value === "number" && value > 0,
@@ -653,8 +702,9 @@ export class PiSubagentsAdapter implements Launcher {
     if (handledCount === 0) return false;
 
     const timestamp = Date.now();
+    const persistedRunId = status?.runId ?? launch.runId;
     await writeJsonFile(statusPath, {
-      runId: status?.runId ?? launch.runId,
+      runId: persistedRunId,
       mode: status?.mode ?? "single",
       pid: status?.pid,
       state: "cancelled",
@@ -663,6 +713,7 @@ export class PiSubagentsAdapter implements Launcher {
       endedAt: timestamp,
       sessionFile: status?.sessionFile ?? launch.sessionFile,
       steps: (status?.steps ?? []).map((step, index) => ({
+        ...step,
         index,
         agent: step.agent ?? `child-${index + 1}`,
         pid: step.pid,
@@ -673,14 +724,17 @@ export class PiSubagentsAdapter implements Launcher {
       })),
     });
     await writeJsonFile(resultPath, {
-      id: launch.runId,
-      runId: launch.runId,
+      id: persistedRunId,
+      runId: persistedRunId,
       state: "cancelled",
       success: false,
       summary: "Cancelled by user",
       timestamp,
       sessionFile: status?.sessionFile ?? launch.sessionFile,
       results: (status?.steps ?? []).map((step, index) => ({
+        stepId: step.id,
+        taskSummary: step.taskSummary,
+        dependsOn: step.dependsOn,
         agent: step.agent ?? `child-${index + 1}`,
         error: "Cancelled by user",
         success: false,
