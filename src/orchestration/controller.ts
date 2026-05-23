@@ -21,7 +21,7 @@ import {
   STATUS_KEY,
   WIDGET_KEY,
 } from "../defaults.js";
-import type { LaunchChildRequest, LaunchGroupRequest, LaunchResult, Launcher, LauncherRuntimeContext, NormalizedRunUpdate } from "../launcher/interface.js";
+import type { LaunchChildRequest, LaunchGroupRequest, LaunchResult, LaunchWorkflowRequest, Launcher, LauncherRuntimeContext, NormalizedRunUpdate } from "../launcher/interface.js";
 import { PiSubagentsAdapter } from "../launcher/pi-subagents-adapter.js";
 import { createPersistedState, restorePersistedState } from "../state/persistence.js";
 import { RunRegistry } from "../state/run-registry.js";
@@ -52,6 +52,7 @@ export interface LazySubagentsControllerOptions {
 
 export type ControllerLaunchChildRequest = Omit<LaunchChildRequest, "runId">;
 export type ControllerLaunchGroupRequest = Omit<LaunchGroupRequest, "runId">;
+export type ControllerLaunchWorkflowRequest = Omit<LaunchWorkflowRequest, "runId">;
 
 export type WaitForRunSignalResult =
   | { status: "ready"; run: RunRecord }
@@ -544,6 +545,83 @@ export class LazySubagentsController {
     }
   }
 
+  async launchWorkflow(request: ControllerLaunchWorkflowRequest, ctx: ExtensionContext): Promise<RunRecord> {
+    this.captureContext(ctx);
+
+    const runId = this.createRunId();
+    const timestamp = this.now();
+    const completionPolicy = request.completionPolicy ?? DEFAULT_COMPLETION_POLICY;
+
+    try {
+      const launch = await this.launcher.launchWorkflow(
+        {
+          ...request,
+          runId,
+          title: request.title,
+          taskSummary: request.taskSummary,
+        },
+        runtimeContext(this.pi, ctx),
+      );
+
+      const run: RunRecord = {
+        id: runId,
+        kind: "workflow",
+        agent: request.steps.map((step) => step.agent).join(", "),
+        title: request.title,
+        taskSummary: request.taskSummary,
+        status: "queued",
+        startedAt: timestamp,
+        updatedAt: timestamp,
+        completionPolicy,
+        sessionFile: launch.sessionFile,
+        artifactPath: launch.artifactPath,
+        model: launch.model,
+        attentionNeeded: false,
+        launchRef: launch,
+        recentEvents: [],
+      };
+
+      this.registry.upsert(run);
+      this.registry.recordEvent(run.id, buildLaunchEvent(run, timestamp));
+      this.trackedLaunches.set(run.id, launch);
+      const stored = this.registry.get(run.id)!;
+      this.sendVisiblePayload(createLaunchMessagePayload(stored));
+      this.persistState();
+      this.renderUi(ctx);
+      this.refreshPoller();
+      this.queuePoll();
+      return stored;
+    } catch (error) {
+      const failed: RunRecord = {
+        id: runId,
+        kind: "workflow",
+        agent: request.steps.map((step) => step.agent).join(", "),
+        title: request.title,
+        taskSummary: request.taskSummary,
+        status: "failed",
+        startedAt: timestamp,
+        updatedAt: timestamp,
+        completedAt: timestamp,
+        completionPolicy,
+        errorPreview: error instanceof Error ? error.message : String(error),
+        attentionNeeded: true,
+        recentEvents: [],
+      };
+      this.registry.upsert(failed);
+      this.registry.recordEvent(failed.id, {
+        id: `${failed.id}:${timestamp}:launch`,
+        category: "launch",
+        timestamp,
+        summary: `Failed to launch ${failed.agent} · ${failed.title || failed.taskSummary}`,
+      });
+      const stored = this.registry.get(failed.id)!;
+      this.sendVisiblePayload(createFailureMessagePayload(stored));
+      this.persistState();
+      this.renderUi(ctx);
+      return stored;
+    }
+  }
+
   async waitForRunSignal(
     runId?: string,
     options: { timeoutMs?: number; signal?: AbortSignal } = {},
@@ -895,14 +973,15 @@ export class LazySubagentsController {
       const raw = await fsp.readFile(resultPath, "utf8");
       const parsed = JSON.parse(raw) as {
         summary?: string;
-        results?: Array<{ agent?: string; output?: string; error?: string }>;
+        results?: Array<{ stepId?: string; taskSummary?: string; agent?: string; output?: string; error?: string }>;
       };
 
       const outputs = parsed.results
         ?.map((entry) => {
           const text = normalizeResultText(entry.output ?? entry.error);
           if (!text) return undefined;
-          return entry.agent ? `[${entry.agent}]\n${text}` : text;
+          const label = entry.stepId ?? entry.taskSummary ?? entry.agent;
+          return label ? `[${label}]\n${text}` : text;
         })
         .filter((entry): entry is string => Boolean(entry));
 

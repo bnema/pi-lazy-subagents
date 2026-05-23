@@ -14,12 +14,22 @@ const CompletionPolicySchema = Type.Unsafe<CompletionPolicy>({
   description: "Completion behavior. One of: notify_only, follow_up_when_idle, wake_if_idle, manual_pickup.",
 });
 
+const WorkflowStepSchema = Type.Object({
+  id: Type.String({ description: "Stable step id used for dependency wiring and prompt templates such as {{research.summary}} or {{research.output}}." }),
+  agent: Type.String({ description: "Child profile name for this workflow step." }),
+  prompt: Type.String({ description: "Task for this workflow step. You can reference earlier step results with {{stepId.summary}} or {{stepId.output}}." }),
+  taskSummary: Type.Optional(Type.String({ description: "Optional shorter label for this workflow step in status surfaces." })),
+  dependsOn: Type.Optional(Type.Array(Type.String(), { description: "Optional list of earlier workflow step ids that must complete before this step starts." })),
+  cwd: Type.Optional(Type.String()),
+});
+
 export const ToolParamsSchema = Type.Object({
   action: Type.Union([
     Type.Literal("help"),
     Type.Literal("list"),
     Type.Literal("run"),
     Type.Literal("parallel"),
+    Type.Literal("workflow"),
     Type.Literal("status"),
     Type.Literal("wait"),
     Type.Literal("result"),
@@ -28,7 +38,7 @@ export const ToolParamsSchema = Type.Object({
     Type.Literal("clear"),
     Type.Literal("cancel"),
   ], {
-    description: "Operation to perform. Use action=parallel to launch multiple independent children at the same time; use help for examples and list to inspect available sub agents before choosing one.",
+    description: "Operation to perform. Use action=parallel for independent children and action=workflow for dependency-aware background pipelines; use help for examples and list to inspect available sub agents before choosing one.",
   }),
   agent: Type.Optional(Type.String({
     description: `Single-run agent profile. Use action=list to inspect available sub agents. When omitted for action=run, defaults to ${DEFAULT_AGENT_PROFILE_NAME}.`,
@@ -61,6 +71,13 @@ export const ToolParamsSchema = Type.Object({
       }),
     ),
   ),
+  steps: Type.Optional(Type.Array(WorkflowStepSchema, {
+    description: "Workflow steps for action=workflow. The runner executes them in the background with dependency-aware scheduling and direct step-to-step result passing.",
+  })),
+  maxConcurrency: Type.Optional(Type.Number({
+    minimum: 1,
+    description: "Maximum number of workflow steps that may run at the same time for action=workflow. Defaults to the number of steps.",
+  })),
 });
 
 function shortTitle(text: string): string {
@@ -110,8 +127,10 @@ export default function lazySubagentsExtension(pi: ExtensionAPI): void {
     promptSnippet: "Launch child work asynchronously. Do not wait or poll unless explicitly needed.",
     promptGuidelines: [
       "Use action=list to choose an agent; action=run defaults to delegate.",
-      "Use action=run for one child, action=parallel for independent children.",
-      "After run/parallel, do not call wait or status right away. Return to the user or continue other work.",
+      "Use action=run for one child and action=parallel for independent children.",
+      "Use action=workflow for dependent pipelines that should stay off the main session context and pass step results directly in the background.",
+      "Workflow steps can reference earlier results with {{stepId.summary}} or {{stepId.output}}.",
+      "After run/parallel/workflow, do not call wait or status right away. Return to the user or continue other work.",
       "Use action=wait only for explicit blocking requests or non-interactive scripts.",
       "Use action=status only for human-requested health checks, suspected stalls, or after about 60s with no signal. Do not poll.",
       "Use action=result after terminal completion, pickup to inject the result, pin for durable live progress, and clear/cancel to manage runs.",
@@ -163,6 +182,28 @@ export default function lazySubagentsExtension(pi: ExtensionAPI): void {
           );
 
           return { content: [{ type: "text", text: formatLaunchAcknowledgement(`Launched ${run.id} (${params.children.length} children).`) }], details: { action: params.action, runId: run.id } };
+        }
+        case "workflow": {
+          if (!params.steps || params.steps.length === 0) {
+            return { content: [{ type: "text", text: "Provide steps[] for action=workflow." }], details: { action: params.action } };
+          }
+
+          const title = params.title ?? `Workflow run (${params.steps.length} steps)`;
+          const run = await controller.launchWorkflow(
+            {
+              title,
+              taskSummary: title,
+              completionPolicy: params.completionPolicy ?? DEFAULT_COMPLETION_POLICY,
+              maxConcurrency: params.maxConcurrency,
+              steps: params.steps.map((step) => ({
+                ...step,
+                taskSummary: step.taskSummary ?? shortTitle(step.prompt),
+              })),
+            },
+            ctx,
+          );
+
+          return { content: [{ type: "text", text: formatLaunchAcknowledgement(`Launched ${run.id} workflow (${params.steps.length} steps).`) }], details: { action: params.action, runId: run.id } };
         }
         case "status":
           await controller.pollOnce();

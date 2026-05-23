@@ -41,6 +41,7 @@ function createRun(overrides: Partial<RunRecord> = {}): RunRecord {
 
 class FakeLauncher implements Launcher {
   public readonly launches: LaunchChildRequest[] = [];
+  public readonly workflowLaunches: Array<{ runId: string; title: string; taskSummary: string; steps: Array<{ id: string; agent: string; prompt: string; taskSummary: string }>; maxConcurrency?: number }> = [];
   public readonly updates = new Map<string, NormalizedRunUpdate | undefined>();
   public readonly launchResults = new Map<string, Partial<LaunchResult>>();
   public launchGroupError: Error | undefined;
@@ -62,6 +63,16 @@ class FakeLauncher implements Launcher {
 
   async launchGroup(request: { runId: string }): Promise<LaunchResult> {
     if (this.launchGroupError) throw this.launchGroupError;
+    return {
+      runId: request.runId,
+      asyncId: request.runId,
+      asyncDir: `/tmp/${request.runId}`,
+      resultPath: `/tmp/results/${request.runId}.json`,
+    };
+  }
+
+  async launchWorkflow(request: { runId: string; title: string; taskSummary: string; steps: Array<{ id: string; agent: string; prompt: string; taskSummary: string }>; maxConcurrency?: number }): Promise<LaunchResult> {
+    this.workflowLaunches.push(request);
     return {
       runId: request.runId,
       asyncId: request.runId,
@@ -954,6 +965,39 @@ describe("LazySubagentsController", () => {
     } finally {
       readSpy.mockRestore();
     }
+  });
+
+  test("launches a workflow run through the workflow launcher path", async () => {
+    const { api, messages } = createPi();
+    const launcher = new FakeLauncher();
+    const controller = new LazySubagentsController(api as any, { launcher: launcher as any, createRunId: () => "workflow-1", now: () => 140 });
+    const { ctx } = createContext({ isIdle: true, hasPendingMessages: false });
+
+    await controller.handleSessionStart(ctx);
+    const run = await controller.launchWorkflow(
+      {
+        title: "Refactor workflow",
+        taskSummary: "Refactor workflow",
+        maxConcurrency: 2,
+        steps: [
+          { id: "research", agent: "scout", prompt: "Inspect the codebase", taskSummary: "Inspect the codebase" },
+          { id: "plan", agent: "reviewer", prompt: "Draft the plan", taskSummary: "Draft the plan", dependsOn: ["research"] },
+        ],
+      },
+      ctx,
+    );
+
+    expect(launcher.workflowLaunches).toHaveLength(1);
+    expect(launcher.workflowLaunches[0]).toMatchObject({
+      runId: "workflow-1",
+      maxConcurrency: 2,
+      steps: [
+        expect.objectContaining({ id: "research", agent: "scout" }),
+        expect.objectContaining({ id: "plan", agent: "reviewer" }),
+      ],
+    });
+    expect(run.kind).toBe("workflow");
+    expect(messages[0]?.message.customType).toBe(MESSAGE_TYPE_LAUNCH);
   });
 
   test("records a failed group launch instead of throwing away state", async () => {

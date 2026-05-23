@@ -1,4 +1,4 @@
-export const RUN_KINDS = ["single", "group", "child"] as const;
+export const RUN_KINDS = ["single", "group", "workflow", "child"] as const;
 export type RunKind = (typeof RUN_KINDS)[number];
 
 export const RUN_STATUSES = [

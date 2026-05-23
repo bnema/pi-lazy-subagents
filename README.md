@@ -9,6 +9,8 @@ Pi package for asynchronous child-session orchestration with persistent visibili
 Current features:
 - async child launches;
 - parallel child groups;
+- background workflow pipelines with dependency-aware scheduling;
+- direct step-to-step result passing via prompt templates;
 - persistent run registry;
 - footer/widget progress;
 - launch, completion, failure, and attention cards;
@@ -72,6 +74,7 @@ Supported actions:
 - `list`
 - `run`
 - `parallel`
+- `workflow`
 - `status`
 - `wait`
 - `result`
@@ -86,15 +89,24 @@ For tool calls, `action=run` defaults to `delegate`.
 
 Use `action=parallel` for independent tasks that can run together. The group reports completion/attention as one tracked run.
 
+Use `action=workflow` for dependency-aware pipelines that should stay off the main session context. Each step can reference earlier step results with `{{stepId.summary}}` or `{{stepId.output}}`.
+
 Example parallel launch:
 
 ```text
 lazy_subagents action=parallel children=[{agent:"reviewer",prompt:"Review the diff for correctness"},{agent:"scout",prompt:"Find related docs and prior art"},{agent:"worker",prompt:"Prototype the isolated parser change"}]
 ```
 
+Example workflow launch:
+
+```text
+lazy_subagents action=workflow maxConcurrency=2 steps=[{id:"research",agent:"scout",prompt:"Inspect the package layout and summarize the best extension seams."},{id:"plan",agent:"reviewer",dependsOn:["research"],prompt:"Use {{research.summary}} to draft a small refactor plan."},{id:"implement",agent:"worker",dependsOn:["plan"],prompt:"Implement the plan:\n\n{{plan.output}}"}]
+```
+
 ## UX notes
 
 - Default flow: launch, then return to the user or continue work. Signals arrive automatically.
+- Use `workflow` when later steps should consume earlier results without reinjecting every intermediate output into the main chat.
 - `wait` blocks. Use it only for explicit blocking requests or non-interactive scripts.
 - `status` is for health checks: human request, suspected stall, or about 60 seconds with no signal. Do not poll.
 - `result` reads final output; it is not a live tail.
@@ -165,6 +177,12 @@ Optional health-check example for a slower run:
 
 ```bash
 pi --session-dir "$SMOKE_DIR" -c --no-extensions -e ./extensions/index.ts --tools lazy_subagents -p "Use lazy_subagents with action=status, runId='$RUN_ID' only if about 60 seconds have passed with no completion or attention signal, and answer only with its result."
+```
+
+Example workflow smoke test:
+
+```bash
+pi --no-session --no-extensions -e ./extensions/index.ts --tools lazy_subagents -p "Use lazy_subagents with action=workflow, completionPolicy='notify_only', maxConcurrency=2, steps=[{id:'research',agent:'delegate',prompt:'Reply with exactly RESEARCH and nothing else.'},{id:'plan',agent:'delegate',dependsOn:['research'],prompt:'Reply with exactly PLAN after reading {{research.output}} and nothing else.'}] and answer only with the exact tool result text."
 ```
 
 ## Development

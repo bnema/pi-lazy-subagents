@@ -12,6 +12,7 @@ import type {
   LaunchChildRequest,
   LaunchGroupRequest,
   LaunchResult,
+  LaunchWorkflowRequest,
   Launcher,
   LauncherRuntimeContext,
   NormalizedRunUpdate,
@@ -22,7 +23,10 @@ type DirectAsyncState = "queued" | "running" | "complete" | "failed" | "paused" 
 type DirectActivityState = "active_long_running" | "needs_attention";
 
 type DirectAsyncStatusStep = {
+  id?: string;
   agent?: string;
+  taskSummary?: string;
+  dependsOn?: string[];
   status?: "pending" | "running" | "completed" | "failed" | "paused" | "cancelled";
   currentTool?: string;
   toolCount?: number;
@@ -33,7 +37,7 @@ type DirectAsyncStatusStep = {
 
 type DirectAsyncStatus = {
   runId?: string;
-  mode: "single" | "parallel";
+  mode: "single" | "parallel" | "workflow";
   state: DirectAsyncState;
   activityState?: DirectActivityState;
   startedAt: number;
@@ -58,6 +62,8 @@ type DirectResultFile = {
   toolCount?: number;
   totalTokens?: number;
   results?: Array<{
+    stepId?: string;
+    taskSummary?: string;
     agent?: string;
     error?: string;
     output?: string;
@@ -77,9 +83,11 @@ export interface PiSubagentsAdapterOptions {
 }
 
 interface RunnerChildConfig {
+  id?: string;
   agent: string;
   taskSummary: string;
   prompt: string;
+  dependsOn?: string[];
   cwd: string;
   sessionDir: string;
   outputFile: string;
@@ -90,7 +98,8 @@ interface RunnerChildConfig {
 
 interface RunnerConfig {
   runId: string;
-  mode: "single" | "parallel";
+  mode: "single" | "parallel" | "workflow";
+  maxConcurrency?: number;
   piBin: string;
   asyncDir: string;
   resultsDir: string;
@@ -277,7 +286,7 @@ function formatResolvedModelLabel(model: string | undefined, thinking: string | 
 }
 
 async function buildRunnerChildren(
-  children: Array<Pick<RunnerChildConfig, "agent" | "taskSummary" | "prompt"> & { cwd?: string }>,
+  children: Array<Pick<RunnerChildConfig, "id" | "agent" | "taskSummary" | "prompt" | "dependsOn"> & { cwd?: string }>,
   baseCwd: string,
   asyncDir: string,
 ): Promise<RunnerChildConfig[]> {
@@ -300,9 +309,11 @@ async function buildRunnerChildren(
     const settings = await loadSettingsForCwd(cwd);
     const profile = getAgentProfile(child.agent);
     return {
+      id: child.id,
       agent: child.agent,
       taskSummary: child.taskSummary,
       prompt: child.prompt,
+      dependsOn: child.dependsOn,
       cwd,
       sessionDir: childSessionDir(asyncDir, index),
       outputFile: childOutputFile(index),
@@ -607,6 +618,25 @@ export class PiSubagentsAdapter implements Launcher {
     return await this.launch(config, cwd);
   }
 
+  async launchWorkflow(request: LaunchWorkflowRequest, runtime: LauncherRuntimeContext): Promise<LaunchResult> {
+    const cwd = request.cwd ?? runtime.cwd;
+    const asyncDir = path.join(this.asyncDirRoot, request.runId);
+    const config: RunnerConfig = {
+      runId: request.runId,
+      mode: "workflow",
+      maxConcurrency: request.maxConcurrency,
+      piBin: this.piBin,
+      asyncDir,
+      resultsDir: this.resultsDir,
+      resultPath: path.join(this.resultsDir, `${request.runId}.json`),
+      statusPath: path.join(asyncDir, "status.json"),
+      eventsPath: path.join(asyncDir, "events.jsonl"),
+      children: await buildRunnerChildren(request.steps, cwd, asyncDir),
+    };
+
+    return await this.launch(config, cwd);
+  }
+
   async readUpdate(launch: LaunchResult): Promise<NormalizedRunUpdate | undefined> {
     const result = await readJsonFile<DirectResultFile>(launch.resultPath);
     if (result) {
@@ -625,7 +655,7 @@ export class PiSubagentsAdapter implements Launcher {
     const resultPath = launch.resultPath ?? path.join(this.resultsDir, `${launch.asyncId}.json`);
     const status = await readJsonFile<{
       runId?: string;
-      mode?: "single" | "parallel";
+      mode?: "single" | "parallel" | "workflow";
       startedAt?: number;
       sessionFile?: string;
       pid?: number;

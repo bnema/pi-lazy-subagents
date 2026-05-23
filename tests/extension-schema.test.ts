@@ -12,4 +12,16 @@ describe("lazy_subagents tool schema", () => {
     });
     expect(completionPolicy).not.toHaveProperty("anyOf");
   });
+
+  test("workflow action exposes workflow steps and concurrency controls", () => {
+    const action = ToolParamsSchema.properties.action;
+
+    expect(action).toMatchObject({
+      anyOf: expect.arrayContaining([
+        expect.objectContaining({ const: "workflow" }),
+      ]),
+    });
+    expect(ToolParamsSchema.properties).toHaveProperty("steps");
+    expect(ToolParamsSchema.properties).toHaveProperty("maxConcurrency");
+  });
 });

@@ -2,6 +2,8 @@ import { describe, expect, test } from "vitest";
 
 import {
   createSerialLineProcessor,
+  getReadyWorkflowStepIds,
+  renderWorkflowPrompt,
   shouldPersistEvent,
   shouldWriteStatusForUsageTotal,
 } from "../src/launcher/direct-runner.mjs";
@@ -55,5 +57,37 @@ describe("direct runner stdout processing", () => {
     expect(shouldWriteStatusForUsageTotal(undefined, 0)).toBe(false);
     expect(shouldWriteStatusForUsageTotal(31_316, 31_316)).toBe(false);
     expect(shouldWriteStatusForUsageTotal(31_316, 31_317)).toBe(true);
+  });
+
+  test("renders workflow prompts from prior step summaries and outputs", () => {
+    const rendered = renderWorkflowPrompt(
+      "Research summary: {{research.summary}}\n\nResearch output:\n{{research.output}}",
+      {
+        research: {
+          summary: "Found the best extension seam in controller.ts",
+          output: "Detailed workflow findings go here.",
+        },
+      },
+    );
+
+    expect(rendered).toBe(
+      "Research summary: Found the best extension seam in controller.ts\n\nResearch output:\nDetailed workflow findings go here.",
+    );
+  });
+
+  test("throws when a workflow prompt references an unknown step id", () => {
+    expect(() => renderWorkflowPrompt("{{missing.summary}}", {})).toThrow("Unknown workflow step reference: missing");
+  });
+
+  test("selects ready workflow steps from dependency-complete pending work", () => {
+    const ready = getReadyWorkflowStepIds([
+      { id: "research", status: "completed" },
+      { id: "plan", status: "pending", dependsOn: ["research"] },
+      { id: "docs", status: "pending", dependsOn: ["research"] },
+      { id: "review", status: "pending", dependsOn: ["plan"] },
+      { id: "verify", status: "running" },
+    ], 3);
+
+    expect(ready).toEqual(["plan", "docs"]);
   });
 });

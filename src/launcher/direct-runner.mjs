@@ -57,6 +57,41 @@ function summarizeOutput(text, maxLength = 400) {
   return singleLine.length <= maxLength ? singleLine : `${singleLine.slice(0, maxLength - 1).trimEnd()}…`;
 }
 
+export function renderWorkflowPrompt(template, results) {
+  return String(template).replace(/\{\{\s*([A-Za-z0-9_-]+)\.(summary|output)\s*\}\}/g, (_match, stepId, field) => {
+    const stepResult = results?.[stepId];
+    if (!stepResult) {
+      throw new Error(`Unknown workflow step reference: ${stepId}`);
+    }
+
+    if (field === "summary") {
+      const summary = stepResult.summary ?? summarizeOutput(stepResult.output) ?? "";
+      return summary;
+    }
+
+    return stepResult.output ?? "";
+  });
+}
+
+export function getReadyWorkflowStepIds(steps, maxConcurrency) {
+  const runningCount = steps.filter((step) => step.status === "running").length;
+  const availableSlots = Math.max(0, maxConcurrency - runningCount);
+  if (availableSlots === 0) return [];
+
+  const completedIds = new Set(
+    steps
+      .filter((step) => step.status === "completed" && typeof step.id === "string" && step.id.length > 0)
+      .map((step) => step.id),
+  );
+
+  return steps
+    .filter((step) => step.status === "pending")
+    .filter((step) => (step.dependsOn ?? []).every((dependencyId) => completedIds.has(dependencyId)))
+    .slice(0, availableSlots)
+    .map((step) => step.id)
+    .filter((stepId) => typeof stepId === "string" && stepId.length > 0);
+}
+
 export function shouldPersistEvent(event) {
   return event?.type !== "message_update";
 }
@@ -79,11 +114,13 @@ function createInitialStatus(config) {
     lastUpdate: startedAt,
     steps: config.children.map((child, index) => ({
       index,
+      id: child.id,
       agent: child.profile.name,
       model: child.resolvedModel,
       thinking: child.resolvedThinking,
       status: "pending",
       taskSummary: child.taskSummary,
+      dependsOn: child.dependsOn,
       startedAt: undefined,
       endedAt: undefined,
       currentTool: undefined,
@@ -100,6 +137,7 @@ function deriveRootState(status) {
   if (steps.some((step) => step.status === "running" || step.status === "pending")) return "running";
   if (steps.some((step) => step.status === "failed")) return "failed";
   if (steps.some((step) => step.status === "paused")) return "paused";
+  if (steps.some((step) => step.status === "cancelled")) return "cancelled";
   return "complete";
 }
 
@@ -168,7 +206,7 @@ export function createSerialLineProcessor(processLine, onError) {
   };
 }
 
-function buildPiArgs(child) {
+function buildPiArgs(child, promptOverride) {
   const args = ["--mode", "json", "--session-dir", child.sessionDir];
   if (child.resolvedModel) {
     args.push("--model", child.resolvedModel);
@@ -188,17 +226,17 @@ function buildPiArgs(child) {
   if (child.profile.systemPrompt) {
     args.push(child.profile.systemPromptMode === "replace" ? "--system-prompt" : "--append-system-prompt", child.profile.systemPrompt);
   }
-  args.push(child.prompt);
+  args.push(promptOverride ?? child.prompt);
   return args;
 }
 
-async function runChild(config, statusPath, status, child, index) {
+async function runChild(config, statusPath, status, child, index, promptOverride) {
   const step = status.steps[index];
   step.status = "running";
   step.startedAt = now();
   await updateStatus(statusPath, status);
 
-  const args = buildPiArgs(child);
+  const args = buildPiArgs(child, promptOverride);
   const childProcess = spawn(config.piBin, args, {
     cwd: child.cwd,
     stdio: ["ignore", "pipe", "pipe"],
@@ -320,6 +358,8 @@ async function runChild(config, statusPath, status, child, index) {
   await updateStatus(statusPath, status);
 
   return {
+    stepId: child.id,
+    taskSummary: child.taskSummary,
     agent: child.profile.name,
     output: finalOutput,
     error: exitCode === 0 ? undefined : step.error,
@@ -335,6 +375,8 @@ async function runChild(config, statusPath, status, child, index) {
 
 function failedChildResult(config, child, error, sessionFile) {
   return {
+    stepId: child.id,
+    taskSummary: child.taskSummary,
     agent: child.profile.name,
     output: "",
     error,
@@ -348,12 +390,40 @@ function failedChildResult(config, child, error, sessionFile) {
   };
 }
 
+function formatResultLabel(result) {
+  return result.stepId ?? result.taskSummary ?? result.agent ?? "step";
+}
+
+function buildWorkflowResultsMap(results) {
+  return Object.fromEntries(
+    results
+      .filter((result) => typeof result?.stepId === "string" && result.stepId.length > 0)
+      .map((result) => [result.stepId, {
+        summary: summarizeOutput(result.output || result.error || "") ?? "",
+        output: result.output ?? result.error ?? "",
+      }]),
+  );
+}
+
+function markWorkflowPendingStepsCancelled(status, reason) {
+  let changed = false;
+  for (const step of status.steps ?? []) {
+    if (step.status !== "pending") continue;
+    step.status = "cancelled";
+    step.error = reason;
+    step.endedAt = now();
+    step.durationMs = 0;
+    changed = true;
+  }
+  return changed;
+}
+
 async function writeResult(config, status, results) {
   const timestamp = now();
   const success = results.every((result) => result.success);
   const summary = summarizeOutput(
     results
-      .map((result) => `${result.agent}: ${result.output || result.error || "(no output)"}`)
+      .map((result) => `${formatResultLabel(result)}: ${result.output || result.error || "(no output)"}`)
       .join("\n\n"),
   );
 
@@ -374,6 +444,72 @@ async function writeResult(config, status, results) {
   status.endedAt = timestamp;
   status.lastUpdate = timestamp;
   await writeJson(config.statusPath, status);
+}
+
+async function runWorkflow(config, status) {
+  const results = [];
+  const active = new Map();
+  let failFastTriggered = false;
+  const maxConcurrency = Math.max(1, config.maxConcurrency ?? config.children.length);
+
+  while (results.length < config.children.length) {
+    if (!failFastTriggered) {
+      const workflowResults = buildWorkflowResultsMap(results);
+      const readyStepIds = getReadyWorkflowStepIds(status.steps ?? [], maxConcurrency);
+      for (const stepId of readyStepIds) {
+        if (active.has(stepId)) continue;
+        const index = config.children.findIndex((child) => child.id === stepId);
+        if (index < 0) continue;
+        const child = config.children[index];
+        const renderedPrompt = renderWorkflowPrompt(child.prompt, workflowResults);
+        const task = runChild(config, config.statusPath, status, child, index, renderedPrompt)
+          .catch(async (error) => {
+            const message = error instanceof Error ? error.message : String(error);
+            const step = status.steps[index];
+            step.status = "failed";
+            step.error = message;
+            step.endedAt = now();
+            step.durationMs = step.startedAt ? Math.max(0, step.endedAt - step.startedAt) : undefined;
+            await updateStatus(config.statusPath, status);
+            return failedChildResult(config, child, message, step.sessionFile);
+          })
+          .then((result) => ({ stepId, result }));
+        active.set(stepId, task);
+      }
+    }
+
+    if (active.size === 0) {
+      const changed = markWorkflowPendingStepsCancelled(status, failFastTriggered
+        ? "Skipped because an earlier workflow step failed."
+        : "Skipped because workflow dependencies could not be satisfied.");
+      if (changed) {
+        await updateStatus(config.statusPath, status);
+      }
+
+      for (const child of config.children) {
+        if (results.some((result) => result.stepId === child.id)) continue;
+        results.push(failedChildResult(
+          config,
+          child,
+          failFastTriggered
+            ? "Skipped because an earlier workflow step failed."
+            : "Skipped because workflow dependencies could not be satisfied.",
+          undefined,
+        ));
+      }
+      break;
+    }
+
+    const { stepId, result } = await Promise.race(active.values());
+    active.delete(stepId);
+    results.push(result);
+
+    if (!result.success) {
+      failFastTriggered = true;
+    }
+  }
+
+  return results;
 }
 
 async function run(config) {
@@ -403,7 +539,9 @@ async function run(config) {
           }
         }),
       )
-    : [await runChild(config, config.statusPath, status, config.children[0], 0)];
+    : config.mode === "workflow"
+      ? await runWorkflow(config, status)
+      : [await runChild(config, config.statusPath, status, config.children[0], 0)];
 
   await writeResult(config, status, results);
 }
