@@ -190,7 +190,7 @@ describe("PiSubagentsAdapter helpers", () => {
     expect(cancelled.completedAt).toBe(88);
   });
 
-  test("cancel writes cancelled status and result markers", async () => {
+  test("cancel writes cancelled status and result markers while preserving workflow metadata", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-lazy-subagents-"));
     const asyncDirRoot = path.join(tempDir, "async");
     const resultsDir = path.join(tempDir, "results");
@@ -200,10 +200,11 @@ describe("PiSubagentsAdapter helpers", () => {
     await fs.writeFile(
       path.join(asyncDir, "status.json"),
       JSON.stringify({
-        runId: "run-1",
+        runId: "persisted-run-1",
+        mode: "workflow",
         state: "running",
         pid: 123,
-        steps: [{ agent: "scout", pid: 456, outputFile: "output-0.log" }],
+        steps: [{ id: "plan", taskSummary: "Draft the plan", dependsOn: ["research"], agent: "scout", pid: 456, outputFile: "output-0.log" }],
       }),
       "utf8",
     );
@@ -214,10 +215,15 @@ describe("PiSubagentsAdapter helpers", () => {
     try {
       await expect(adapter.cancel({ runId: "run-1", asyncId: "run-1", asyncDir })).resolves.toBe(true);
 
-      const status = JSON.parse(await fs.readFile(path.join(asyncDir, "status.json"), "utf8")) as { state: string };
-      const result = JSON.parse(await fs.readFile(path.join(resultsDir, "run-1.json"), "utf8")) as { state: string };
+      const status = JSON.parse(await fs.readFile(path.join(asyncDir, "status.json"), "utf8")) as { state: string; runId: string; steps: Array<{ id?: string; taskSummary?: string; dependsOn?: string[]; agent?: string }> };
+      const result = JSON.parse(await fs.readFile(path.join(resultsDir, "run-1.json"), "utf8")) as { state: string; id: string; runId: string; results: Array<{ stepId?: string; taskSummary?: string; dependsOn?: string[]; agent?: string }> };
       expect(status.state).toBe("cancelled");
+      expect(status.runId).toBe("persisted-run-1");
+      expect(status.steps[0]).toMatchObject({ id: "plan", taskSummary: "Draft the plan", dependsOn: ["research"], agent: "scout" });
       expect(result.state).toBe("cancelled");
+      expect(result.id).toBe("persisted-run-1");
+      expect(result.runId).toBe("persisted-run-1");
+      expect(result.results[0]).toMatchObject({ stepId: "plan", taskSummary: "Draft the plan", dependsOn: ["research"], agent: "scout" });
     } finally {
       killSpy.mockRestore();
     }

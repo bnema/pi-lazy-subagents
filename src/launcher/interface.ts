@@ -23,6 +23,8 @@ export interface LaunchChildRequest extends LaunchRequestBase {
   sessionFile?: string;
 }
 
+export type WorkflowStepOutputMode = "text" | "json";
+
 export interface LaunchGroupChildRequest {
   agent: string;
   prompt: string;
@@ -33,6 +35,9 @@ export interface LaunchGroupChildRequest {
 export interface LaunchWorkflowStepRequest extends LaunchGroupChildRequest {
   id: string;
   dependsOn?: string[];
+  retries?: number;
+  outputMode?: WorkflowStepOutputMode;
+  outputSchema?: string;
 }
 
 export interface LaunchGroupRequest extends LaunchRequestBase {

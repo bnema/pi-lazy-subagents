@@ -107,6 +107,61 @@ function buildLaunchEvent(run: RunRecord, timestamp: number): RunEvent {
   };
 }
 
+function assertValidWorkflowRequest(request: ControllerLaunchWorkflowRequest): void {
+  if (request.maxConcurrency !== undefined && (!Number.isInteger(request.maxConcurrency) || request.maxConcurrency < 1)) {
+    throw new Error("maxConcurrency must be an integer greater than or equal to 1.");
+  }
+
+  const steps = request.steps;
+  const ids = new Set<string>();
+  for (const step of steps) {
+    if (!step.id.trim()) {
+      throw new Error("Workflow step ids must be non-empty strings.");
+    }
+    if (ids.has(step.id)) {
+      throw new Error(`Duplicate workflow step id: ${step.id}`);
+    }
+    ids.add(step.id);
+
+    if (step.retries !== undefined && (!Number.isInteger(step.retries) || step.retries < 0)) {
+      throw new Error(`Workflow step ${step.id} has an invalid retries value. Expected a non-negative integer.`);
+    }
+  }
+
+  for (const step of steps) {
+    for (const dependencyId of step.dependsOn ?? []) {
+      if (!ids.has(dependencyId)) {
+        throw new Error(`Workflow step ${step.id} depends on unknown step ${dependencyId}.`);
+      }
+      if (dependencyId === step.id) {
+        throw new Error(`Workflow step ${step.id} cannot depend on itself.`);
+      }
+    }
+  }
+
+  const stepsById = new Map(steps.map((step) => [step.id, step]));
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+
+  const visit = (stepId: string): void => {
+    if (visited.has(stepId)) return;
+    if (visiting.has(stepId)) {
+      throw new Error(`Workflow dependency cycle detected at step ${stepId}.`);
+    }
+
+    visiting.add(stepId);
+    for (const dependencyId of stepsById.get(stepId)?.dependsOn ?? []) {
+      visit(dependencyId);
+    }
+    visiting.delete(stepId);
+    visited.add(stepId);
+  };
+
+  for (const step of steps) {
+    visit(step.id);
+  }
+}
+
 function equalUpdate(existing: RunRecord, update: NormalizedRunUpdate): boolean {
   return existing.status === update.status
     && existing.updatedAt === update.updatedAt
@@ -547,6 +602,7 @@ export class LazySubagentsController {
 
   async launchWorkflow(request: ControllerLaunchWorkflowRequest, ctx: ExtensionContext): Promise<RunRecord> {
     this.captureContext(ctx);
+    assertValidWorkflowRequest(request);
 
     const runId = this.createRunId();
     const timestamp = this.now();
@@ -978,7 +1034,8 @@ export class LazySubagentsController {
 
       const outputs = parsed.results
         ?.map((entry) => {
-          const text = normalizeResultText(entry.output ?? entry.error);
+          const rawText = entry.output?.trim() ? entry.output : entry.error;
+          const text = normalizeResultText(rawText);
           if (!text) return undefined;
           const label = entry.stepId ?? entry.taskSummary ?? entry.agent;
           return label ? `[${label}]\n${text}` : text;

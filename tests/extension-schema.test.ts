@@ -15,6 +15,8 @@ describe("lazy_subagents tool schema", () => {
 
   test("workflow action exposes workflow steps and concurrency controls", () => {
     const action = ToolParamsSchema.properties.action;
+    const maxConcurrency = ToolParamsSchema.properties.maxConcurrency;
+    const steps = ToolParamsSchema.properties.steps;
 
     expect(action).toMatchObject({
       anyOf: expect.arrayContaining([
@@ -23,5 +25,15 @@ describe("lazy_subagents tool schema", () => {
     });
     expect(ToolParamsSchema.properties).toHaveProperty("steps");
     expect(ToolParamsSchema.properties).toHaveProperty("maxConcurrency");
+    expect(maxConcurrency).toMatchObject({ type: "integer" });
+    expect(steps).toMatchObject({
+      items: {
+        properties: expect.objectContaining({
+          retries: expect.any(Object),
+          outputMode: expect.any(Object),
+          outputSchema: expect.any(Object),
+        }),
+      },
+    });
   });
 });

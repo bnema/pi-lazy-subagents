@@ -17,9 +17,12 @@ const CompletionPolicySchema = Type.Unsafe<CompletionPolicy>({
 const WorkflowStepSchema = Type.Object({
   id: Type.String({ description: "Stable step id used for dependency wiring and prompt templates such as {{research.summary}} or {{research.output}}." }),
   agent: Type.String({ description: "Child profile name for this workflow step." }),
-  prompt: Type.String({ description: "Task for this workflow step. You can reference earlier step results with {{stepId.summary}} or {{stepId.output}}." }),
+  prompt: Type.String({ description: "Task for this workflow step. You can reference earlier step results with {{stepId.summary}}, {{stepId.output}}, {{stepId.json}}, or structured fields such as {{stepId.structured.title}}." }),
   taskSummary: Type.Optional(Type.String({ description: "Optional shorter label for this workflow step in status surfaces." })),
   dependsOn: Type.Optional(Type.Array(Type.String(), { description: "Optional list of earlier workflow step ids that must complete before this step starts." })),
+  retries: Type.Optional(Type.Integer({ minimum: 0, description: "How many extra attempts to allow after the first failed attempt for this workflow step." })),
+  outputMode: Type.Optional(Type.Union([Type.Literal("text"), Type.Literal("json")], { description: "How this workflow step should shape its final answer. Use json to require a JSON object result." })),
+  outputSchema: Type.Optional(Type.String({ description: "Optional schema guidance for json workflow output. This text is appended to the worker prompt so the final response matches the expected object shape." })),
   cwd: Type.Optional(Type.String()),
 });
 
@@ -74,7 +77,7 @@ export const ToolParamsSchema = Type.Object({
   steps: Type.Optional(Type.Array(WorkflowStepSchema, {
     description: "Workflow steps for action=workflow. The runner executes them in the background with dependency-aware scheduling and direct step-to-step result passing.",
   })),
-  maxConcurrency: Type.Optional(Type.Number({
+  maxConcurrency: Type.Optional(Type.Integer({
     minimum: 1,
     description: "Maximum number of workflow steps that may run at the same time for action=workflow. Defaults to the number of steps.",
   })),
@@ -129,7 +132,8 @@ export default function lazySubagentsExtension(pi: ExtensionAPI): void {
       "Use action=list to choose an agent; action=run defaults to delegate.",
       "Use action=run for one child and action=parallel for independent children.",
       "Use action=workflow for dependent pipelines that should stay off the main session context and pass step results directly in the background.",
-      "Workflow steps can reference earlier results with {{stepId.summary}} or {{stepId.output}}.",
+      "Workflow steps support retries=<n>, outputMode=json, and outputSchema for resilient structured handoffs.",
+      "Workflow steps can reference earlier results with {{stepId.summary}}, {{stepId.output}}, {{stepId.json}}, or structured fields such as {{stepId.structured.title}}.",
       "After run/parallel/workflow, do not call wait or status right away. Return to the user or continue other work.",
       "Use action=wait only for explicit blocking requests or non-interactive scripts.",
       "Use action=status only for human-requested health checks, suspected stalls, or after about 60s with no signal. Do not poll.",
