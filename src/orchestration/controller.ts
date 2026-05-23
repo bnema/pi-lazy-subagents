@@ -982,7 +982,36 @@ export class LazySubagentsController {
     return { stateChanged: hasStateChange, recordedEvent: hasNewEvent };
   }
 
+  private surfaceRestoredTerminalCompletions(): void {
+    for (const run of this.registry.snapshot().runs) {
+      if (!isTerminalStatus(run.status) || run.status === "cancelled") continue;
+      const fingerprint = buildCompletionFingerprint({
+        runId: run.id,
+        status: run.status,
+        completedAt: run.completedAt,
+      });
+      if (this.registry.hasSurfacedCompletion(fingerprint)) continue;
+      this.handleTerminalTransition(run);
+    }
+  }
+
+  private getCompletionRoutingDecision(run: RunRecord): ReturnType<typeof decideCompletionRouting> {
+    return decideCompletionRouting(run, {
+      isIdle: this.currentCtx?.isIdle() ?? true,
+      hasPendingMessages: this.currentCtx?.hasPendingMessages() ?? false,
+    });
+  }
+
+  private shouldTriggerCompletionTurn(run: RunRecord): boolean {
+    const decision = this.getCompletionRoutingDecision(run);
+    return Boolean(decision.triggerTurn && decision.deliverAs && (decision.action === "follow_up" || decision.action === "wake"));
+  }
+
   private handleTerminalTransition(run: RunRecord): void {
+    if (!this.currentCtx && this.shouldTriggerCompletionTurn(run)) {
+      return;
+    }
+
     const fingerprint = buildCompletionFingerprint({
       runId: run.id,
       status: run.status,
@@ -1001,10 +1030,7 @@ export class LazySubagentsController {
 
     if (run.status === "cancelled") return;
 
-    const decision = decideCompletionRouting(run, {
-      isIdle: this.currentCtx?.isIdle() ?? true,
-      hasPendingMessages: this.currentCtx?.hasPendingMessages() ?? false,
-    });
+    const decision = this.getCompletionRoutingDecision(run);
 
     if (!decision.triggerTurn || !decision.deliverAs || (decision.action !== "follow_up" && decision.action !== "wake")) {
       return;
@@ -1137,6 +1163,7 @@ export class LazySubagentsController {
       await this.refreshProgressLines(run.id, run.launchRef);
     }
 
+    this.surfaceRestoredTerminalCompletions();
     this.renderUi(ctx);
     this.refreshPoller();
     if (this.trackedLaunches.size > 0) {

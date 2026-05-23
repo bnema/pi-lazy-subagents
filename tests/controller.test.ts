@@ -277,6 +277,79 @@ describe("LazySubagentsController", () => {
     expect(widgets.at(-1)?.[1]?.join("\n")).toContain("Second ready run");
   });
 
+  test("routes restored terminal runs that finished while the main session was absent", async () => {
+    const registry = new RunRegistry();
+    registry.upsert(createRun({
+      id: "restored-run",
+      agent: "reviewer",
+      title: "Review finished offline",
+      taskSummary: "Review finished offline",
+      status: "completed",
+      updatedAt: 130,
+      completedAt: 130,
+      completionPolicy: "wake_if_idle",
+      resultPreview: "Found 3 issues",
+    }));
+
+    const { api, messages } = createPi();
+    const controller = new LazySubagentsController(api as any, { launcher: new FakeLauncher(), now: () => 200 });
+    const { ctx } = createContext({
+      isIdle: true,
+      hasPendingMessages: false,
+      branchEntries: [{ type: "custom", customType: PERSISTED_STATE_ENTRY, data: createPersistedState(registry.serialize(), 130) }],
+    });
+
+    await controller.handleSessionStart(ctx);
+
+    const hiddenSummaries = messages.filter((entry) => entry.message.display === false && entry.message.content.includes("Lazy subagent update"));
+    expect(hiddenSummaries).toHaveLength(1);
+    expect(hiddenSummaries[0]?.options).toMatchObject({ triggerTurn: true, deliverAs: "steer" });
+  });
+
+  test("defers completion surfacing while the main session context is unavailable", async () => {
+    const { api, messages, entries } = createPi();
+    const launcher = new FakeLauncher();
+    let clock = 100;
+    const controller = new LazySubagentsController(api as any, { launcher, createRunId: () => "run-1", now: () => clock });
+    const { ctx } = createContext({ isIdle: true, hasPendingMessages: false });
+
+    await controller.handleSessionStart(ctx);
+    await controller.launchChild({
+      agent: "reviewer",
+      title: "Review auth diff",
+      taskSummary: "Review auth diff",
+      prompt: "Review it",
+      completionPolicy: "wake_if_idle",
+    }, ctx);
+
+    await controller.handleSessionShutdown(ctx);
+    clock = 130;
+    launcher.updates.set("run-1", {
+      runId: "run-1",
+      status: "completed",
+      updatedAt: 130,
+      completedAt: 130,
+      resultPreview: "Done",
+    });
+
+    await controller.pollOnce();
+
+    expect(messages.filter((entry) => entry.message.display === false && entry.message.content.includes("Lazy subagent update"))).toHaveLength(0);
+
+    const latestPersisted = entries.filter((entry) => entry.customType === PERSISTED_STATE_ENTRY).at(-1);
+    const { ctx: restoredCtx } = createContext({
+      isIdle: true,
+      hasPendingMessages: false,
+      branchEntries: latestPersisted ? [{ type: "custom", customType: PERSISTED_STATE_ENTRY, data: latestPersisted.data }] : [],
+    });
+
+    await controller.handleSessionStart(restoredCtx);
+
+    const hiddenSummaries = messages.filter((entry) => entry.message.display === false && entry.message.content.includes("Lazy subagent update"));
+    expect(hiddenSummaries).toHaveLength(1);
+    expect(hiddenSummaries[0]?.options).toMatchObject({ triggerTurn: true, deliverAs: "steer" });
+  });
+
   test("launches a child, emits a launch card, persists state, and routes completion once", async () => {
     const { api, messages, entries } = createPi();
     const launcher = new FakeLauncher();
