@@ -1003,6 +1003,7 @@ describe("LazySubagentsController", () => {
   test("rejects invalid workflow definitions before launch", async () => {
     const { api } = createPi();
     const launcher = new FakeLauncher();
+    const launchWorkflowSpy = vi.spyOn(launcher, "launchWorkflow");
     const controller = new LazySubagentsController(api as any, { launcher, createRunId: () => "workflow-2", now: () => 145 });
     const { ctx } = createContext({ isIdle: true, hasPendingMessages: false });
 
@@ -1020,11 +1021,29 @@ describe("LazySubagentsController", () => {
 
     await expect(controller.launchWorkflow(
       {
+        title: "Empty workflow",
+        taskSummary: "Empty workflow",
+        steps: [],
+      },
+      ctx,
+    )).rejects.toThrow("at least one step");
+
+    await expect(controller.launchWorkflow(
+      {
+        title: "Blank id",
+        taskSummary: "Blank id",
+        steps: [{ id: "   ", agent: "scout", prompt: "Inspect", taskSummary: "Inspect" }],
+      },
+      ctx,
+    )).rejects.toThrow("non-empty strings");
+
+    await expect(controller.launchWorkflow(
+      {
         title: "Duplicate ids",
         taskSummary: "Duplicate ids",
         steps: [
           { id: "research", agent: "scout", prompt: "Inspect", taskSummary: "Inspect" },
-          { id: "research", agent: "reviewer", prompt: "Plan", taskSummary: "Plan" },
+          { id: " research ", agent: "reviewer", prompt: "Plan", taskSummary: "Plan" },
         ],
       },
       ctx,
@@ -1034,16 +1053,25 @@ describe("LazySubagentsController", () => {
       {
         title: "Missing dependency",
         taskSummary: "Missing dependency",
-        steps: [{ id: "plan", agent: "reviewer", prompt: "Plan", taskSummary: "Plan", dependsOn: ["research"] }],
+        steps: [{ id: "plan", agent: "reviewer", prompt: "Plan", taskSummary: "Plan", dependsOn: [" research "] }],
       },
       ctx,
     )).rejects.toThrow("depends on unknown step research");
 
     await expect(controller.launchWorkflow(
       {
+        title: "Blank dependency",
+        taskSummary: "Blank dependency",
+        steps: [{ id: "plan", agent: "reviewer", prompt: "Plan", taskSummary: "Plan", dependsOn: ["   "] }],
+      },
+      ctx,
+    )).rejects.toThrow("empty dependency id");
+
+    await expect(controller.launchWorkflow(
+      {
         title: "Self dependency",
         taskSummary: "Self dependency",
-        steps: [{ id: "plan", agent: "reviewer", prompt: "Plan", taskSummary: "Plan", dependsOn: ["plan"] }],
+        steps: [{ id: "plan", agent: "reviewer", prompt: "Plan", taskSummary: "Plan", dependsOn: [" plan "] }],
       },
       ctx,
     )).rejects.toThrow("cannot depend on itself");
@@ -1053,7 +1081,7 @@ describe("LazySubagentsController", () => {
         title: "Cycle",
         taskSummary: "Cycle",
         steps: [
-          { id: "research", agent: "scout", prompt: "Inspect", taskSummary: "Inspect", dependsOn: ["plan"] },
+          { id: " research ", agent: "scout", prompt: "Inspect", taskSummary: "Inspect", dependsOn: [" plan "] },
           { id: "plan", agent: "reviewer", prompt: "Plan", taskSummary: "Plan", dependsOn: ["research"] },
         ],
       },
@@ -1068,6 +1096,8 @@ describe("LazySubagentsController", () => {
       },
       ctx,
     )).rejects.toThrow("invalid retries value");
+
+    expect(launchWorkflowSpy).not.toHaveBeenCalled();
   });
 
   test("records a failed group launch instead of throwing away state", async () => {

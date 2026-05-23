@@ -113,33 +113,48 @@ function assertValidWorkflowRequest(request: ControllerLaunchWorkflowRequest): v
   }
 
   const steps = request.steps;
+  if (steps.length === 0) {
+    throw new Error("Workflow requests must include at least one step.");
+  }
+
+  const normalizedSteps = steps.map((step) => ({
+    step,
+    id: step.id.trim(),
+    dependsOn: (step.dependsOn ?? []).map((dependencyId) => dependencyId.trim()),
+  }));
+
   const ids = new Set<string>();
-  for (const step of steps) {
-    if (!step.id.trim()) {
+  for (const { step, id, dependsOn } of normalizedSteps) {
+    if (!id) {
       throw new Error("Workflow step ids must be non-empty strings.");
     }
-    if (ids.has(step.id)) {
-      throw new Error(`Duplicate workflow step id: ${step.id}`);
+    if (ids.has(id)) {
+      throw new Error(`Duplicate workflow step id: ${id}`);
     }
-    ids.add(step.id);
+    ids.add(id);
+    step.id = id;
+    step.dependsOn = dependsOn;
 
     if (step.retries !== undefined && (!Number.isInteger(step.retries) || step.retries < 0)) {
-      throw new Error(`Workflow step ${step.id} has an invalid retries value. Expected a non-negative integer.`);
+      throw new Error(`Workflow step ${id} has an invalid retries value. Expected a non-negative integer.`);
     }
   }
 
-  for (const step of steps) {
-    for (const dependencyId of step.dependsOn ?? []) {
+  for (const { id, dependsOn } of normalizedSteps) {
+    for (const dependencyId of dependsOn) {
+      if (!dependencyId) {
+        throw new Error(`Workflow step ${id} has an empty dependency id.`);
+      }
       if (!ids.has(dependencyId)) {
-        throw new Error(`Workflow step ${step.id} depends on unknown step ${dependencyId}.`);
+        throw new Error(`Workflow step ${id} depends on unknown step ${dependencyId}.`);
       }
-      if (dependencyId === step.id) {
-        throw new Error(`Workflow step ${step.id} cannot depend on itself.`);
+      if (dependencyId === id) {
+        throw new Error(`Workflow step ${id} cannot depend on itself.`);
       }
     }
   }
 
-  const stepsById = new Map(steps.map((step) => [step.id, step]));
+  const stepsById = new Map(normalizedSteps.map(({ id, dependsOn }) => [id, dependsOn]));
   const visiting = new Set<string>();
   const visited = new Set<string>();
 
@@ -150,15 +165,15 @@ function assertValidWorkflowRequest(request: ControllerLaunchWorkflowRequest): v
     }
 
     visiting.add(stepId);
-    for (const dependencyId of stepsById.get(stepId)?.dependsOn ?? []) {
+    for (const dependencyId of stepsById.get(stepId) ?? []) {
       visit(dependencyId);
     }
     visiting.delete(stepId);
     visited.add(stepId);
   };
 
-  for (const step of steps) {
-    visit(step.id);
+  for (const { id } of normalizedSteps) {
+    visit(id);
   }
 }
 
