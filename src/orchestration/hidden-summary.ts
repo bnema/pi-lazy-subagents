@@ -5,7 +5,7 @@ export interface HiddenSummary {
   snapshot: RunRegistrySnapshot;
 }
 
-function linesForRun(run: RunRecord): string[] {
+function linesForRun(run: RunRecord, options: { includePreview?: boolean } = {}): string[] {
   const lines = [
     "Lazy subagent update",
     `- Run: ${run.id}`,
@@ -16,15 +16,15 @@ function linesForRun(run: RunRecord): string[] {
   ];
 
   const preview = run.resultPreview ?? run.errorPreview;
-  if (preview) lines.push(`- Summary: ${preview}`);
+  if (options.includePreview !== false && preview) lines.push(`- Summary: ${preview}`);
   if (run.sessionFile) lines.push(`- Session: ${run.sessionFile}`);
   if (run.artifactPath) lines.push(`- Artifact: ${run.artifactPath}`);
 
   return lines;
 }
 
-export function buildHiddenSummary(run: RunRecord, snapshot: RunRegistrySnapshot): HiddenSummary {
-  const lines = linesForRun(run);
+export function buildHiddenSummary(run: RunRecord, snapshot: RunRegistrySnapshot, options: { includePreview?: boolean } = {}): HiddenSummary {
+  const lines = linesForRun(run, options);
   lines.push(`- Active runs: ${snapshot.activeRuns.length}`);
   lines.push(`- Recent runs: ${snapshot.recentRuns.length}`);
 

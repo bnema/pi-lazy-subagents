@@ -399,6 +399,7 @@ describe("LazySubagentsController", () => {
     expect(userMessages[0]?.content).toContain(`Full report: ${artifactPath}`);
     expect(userMessages[0]?.content).toContain("Result excerpt:\nFull reviewer report");
     expect(userMessages[0]?.content).toContain("Lazy subagent update");
+    expect(userMessages[0]?.content).not.toContain("- Summary: Found 3 issues in auth.ts");
   });
 
   test("waitForRunSignal blocks via polling until a run is completed or needs attention", async () => {
