@@ -1060,8 +1060,8 @@ export class LazySubagentsController {
       return;
     }
 
-    const summary = buildHiddenSummary(run, this.registry.snapshot());
     const resultText = run.status === "completed" ? await this.getRunResult(run.id) : undefined;
+    const summary = buildHiddenSummary(run, this.registry.snapshot(), { includePreview: !resultText });
     const content = formatCompletionInput(run, summary.text, resultText);
     const isIdle = this.currentCtx?.isIdle() ?? false;
     const hasPendingMessages = this.currentCtx?.hasPendingMessages() ?? true;
