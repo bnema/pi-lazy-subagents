@@ -291,7 +291,7 @@ describe("LazySubagentsController", () => {
       resultPreview: "Found 3 issues",
     }));
 
-    const { api, messages } = createPi();
+    const { api, userMessages } = createPi();
     const controller = new LazySubagentsController(api as any, { launcher: new FakeLauncher(), now: () => 200 });
     const { ctx } = createContext({
       isIdle: true,
@@ -301,13 +301,14 @@ describe("LazySubagentsController", () => {
 
     await controller.handleSessionStart(ctx);
 
-    const hiddenSummaries = messages.filter((entry) => entry.message.display === false && entry.message.content.includes("Lazy subagent update"));
-    expect(hiddenSummaries).toHaveLength(1);
-    expect(hiddenSummaries[0]?.options).toMatchObject({ triggerTurn: true, deliverAs: "steer" });
+    expect(userMessages).toHaveLength(1);
+    expect(userMessages[0]?.content).toContain("[DONE] Review finished offline");
+    expect(userMessages[0]?.content).toContain("Lazy subagent update");
+    expect(userMessages[0]?.options).toBeUndefined();
   });
 
   test("defers completion surfacing while the main session context is unavailable", async () => {
-    const { api, messages, entries } = createPi();
+    const { api, messages, entries, userMessages } = createPi();
     const launcher = new FakeLauncher();
     let clock = 100;
     const controller = new LazySubagentsController(api as any, { launcher, createRunId: () => "run-1", now: () => clock });
@@ -345,13 +346,17 @@ describe("LazySubagentsController", () => {
 
     await controller.handleSessionStart(restoredCtx);
 
-    const hiddenSummaries = messages.filter((entry) => entry.message.display === false && entry.message.content.includes("Lazy subagent update"));
-    expect(hiddenSummaries).toHaveLength(1);
-    expect(hiddenSummaries[0]?.options).toMatchObject({ triggerTurn: true, deliverAs: "steer" });
+    expect(userMessages).toHaveLength(1);
+    expect(userMessages[0]?.content).toContain("[DONE] Review auth diff");
+    expect(userMessages[0]?.content).toContain("Lazy subagent update");
+    expect(userMessages[0]?.options).toBeUndefined();
   });
 
   test("launches a child, emits a launch card, persists state, and routes completion once", async () => {
-    const { api, messages, entries } = createPi();
+    const { api, messages, entries, userMessages } = createPi();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-lazy-subagents-done-"));
+    const artifactPath = path.join(tempDir, "run-1-review.md");
+    await fs.writeFile(artifactPath, "Full reviewer report\n\n- Finding A\n- Finding B", "utf8");
     const launcher = new FakeLauncher();
     const controller = new LazySubagentsController(api as any, { launcher, createRunId: () => "run-1", now: () => 100 });
     const { ctx, statuses, widgets } = createContext({ isIdle: true, hasPendingMessages: false });
@@ -380,6 +385,7 @@ describe("LazySubagentsController", () => {
       status: "completed",
       updatedAt: 130,
       completedAt: 130,
+      artifactPath,
       resultPreview: "Found 3 issues in auth.ts",
     });
 
@@ -388,14 +394,11 @@ describe("LazySubagentsController", () => {
 
     expect(controller.getSnapshot().recentRuns[0]?.status).toBe("completed");
     expect(messages.filter((entry) => entry.message.customType === MESSAGE_TYPE_COMPLETION)).toHaveLength(1);
-    expect(
-      messages.some(
-        (entry) =>
-          entry.message.display === false
-          && typeof entry.message.content === "string"
-          && entry.message.content.includes("Lazy subagent update"),
-      ),
-    ).toBe(true);
+    expect(userMessages).toHaveLength(1);
+    expect(userMessages[0]?.content).toContain("[DONE] Review auth diff");
+    expect(userMessages[0]?.content).toContain(`Full report: ${artifactPath}`);
+    expect(userMessages[0]?.content).toContain("Result excerpt:\nFull reviewer report");
+    expect(userMessages[0]?.content).toContain("Lazy subagent update");
   });
 
   test("waitForRunSignal blocks via polling until a run is completed or needs attention", async () => {
@@ -1220,7 +1223,7 @@ describe("LazySubagentsController", () => {
   });
 
   test("supports result retrieval, pickup injection, cancel, and clear control actions", async () => {
-    const { api, messages, userMessages } = createPi();
+    const { api, userMessages } = createPi();
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-lazy-subagents-controller-"));
     const artifactPath = path.join(tempDir, "run-1-output.log");
     await fs.writeFile(artifactPath, "Full reviewer result", "utf8");
@@ -1251,9 +1254,9 @@ describe("LazySubagentsController", () => {
 
     expect(await controller.getRunResult("run-1")).toBe("Full reviewer result");
     expect(await controller.pickupRun("run-1")).toBe(true);
-    expect(userMessages[0]?.content).toContain("Lazy subagent result");
-    expect(userMessages[0]?.content).toContain("Full reviewer result");
-    expect(messages.filter((entry) => entry.message.display === false)).toHaveLength(1);
+    const pickupMessage = userMessages.find((entry) => typeof entry.content === "string" && entry.content.includes("Lazy subagent result"));
+    expect(pickupMessage?.content).toContain("Full reviewer result");
+    expect(userMessages.some((entry) => typeof entry.content === "string" && entry.content.includes("[DONE] Review auth diff"))).toBe(true);
 
     expect(await controller.cancelRun("run-1")).toBe(false);
 

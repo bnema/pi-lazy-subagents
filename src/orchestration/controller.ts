@@ -15,7 +15,6 @@ import {
   MESSAGE_TYPE_COMPLETION,
    MESSAGE_TYPE_PIN,
   MESSAGE_TYPE_FAILURE,
-  MESSAGE_TYPE_HIDDEN_SUMMARY,
   MESSAGE_TYPE_LAUNCH,
   PERSISTED_STATE_ENTRY,
   STATUS_KEY,
@@ -262,6 +261,31 @@ function formatPickupMessage(run: RunRecord, result: string): string {
     "",
     result,
   ].join("\n");
+}
+
+const COMPLETION_RESULT_EXCERPT_MAX_CHARS = 12_000;
+
+function truncateCompletionResult(text: string): string {
+  if (text.length <= COMPLETION_RESULT_EXCERPT_MAX_CHARS) return text;
+  return `${text.slice(0, COMPLETION_RESULT_EXCERPT_MAX_CHARS).trimEnd()}\n\n[Result excerpt truncated. Read the full report path above.]`;
+}
+
+function formatCompletionInput(run: RunRecord, summary: string, resultText?: string): string {
+  const signal = run.status === "completed"
+    ? "DONE"
+    : run.status === "failed"
+      ? "FAILED"
+      : "ATTENTION";
+  const reportPath = run.artifactPath ?? run.launchRef?.resultPath ?? run.sessionFile;
+  const lines = [`[${signal}] ${run.title || run.taskSummary}`, ""];
+
+  if (reportPath) lines.push(`Full report: ${reportPath}`, "");
+  if (resultText && run.status === "completed") {
+    lines.push("Result excerpt:", truncateCompletionResult(resultText), "");
+  }
+  lines.push(summary);
+
+  return lines.join("\n");
 }
 
 function normalizeResultText(text: string | undefined): string | undefined {
@@ -908,7 +932,7 @@ export class LazySubagentsController {
             }
           }
           if (!update) continue;
-          const applied = this.applyUpdate(runId, update);
+          const applied = await this.applyUpdate(runId, update);
           if ((applied.stateChanged || applied.recordedEvent) && this.registry.isPinned(runId)) {
             await this.refreshProgressLines(runId, launch);
           }
@@ -932,7 +956,7 @@ export class LazySubagentsController {
     }
   }
 
-  private applyUpdate(runId: string, update: NormalizedRunUpdate): ApplyUpdateResult {
+  private async applyUpdate(runId: string, update: NormalizedRunUpdate): Promise<ApplyUpdateResult> {
     const existing = this.registry.get(runId);
     if (!existing) return { stateChanged: false, recordedEvent: false };
     if (isTerminalStatus(existing.status)) return { stateChanged: false, recordedEvent: false };
@@ -970,7 +994,7 @@ export class LazySubagentsController {
     if (hasStateChange) {
       if (isTerminalStatus(next.status)) {
         this.trackedLaunches.delete(runId);
-        this.handleTerminalTransition(next);
+        await this.handleTerminalTransition(next);
       } else if ((!previousAttention && next.attentionNeeded) || (previousStatus !== "blocked" && next.status === "blocked")) {
         this.sendVisiblePayload(createAttentionMessagePayload(next));
       }
@@ -982,7 +1006,7 @@ export class LazySubagentsController {
     return { stateChanged: hasStateChange, recordedEvent: hasNewEvent };
   }
 
-  private surfaceRestoredTerminalCompletions(): void {
+  private async surfaceRestoredTerminalCompletions(): Promise<void> {
     for (const run of this.registry.snapshot().runs) {
       if (!isTerminalStatus(run.status) || run.status === "cancelled") continue;
       const fingerprint = buildCompletionFingerprint({
@@ -991,7 +1015,7 @@ export class LazySubagentsController {
         completedAt: run.completedAt,
       });
       if (this.registry.hasSurfacedCompletion(fingerprint)) continue;
-      this.handleTerminalTransition(run);
+      await this.handleTerminalTransition(run);
     }
   }
 
@@ -1007,7 +1031,7 @@ export class LazySubagentsController {
     return Boolean(decision.triggerTurn && decision.deliverAs && (decision.action === "follow_up" || decision.action === "wake"));
   }
 
-  private handleTerminalTransition(run: RunRecord): void {
+  private async handleTerminalTransition(run: RunRecord): Promise<void> {
     if (!this.currentCtx && this.shouldTriggerCompletionTurn(run)) {
       return;
     }
@@ -1037,18 +1061,17 @@ export class LazySubagentsController {
     }
 
     const summary = buildHiddenSummary(run, this.registry.snapshot());
-    this.pi.sendMessage(
-      {
-        customType: MESSAGE_TYPE_HIDDEN_SUMMARY,
-        content: summary.text,
-        display: false,
-        details: summary,
-      },
-      {
-        triggerTurn: decision.triggerTurn,
-        deliverAs: decision.deliverAs,
-      },
-    );
+    const resultText = run.status === "completed" ? await this.getRunResult(run.id) : undefined;
+    const content = formatCompletionInput(run, summary.text, resultText);
+    const isIdle = this.currentCtx?.isIdle() ?? false;
+    const hasPendingMessages = this.currentCtx?.hasPendingMessages() ?? true;
+
+    if (isIdle && !hasPendingMessages) {
+      this.pi.sendUserMessage(content);
+      return;
+    }
+
+    this.pi.sendUserMessage(content, { deliverAs: decision.deliverAs });
   }
 
   private async readArtifactText(run: RunRecord): Promise<string | undefined> {
@@ -1163,7 +1186,7 @@ export class LazySubagentsController {
       await this.refreshProgressLines(run.id, run.launchRef);
     }
 
-    this.surfaceRestoredTerminalCompletions();
+    await this.surfaceRestoredTerminalCompletions();
     this.renderUi(ctx);
     this.refreshPoller();
     if (this.trackedLaunches.size > 0) {
