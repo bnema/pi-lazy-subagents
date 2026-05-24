@@ -135,6 +135,8 @@ export default function lazySubagentsExtension(pi: ExtensionAPI): void {
       "Workflow steps support retries=<n>, outputMode=json, and outputSchema for resilient structured handoffs.",
       "Workflow steps can reference earlier results with {{stepId.summary}}, {{stepId.output}}, {{stepId.json}}, or structured fields such as {{stepId.structured.title}}.",
       "After run/parallel/workflow, do not call wait or status right away. Return to the user or continue other work.",
+      "Do not use notify_only for review subagents, validation passes, or any child result the main agent should act on; use wake_if_idle when the main agent should resume after completion.",
+      "Use notify_only only for true fire-and-forget work where a visible DONE card is sufficient and no main-agent follow-up is expected.",
       "Use action=wait only for explicit blocking requests or non-interactive scripts.",
       "Use action=status only for human-requested health checks, suspected stalls, or after about 60s with no signal. Do not poll.",
       "Use action=result after terminal completion, pickup to inject the result, pin for durable live progress, and clear/cancel to manage runs.",
