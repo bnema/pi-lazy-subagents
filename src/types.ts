@@ -12,12 +12,7 @@ export const RUN_STATUSES = [
 ] as const;
 export type RunStatus = (typeof RUN_STATUSES)[number];
 
-export const COMPLETION_POLICIES = [
-  "notify_only",
-  "follow_up_when_idle",
-  "wake_if_idle",
-  "manual_pickup",
-] as const;
+export const COMPLETION_POLICIES = ["wake_if_idle"] as const;
 export type CompletionPolicy = (typeof COMPLETION_POLICIES)[number];
 
 export const RUN_EVENT_CATEGORIES = [

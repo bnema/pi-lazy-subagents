@@ -1,6 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-import type { CompletionPolicy, RunEvent, RunStatus } from "../types.js";
+import type { RunEvent, RunStatus } from "../types.js";
 
 export interface LauncherRuntimeContext {
   pi: ExtensionAPI;
@@ -13,7 +13,6 @@ export interface LaunchRequestBase {
   runId: string;
   title: string;
   taskSummary: string;
-  completionPolicy?: CompletionPolicy;
   cwd?: string;
 }
 

@@ -1,18 +1,11 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-import { DEFAULT_COMPLETION_POLICY, DEFAULT_WAIT_TIMEOUT_MS, MAX_WAIT_TIMEOUT_MS, TOOL_NAME } from "../src/defaults.js";
+import { DEFAULT_WAIT_TIMEOUT_MS, MAX_WAIT_TIMEOUT_MS, TOOL_NAME } from "../src/defaults.js";
 import { DEFAULT_AGENT_PROFILE_NAME, resolveAgentProfileName } from "../src/launcher/agent-profiles.js";
-import { COMPLETION_POLICIES, type CompletionPolicy } from "../src/types.js";
 import { LazySubagentsController } from "../src/orchestration/controller.js";
 import { buildLazySubagentsAgentList, buildLazySubagentsHelp, executeLazySubagentsCommand, formatLaunchAcknowledgement, formatStatusReport, formatWaitReport } from "../src/orchestration/commands.js";
 import { registerRunMessageRenderers } from "../src/ui/messages.js";
-
-const CompletionPolicySchema = Type.Unsafe<CompletionPolicy>({
-  type: "string",
-  enum: [...COMPLETION_POLICIES],
-  description: "Completion behavior. One of: notify_only, follow_up_when_idle, wake_if_idle, manual_pickup.",
-});
 
 const WorkflowStepSchema = Type.Object({
   id: Type.String({ description: "Stable step id used for dependency wiring and prompt templates such as {{research.summary}} or {{research.output}}." }),
@@ -52,7 +45,6 @@ export const ToolParamsSchema = Type.Object({
   title: Type.Optional(Type.String({
     description: "Optional short label shown in the widget, status, and message cards.",
   })),
-  completionPolicy: Type.Optional(CompletionPolicySchema),
   runId: Type.Optional(Type.String({
     description: "Existing run id for wait, status, result, pickup, clear, or cancel operations. Use this sparingly for later health checks or final-result retrieval, not tight polling loops.",
   })),
@@ -135,8 +127,7 @@ export default function lazySubagentsExtension(pi: ExtensionAPI): void {
       "Workflow steps support retries=<n>, outputMode=json, and outputSchema for resilient structured handoffs.",
       "Workflow steps can reference earlier results with {{stepId.summary}}, {{stepId.output}}, {{stepId.json}}, or structured fields such as {{stepId.structured.title}}.",
       "After run/parallel/workflow, do not call wait or status right away. Return to the user or continue other work.",
-      "Do not use notify_only for review subagents, validation passes, or any child result the main agent should act on; use wake_if_idle when the main agent should resume after completion.",
-      "Use notify_only only for true fire-and-forget work where a visible DONE card is sufficient and no main-agent follow-up is expected.",
+      "Subagents always report terminal results back to the main agent; completed, failed, paused, and attention states all return as follow-up input automatically.",
       "Use action=wait only for explicit blocking requests or non-interactive scripts.",
       "Use action=status only for human-requested health checks, suspected stalls, or after about 60s with no signal. Do not poll.",
       "Use action=result after terminal completion, pickup to inject the result, pin for durable live progress, and clear/cancel to manage runs.",
@@ -161,7 +152,6 @@ export default function lazySubagentsExtension(pi: ExtensionAPI): void {
               prompt: params.prompt,
               title,
               taskSummary: title,
-              completionPolicy: params.completionPolicy ?? DEFAULT_COMPLETION_POLICY,
             },
             ctx,
           );
@@ -178,7 +168,6 @@ export default function lazySubagentsExtension(pi: ExtensionAPI): void {
             {
               title,
               taskSummary: title,
-              completionPolicy: params.completionPolicy ?? DEFAULT_COMPLETION_POLICY,
               children: params.children.map((child) => ({
                 ...child,
                 taskSummary: child.taskSummary ?? shortTitle(child.prompt),
@@ -199,7 +188,6 @@ export default function lazySubagentsExtension(pi: ExtensionAPI): void {
             {
               title,
               taskSummary: title,
-              completionPolicy: params.completionPolicy ?? DEFAULT_COMPLETION_POLICY,
               maxConcurrency: params.maxConcurrency,
               steps: params.steps.map((step) => ({
                 ...step,

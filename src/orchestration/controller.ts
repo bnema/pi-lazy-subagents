@@ -281,10 +281,11 @@ function formatCompletionInput(run: RunRecord, summary: string, resultText?: str
 
   if (reportPath) lines.push(`Full report: ${reportPath}`, "");
   if (resultText && run.status === "completed") {
-    lines.push("Result excerpt:", truncateCompletionResult(resultText), "");
+    lines.push("Result excerpt:", truncateCompletionResult(resultText));
+    return lines.join("\n");
   }
-  lines.push(summary);
 
+  lines.push(summary);
   return lines.join("\n");
 }
 
@@ -410,7 +411,6 @@ function shouldKeepRunVisibleInUi(
   if (!isTerminalStatus(run.status)) return true;
   if (options.isPinned) return true;
   if (run.status === "failed" || run.status === "paused") return true;
-  if (run.status === "completed" && run.completionPolicy === "manual_pickup" && !options.isAcknowledged) return true;
   if (run.status !== "completed") return false;
   if (options.isAcknowledged) return false;
   if (run.completedAt === undefined) return true;
@@ -490,7 +490,7 @@ export class LazySubagentsController {
 
     const runId = this.createRunId();
     const timestamp = this.now();
-    const completionPolicy = request.completionPolicy ?? DEFAULT_COMPLETION_POLICY;
+    const completionPolicy = DEFAULT_COMPLETION_POLICY;
 
     try {
       const launch = await this.launcher.launchChild(
@@ -567,7 +567,7 @@ export class LazySubagentsController {
 
     const runId = this.createRunId();
     const timestamp = this.now();
-    const completionPolicy = request.completionPolicy ?? DEFAULT_COMPLETION_POLICY;
+    const completionPolicy = DEFAULT_COMPLETION_POLICY;
 
     try {
       const launch = await this.launcher.launchGroup(
@@ -645,7 +645,7 @@ export class LazySubagentsController {
 
     const runId = this.createRunId();
     const timestamp = this.now();
-    const completionPolicy = request.completionPolicy ?? DEFAULT_COMPLETION_POLICY;
+    const completionPolicy = DEFAULT_COMPLETION_POLICY;
 
     try {
       const launch = await this.launcher.launchWorkflow(
@@ -1137,7 +1137,6 @@ export class LazySubagentsController {
       run.status === "completed"
       && !this.registry.isPinned(run.id)
       && !this.registry.isAcknowledged(run.id)
-      && run.completionPolicy !== "manual_pickup"
       && run.completedAt !== undefined
       && now - run.completedAt <= DEFAULT_SUCCESS_VISIBILITY_GRACE_MS
     ));

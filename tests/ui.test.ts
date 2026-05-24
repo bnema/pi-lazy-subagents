@@ -32,7 +32,7 @@ function createRun(overrides: Partial<RunRecord> = {}): RunRecord {
     startedAt: now,
     updatedAt: overrides.updatedAt ?? now,
     completedAt: overrides.completedAt,
-    completionPolicy: overrides.completionPolicy ?? "follow_up_when_idle",
+    completionPolicy: overrides.completionPolicy ?? "wake_if_idle",
     sessionFile: overrides.sessionFile,
     artifactPath: overrides.artifactPath,
     resultPreview: overrides.resultPreview,

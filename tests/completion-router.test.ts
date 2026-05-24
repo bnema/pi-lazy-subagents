@@ -16,7 +16,7 @@ function createRun(overrides: Partial<RunRecord> = {}): RunRecord {
     startedAt: now,
     updatedAt: overrides.updatedAt ?? now,
     completedAt: overrides.completedAt ?? overrides.updatedAt ?? now,
-    completionPolicy: overrides.completionPolicy ?? "follow_up_when_idle",
+    completionPolicy: overrides.completionPolicy ?? "wake_if_idle",
     sessionFile: overrides.sessionFile,
     artifactPath: overrides.artifactPath,
     resultPreview: overrides.resultPreview,
@@ -50,13 +50,10 @@ function createSnapshot(runs: RunRecord[]): RunRegistrySnapshot {
 }
 
 describe("completion routing", () => {
-  test("maps completion policies into notify, follow-up, wake, or manual decisions", () => {
-    expect(decideCompletionRouting(createRun({ completionPolicy: "notify_only" }), { isIdle: true, hasPendingMessages: false }).action).toBe("notify");
-    expect(decideCompletionRouting(createRun({ completionPolicy: "follow_up_when_idle" }), { isIdle: true, hasPendingMessages: false }).action).toBe("follow_up");
-    expect(decideCompletionRouting(createRun({ completionPolicy: "manual_pickup" }), { isIdle: true, hasPendingMessages: false }).action).toBe("manual");
-    expect(decideCompletionRouting(createRun({ completionPolicy: "wake_if_idle" }), { isIdle: true, hasPendingMessages: false }).action).toBe("wake");
-    expect(decideCompletionRouting(createRun({ completionPolicy: "wake_if_idle" }), { isIdle: false, hasPendingMessages: false }).action).toBe("follow_up");
-    expect(decideCompletionRouting(createRun({ completionPolicy: "wake_if_idle" }), { isIdle: true, hasPendingMessages: true }).action).toBe("follow_up");
+  test("always routes terminal completions back to the main agent", () => {
+    expect(decideCompletionRouting(createRun(), { isIdle: true, hasPendingMessages: false }).action).toBe("wake");
+    expect(decideCompletionRouting(createRun(), { isIdle: false, hasPendingMessages: false }).action).toBe("follow_up");
+    expect(decideCompletionRouting(createRun(), { isIdle: true, hasPendingMessages: true }).action).toBe("follow_up");
   });
 });
 

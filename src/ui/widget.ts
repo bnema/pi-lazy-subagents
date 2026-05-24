@@ -9,7 +9,6 @@ import {
   GLYPH_PAUSED,
   GLYPH_PINNED,
   GLYPH_QUEUED,
-  GLYPH_READY,
   GLYPH_RUNNING,
   GLYPH_WAITING,
 } from "./glyphs.js";
@@ -40,13 +39,11 @@ function needsAttention(run: RunRecord): boolean {
   return run.attentionNeeded
     || run.status === "failed"
     || run.status === "blocked"
-    || run.status === "paused"
-    || (run.status === "completed" && run.completionPolicy === "manual_pickup");
+    || run.status === "paused";
 }
 
 function isSuccessfulInboxRun(run: RunRecord, isPinned: boolean): boolean {
   return run.status === "completed"
-    && run.completionPolicy !== "manual_pickup"
     && !run.attentionNeeded
     && !isPinned;
 }
@@ -107,9 +104,6 @@ function labelForRun(run: RunRecord, isPinned: boolean): WidgetLabel {
   if (needsAttention(run)) {
     if (run.status === "failed") return { icon: GLYPH_FAILED, label: "failed", color: "error" };
     if (run.status === "paused") return { icon: GLYPH_PAUSED, label: "paused", color: "warning" };
-    if (run.status === "completed" && run.completionPolicy === "manual_pickup") {
-      return { icon: GLYPH_READY, label: "ready", color: "warning" };
-    }
     return { icon: GLYPH_WAITING, label: "waiting", color: "warning" };
   }
 

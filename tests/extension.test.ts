@@ -84,8 +84,8 @@ describe("extension entrypoint", () => {
     expect(guidance).toContain("60s");
     expect(guidance).toContain("action=result");
     expect(guidance).toContain("Use action=workflow for dependent pipelines");
-    expect(guidance).toContain("Do not use notify_only for review subagents");
-    expect(guidance).toContain("wake_if_idle");
+    expect(guidance).toContain("Subagents always report terminal results back to the main agent");
+    expect(guidance).not.toContain("notify_only");
     expect(guidance).toContain("pin");
   });
 

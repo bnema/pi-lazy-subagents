@@ -9,7 +9,7 @@ import { LazySubagentsController } from "../src/orchestration/controller.js";
 import { createPersistedState } from "../src/state/persistence.js";
 import { RunRegistry } from "../src/state/run-registry.js";
 import type { LaunchChildRequest, LaunchResult, Launcher, LauncherRuntimeContext, NormalizedRunUpdate } from "../src/launcher/interface.js";
-import type { CompletionPolicy, RunRecord } from "../src/types.js";
+import type { RunRecord } from "../src/types.js";
 
 function createRun(overrides: Partial<RunRecord> = {}): RunRecord {
   const now = overrides.startedAt ?? 1;
@@ -23,7 +23,7 @@ function createRun(overrides: Partial<RunRecord> = {}): RunRecord {
     startedAt: now,
     updatedAt: overrides.updatedAt ?? now,
     completedAt: overrides.completedAt ?? overrides.updatedAt ?? now,
-    completionPolicy: overrides.completionPolicy ?? "follow_up_when_idle",
+    completionPolicy: overrides.completionPolicy ?? "wake_if_idle",
     sessionFile: overrides.sessionFile,
     artifactPath: overrides.artifactPath,
     resultPreview: overrides.resultPreview,
@@ -216,7 +216,6 @@ describe("LazySubagentsController", () => {
       status: "completed",
       updatedAt: 10,
       completedAt: 10,
-      completionPolicy: "manual_pickup",
     }));
 
     const persisted = createPersistedState(registry.serialize(), 10);
@@ -245,7 +244,6 @@ describe("LazySubagentsController", () => {
       status: "completed",
       updatedAt: 10,
       completedAt: 10,
-      completionPolicy: "manual_pickup",
     }));
 
     const secondRegistry = new RunRegistry();
@@ -255,7 +253,6 @@ describe("LazySubagentsController", () => {
       status: "completed",
       updatedAt: 20,
       completedAt: 20,
-      completionPolicy: "manual_pickup",
     }));
 
     const branchEntries = [
@@ -287,7 +284,6 @@ describe("LazySubagentsController", () => {
       status: "completed",
       updatedAt: 130,
       completedAt: 130,
-      completionPolicy: "wake_if_idle",
       resultPreview: "Found 3 issues",
     }));
 
@@ -320,7 +316,6 @@ describe("LazySubagentsController", () => {
       title: "Review auth diff",
       taskSummary: "Review auth diff",
       prompt: "Review it",
-      completionPolicy: "wake_if_idle",
     }, ctx);
 
     await controller.handleSessionShutdown(ctx);
@@ -368,7 +363,6 @@ describe("LazySubagentsController", () => {
         title: "Review auth diff",
         taskSummary: "Review auth diff",
         prompt: "Review the auth diff and summarize the issues.",
-        completionPolicy: "follow_up_when_idle" satisfies CompletionPolicy,
       },
       ctx,
     );
@@ -398,8 +392,48 @@ describe("LazySubagentsController", () => {
     expect(userMessages[0]?.content).toContain("[DONE] Review auth diff");
     expect(userMessages[0]?.content).toContain(`Full report: ${artifactPath}`);
     expect(userMessages[0]?.content).toContain("Result excerpt:\nFull reviewer report");
-    expect(userMessages[0]?.content).toContain("Lazy subagent update");
+    expect(userMessages[0]?.content).not.toContain("Lazy subagent update");
     expect(userMessages[0]?.content).not.toContain("- Summary: Found 3 issues in auth.ts");
+  });
+
+  test("routes failed runs back to the main agent even from legacy notify-only state", async () => {
+    const legacyPersisted = {
+      version: 1,
+      updatedAt: 140,
+      surfacedCompletionKeys: [],
+      acknowledgedRunIds: [],
+      pinnedRunIds: [],
+      runs: [{
+        id: "failed-run",
+        kind: "single",
+        agent: "reviewer",
+        title: "Review failed",
+        taskSummary: "Review failed",
+        status: "failed",
+        startedAt: 100,
+        updatedAt: 140,
+        completedAt: 140,
+        completionPolicy: "notify_only",
+        errorPreview: "review process exited 1",
+        attentionNeeded: true,
+        recentEvents: [],
+      }],
+    };
+
+    const { api, userMessages } = createPi();
+    const controller = new LazySubagentsController(api as any, { launcher: new FakeLauncher(), now: () => 200 });
+    const { ctx } = createContext({
+      isIdle: true,
+      hasPendingMessages: false,
+      branchEntries: [{ type: "custom", customType: PERSISTED_STATE_ENTRY, data: legacyPersisted }],
+    });
+
+    await controller.handleSessionStart(ctx);
+
+    expect(userMessages).toHaveLength(1);
+    expect(userMessages[0]?.content).toContain("[FAILED] Review failed");
+    expect(userMessages[0]?.content).toContain("review process exited 1");
+    expect(userMessages[0]?.options).toBeUndefined();
   });
 
   test("waitForRunSignal blocks via polling until a run is completed or needs attention", async () => {
@@ -586,11 +620,10 @@ describe("LazySubagentsController", () => {
     expect(widgets.at(-1)?.[1]?.join("\n") ?? "").not.toContain("Done recent");
   });
 
-  test("hides acknowledged successes from live UI but keeps manual-pickup, pinned, and failed runs visible", async () => {
+  test("hides acknowledged successes from live UI but keeps pinned and failed runs visible", async () => {
     const registry = new RunRegistry();
     registry.upsert(createRun({ id: "done-hidden", status: "completed", title: "Done hidden", updatedAt: 100, completedAt: 100 }));
     registry.acknowledgeRun("done-hidden");
-    registry.upsert(createRun({ id: "done-manual", status: "completed", title: "Done manual", updatedAt: 100, completedAt: 100, completionPolicy: "manual_pickup" }));
     registry.upsert(createRun({ id: "done-pinned", status: "completed", title: "Done pinned", updatedAt: 100, completedAt: 100 }));
     registry.pinRun("done-pinned");
     registry.upsert(createRun({ id: "failed-visible", status: "failed", title: "Failed visible", updatedAt: 100, completedAt: 100, errorPreview: "boom", attentionNeeded: true }));
@@ -608,7 +641,6 @@ describe("LazySubagentsController", () => {
 
     const widgetText = widgets.at(-1)?.[1]?.join("\n") ?? "";
     expect(widgetText).not.toContain("Done hidden");
-    expect(widgetText).toContain("Done manual");
     expect(widgetText).toContain("Done pinned");
     expect(widgetText).toContain("Failed visible");
   });
