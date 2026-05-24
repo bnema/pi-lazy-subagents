@@ -18,11 +18,7 @@ Current features:
 - launch, completion, failure, and attention cards;
 - blocking `wait` when explicitly needed;
 - result retrieval and pickup;
-- completion policies:
-  - `notify_only`
-  - `follow_up_when_idle`
-  - `wake_if_idle`
-  - `manual_pickup`
+- automatic terminal reporting back to the main agent;
 - manual controls for wait, status, result, pickup, clear, and cancel;
 - self-contained direct launcher; `pi-subagents` is **not required**.
 
@@ -45,7 +41,7 @@ pi --no-extensions -e /absolute/path/to/pi-lazy-subagents/extensions/index.ts
 ```text
 /lazy-subagents help
 /lazy-subagents list
-/lazy-subagents run <agent> <prompt> [--policy POLICY] [--title TITLE]
+/lazy-subagents run <agent> <prompt> [--title TITLE]
 /lazy-subagents status [runId]
 /lazy-subagents wait [runId] [--timeout-ms MS]
 /lazy-subagents result <runId>
@@ -59,7 +55,7 @@ Examples:
 
 ```text
 /lazy-subagents list
-/lazy-subagents run scout "Inspect the package layout" --policy notify_only
+/lazy-subagents run scout "Inspect the package layout"
 /lazy-subagents status
 /lazy-subagents wait [runId]
 /lazy-subagents result <runId>
@@ -121,7 +117,7 @@ lazy_subagents action=workflow maxConcurrency=2 steps=[{id:"research",agent:"sco
 - `result` reads final output; it is not a live tail.
 - `pickup` injects a completed result into chat.
 - `pin` keeps live progress visible without repeated status checks.
-- completed successes auto-hide after a grace window; failed, paused, manual-pickup, and pinned runs stay until resolved or cleared.
+- completed successes auto-hide after a grace window; failed, paused, and pinned runs stay until resolved or cleared.
 
 ## Manual smoke test
 
@@ -131,7 +127,7 @@ lazy_subagents action=workflow maxConcurrency=2 steps=[{id:"research",agent:"sco
 2. Run:
 
    ```text
-   /lazy-subagents run delegate "Reply with exactly DONE and nothing else." --policy notify_only
+   /lazy-subagents run delegate "Reply with exactly DONE and nothing else."
    ```
 
 3. Confirm:
@@ -176,7 +172,7 @@ Example non-interactive launch + wait + result flow:
 
 ```bash
 SMOKE_DIR=$(mktemp -d)
-RUN_OUT=$(pi --session-dir "$SMOKE_DIR" --no-extensions -e ./extensions/index.ts --tools lazy_subagents -p "Use lazy_subagents with action=run, agent=delegate, prompt='Reply with exactly DONE and nothing else.', completionPolicy='notify_only'. Answer only with the exact tool result text.")
+RUN_OUT=$(pi --session-dir "$SMOKE_DIR" --no-extensions -e ./extensions/index.ts --tools lazy_subagents -p "Use lazy_subagents with action=run, agent=delegate, prompt='Reply with exactly DONE and nothing else.'. Answer only with the exact tool result text.")
 RUN_ID=$(printf '%s' "$RUN_OUT" | grep -oE '[0-9a-f-]{36}' | head -n1)
 pi --session-dir "$SMOKE_DIR" -c --no-extensions -e ./extensions/index.ts --tools lazy_subagents -p "Use lazy_subagents with action=wait, runId='$RUN_ID' and answer only with its result."
 pi --session-dir "$SMOKE_DIR" -c --no-extensions -e ./extensions/index.ts --tools lazy_subagents -p "Use lazy_subagents with action=result, runId='$RUN_ID' and answer only with its result."
@@ -191,7 +187,7 @@ pi --session-dir "$SMOKE_DIR" -c --no-extensions -e ./extensions/index.ts --tool
 Example workflow smoke test:
 
 ```bash
-pi --no-session --no-extensions -e ./extensions/index.ts --tools lazy_subagents -p "Use lazy_subagents with action=workflow, completionPolicy='notify_only', maxConcurrency=2, steps=[{id:'research',agent:'delegate',retries:1,outputMode:'json',outputSchema:'{ summary: string, next: string }',prompt:'Reply with exactly {\"summary\":\"RESEARCH\",\"next\":\"PLAN\"} and nothing else.'},{id:'plan',agent:'delegate',dependsOn:['research'],prompt:'Reply with exactly PLAN after reading {{research.json}} and nothing else.'}] and answer only with the exact tool result text."
+pi --no-session --no-extensions -e ./extensions/index.ts --tools lazy_subagents -p "Use lazy_subagents with action=workflow, maxConcurrency=2, steps=[{id:'research',agent:'delegate',retries:1,outputMode:'json',outputSchema:'{ summary: string, next: string }',prompt:'Reply with exactly {\"summary\":\"RESEARCH\",\"next\":\"PLAN\"} and nothing else.'},{id:'plan',agent:'delegate',dependsOn:['research'],prompt:'Reply with exactly PLAN after reading {{research.json}} and nothing else.'}] and answer only with the exact tool result text."
 ```
 
 ## Development

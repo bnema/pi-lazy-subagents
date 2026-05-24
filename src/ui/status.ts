@@ -29,7 +29,6 @@ function needsAttention(snapshot: RunRegistrySnapshot): number {
       || run.status === "failed"
       || run.status === "blocked"
       || run.status === "paused"
-      || (run.status === "completed" && run.completionPolicy === "manual_pickup")
   )).length;
 }
 
@@ -42,7 +41,7 @@ export function buildFooterStatus(snapshot: RunRegistrySnapshot, theme?: StatusT
 
   const liveCount = countLiveRuns(snapshot);
   const attentionCount = needsAttention(snapshot);
-  const inboxCount = snapshot.recentRuns.filter((run) => run.status === "completed" && !run.attentionNeeded && run.completionPolicy !== "manual_pickup").length;
+  const inboxCount = snapshot.recentRuns.filter((run) => run.status === "completed" && !run.attentionNeeded).length;
 
   const parts = [
     `${colorize(GLYPH_LAZY_SUBAGENTS, "accent", theme)} ${bold("lazy", theme)}`,

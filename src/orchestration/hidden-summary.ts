@@ -12,7 +12,6 @@ function linesForRun(run: RunRecord, options: { includePreview?: boolean } = {})
     `- Agent: ${run.agent}`,
     `- Title: ${run.title || run.taskSummary}`,
     `- Status: ${run.status}`,
-    `- Completion policy: ${run.completionPolicy}`,
   ];
 
   const preview = run.resultPreview ?? run.errorPreview;

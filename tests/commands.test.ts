@@ -15,7 +15,7 @@ function createRun(overrides: Partial<RunRecord> = {}): RunRecord {
     startedAt: now,
     updatedAt: overrides.updatedAt ?? now,
     completedAt: overrides.completedAt ?? overrides.updatedAt ?? now,
-    completionPolicy: overrides.completionPolicy ?? "follow_up_when_idle",
+    completionPolicy: overrides.completionPolicy ?? "wake_if_idle",
     sessionFile: overrides.sessionFile,
     artifactPath: overrides.artifactPath,
     resultPreview: overrides.resultPreview,
@@ -97,11 +97,10 @@ describe("lazy-subagents command parsing", () => {
   });
 
   test("parses list, run, status, wait, result, pickup, pin, clear, and cancel commands", () => {
-    expect(parseLazySubagentsCommand('run reviewer "Review the auth diff" --policy manual_pickup --title "Review auth diff"')).toEqual({
+    expect(parseLazySubagentsCommand('run reviewer "Review the auth diff" --policy ignored --title "Review auth diff"')).toEqual({
       action: "run",
       agent: "reviewer",
       prompt: "Review the auth diff",
-      completionPolicy: "manual_pickup",
       title: "Review auth diff",
     });
 

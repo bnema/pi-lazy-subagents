@@ -2,7 +2,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { listAvailableAgentProfiles, resolveAgentProfileName } from "../launcher/agent-profiles.js";
 import { DEFAULT_WAIT_TIMEOUT_MS, MAX_WAIT_TIMEOUT_MS } from "../defaults.js";
-import type { CompletionPolicy, RunEvent, RunRecord, RunRegistrySnapshot } from "../types.js";
+import type { RunEvent, RunRecord, RunRegistrySnapshot } from "../types.js";
 import { formatAge, formatCompactThousands, formatDuration } from "../utils/time.js";
 import type { LazySubagentsController } from "./controller.js";
 
@@ -23,14 +23,7 @@ export type ParsedLazySubagentsCommand =
   | { action: "pin"; runId: string }
   | { action: "cancel"; runId: string }
   | { action: "clear"; scope: "completed" | "all"; runId?: string }
-  | { action: "run"; agent: string; prompt: string; completionPolicy?: CompletionPolicy; title?: string };
-
-const COMPLETION_POLICIES = new Set<CompletionPolicy>([
-  "notify_only",
-  "follow_up_when_idle",
-  "wake_if_idle",
-  "manual_pickup",
-]);
+  | { action: "run"; agent: string; prompt: string; title?: string };
 
 function splitCliArgs(input: string): string[] {
   const args: string[] = [];
@@ -161,20 +154,16 @@ export function parseLazySubagentsCommand(input: string): ParsedLazySubagentsCom
     const agent = tokens.shift();
     if (!agent) return { action: "help" };
 
-    let completionPolicy: CompletionPolicy | undefined;
     let title: string | undefined;
     const promptParts: string[] = [];
 
     while (tokens.length > 0) {
       const token = tokens.shift()!;
       if (token === "--policy") {
-        const value = tokens.shift();
-        if (value && COMPLETION_POLICIES.has(value as CompletionPolicy)) completionPolicy = value as CompletionPolicy;
+        tokens.shift();
         continue;
       }
       if (token.startsWith("--policy=")) {
-        const value = token.slice("--policy=".length);
-        if (COMPLETION_POLICIES.has(value as CompletionPolicy)) completionPolicy = value as CompletionPolicy;
         continue;
       }
       if (token === "--title") {
@@ -190,7 +179,7 @@ export function parseLazySubagentsCommand(input: string): ParsedLazySubagentsCom
 
     const prompt = promptParts.join(" ").trim();
     if (!prompt) return { action: "help" };
-    return { action, agent, prompt, completionPolicy, title };
+    return { action, agent, prompt, title };
   }
 
   return { action: "help" };
@@ -288,7 +277,7 @@ export function buildLazySubagentsHelp(): string {
     "Slash command usage:",
     "  /lazy-subagents help",
     "  /lazy-subagents list",
-    "  /lazy-subagents run <agent> <prompt> [--policy POLICY] [--title TITLE]",
+    "  /lazy-subagents run <agent> <prompt> [--title TITLE]",
     "  (parallel/workflow launches are available through lazy_subagents tool actions)",
     "  /lazy-subagents status [runId]",
     "  /lazy-subagents wait [runId] [--timeout-ms MS]",
@@ -301,9 +290,9 @@ export function buildLazySubagentsHelp(): string {
     "Tool usage:",
     "  lazy_subagents action=help",
     "  lazy_subagents action=list",
-    "  lazy_subagents action=run agent=<agent> prompt=<prompt> [completionPolicy=<policy>] [title=<title>]",
-    "  lazy_subagents action=parallel children=[{agent,prompt,taskSummary?,cwd?}, ...] [completionPolicy=<policy>] [title=<title>]",
-    "  lazy_subagents action=workflow steps=[{id,agent,prompt,taskSummary?,dependsOn?,retries?,outputMode?,outputSchema?,cwd?}, ...] [maxConcurrency=<n>] [completionPolicy=<policy>] [title=<title>]",
+    "  lazy_subagents action=run agent=<agent> prompt=<prompt> [title=<title>]",
+    "  lazy_subagents action=parallel children=[{agent,prompt,taskSummary?,cwd?}, ...] [title=<title>]",
+    "  lazy_subagents action=workflow steps=[{id,agent,prompt,taskSummary?,dependsOn?,retries?,outputMode?,outputSchema?,cwd?}, ...] [maxConcurrency=<n>] [title=<title>]",
     "  lazy_subagents action=status [runId=<runId>]",
     `  lazy_subagents action=wait [runId=<runId>] [timeoutMs=${DEFAULT_WAIT_TIMEOUT_MS}]`,
     "  lazy_subagents action=result runId=<runId>",
@@ -382,7 +371,6 @@ export async function executeLazySubagentsCommand(
           prompt: parsed.prompt,
           title,
           taskSummary: title,
-          completionPolicy: parsed.completionPolicy,
         },
         ctx,
       );

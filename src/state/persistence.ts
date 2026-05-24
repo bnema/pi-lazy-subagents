@@ -72,13 +72,15 @@ function normalizeRunRecord(value: unknown): RunRecord | undefined {
   const completionPolicy = asString(value.completionPolicy);
   const attentionNeeded = typeof value.attentionNeeded === "boolean" ? value.attentionNeeded : false;
 
-  if (!id || !kind || !agent || !title || !taskSummary || !status || startedAt === undefined || updatedAt === undefined || !completionPolicy) {
+  if (!id || !kind || !agent || !title || !taskSummary || !status || startedAt === undefined || updatedAt === undefined) {
     return undefined;
   }
 
   if (!isRunKind(kind)) return undefined;
   if (!isRunStatus(status)) return undefined;
-  if (!isCompletionPolicy(completionPolicy)) return undefined;
+  if (completionPolicy && !isCompletionPolicy(completionPolicy)) {
+    // Legacy persisted policy values are accepted but normalized below. Subagents now always report back.
+  }
 
   const recentEvents: RunEvent[] = Array.isArray(value.recentEvents)
     ? value.recentEvents
@@ -121,7 +123,7 @@ function normalizeRunRecord(value: unknown): RunRecord | undefined {
     startedAt,
     updatedAt,
     completedAt: asNumber(value.completedAt),
-    completionPolicy,
+    completionPolicy: "wake_if_idle",
     sessionFile: asString(value.sessionFile),
     artifactPath: asString(value.artifactPath),
     resultPreview: asString(value.resultPreview),
