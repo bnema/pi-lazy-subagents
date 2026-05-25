@@ -1129,12 +1129,15 @@ export class LazySubagentsController {
     const isIdle = this.currentCtx?.isIdle() ?? false;
     const hasPendingMessages = this.currentCtx?.hasPendingMessages() ?? true;
 
-    if (isIdle && !hasPendingMessages) {
-      this.pi.sendUserMessage(content);
-      return;
-    }
-
-    this.pi.sendUserMessage(content, { deliverAs: decision.deliverAs });
+    this.pi.sendMessage({
+      customType: run.status === "failed" ? MESSAGE_TYPE_FAILURE : run.status === "paused" ? MESSAGE_TYPE_ATTENTION : MESSAGE_TYPE_COMPLETION,
+      content,
+      display: false,
+      details: { runId: run.id, status: run.status, routedCompletion: true },
+    }, {
+      triggerTurn: isIdle && !hasPendingMessages,
+      deliverAs: decision.deliverAs,
+    });
   }
 
   private async readArtifactText(run: RunRecord): Promise<string | undefined> {

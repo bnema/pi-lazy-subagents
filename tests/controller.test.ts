@@ -171,6 +171,10 @@ function createPi() {
   };
 }
 
+function hiddenCompletionMessages(messages: Array<{ message: any; options: any }>): Array<{ message: any; options: any }> {
+  return messages.filter((entry) => entry.message.customType === MESSAGE_TYPE_COMPLETION && entry.message.display === false);
+}
+
 describe("LazySubagentsController", () => {
   test("restores persisted state from the current branch instead of stale session-global entries", async () => {
     const branchRegistry = new RunRegistry();
@@ -291,7 +295,7 @@ describe("LazySubagentsController", () => {
       resultPreview: "Found 3 issues",
     }));
 
-    const { api, userMessages } = createPi();
+    const { api, messages, userMessages } = createPi();
     const controller = new LazySubagentsController(api as any, { launcher: new FakeLauncher(), now: () => 200 });
     const { ctx } = createContext({
       isIdle: true,
@@ -301,10 +305,12 @@ describe("LazySubagentsController", () => {
 
     await controller.handleSessionStart(ctx);
 
-    expect(userMessages).toHaveLength(1);
-    expect(userMessages[0]?.content).toContain("[DONE] Review finished offline");
-    expect(userMessages[0]?.content).toContain("Lazy subagent update");
-    expect(userMessages[0]?.options).toBeUndefined();
+    expect(userMessages).toHaveLength(0);
+    const wakeMessages = hiddenCompletionMessages(messages);
+    expect(wakeMessages).toHaveLength(1);
+    expect(wakeMessages[0]?.message.content).toContain("[DONE] Review finished offline");
+    expect(wakeMessages[0]?.message.content).toContain("Lazy subagent update");
+    expect(wakeMessages[0]?.options).toEqual({ triggerTurn: true, deliverAs: "steer" });
   });
 
   test("defers completion surfacing while the main session context is unavailable", async () => {
@@ -345,10 +351,12 @@ describe("LazySubagentsController", () => {
 
     await controller.handleSessionStart(restoredCtx);
 
-    expect(userMessages).toHaveLength(1);
-    expect(userMessages[0]?.content).toContain("[DONE] Review auth diff");
-    expect(userMessages[0]?.content).toContain("Lazy subagent update");
-    expect(userMessages[0]?.options).toBeUndefined();
+    expect(userMessages).toHaveLength(0);
+    const wakeMessages = hiddenCompletionMessages(messages);
+    expect(wakeMessages).toHaveLength(1);
+    expect(wakeMessages[0]?.message.content).toContain("[DONE] Review auth diff");
+    expect(wakeMessages[0]?.message.content).toContain("Lazy subagent update");
+    expect(wakeMessages[0]?.options).toEqual({ triggerTurn: true, deliverAs: "steer" });
   });
 
   test("launches a child, emits a launch card, persists state, and routes completion once", async () => {
@@ -391,17 +399,19 @@ describe("LazySubagentsController", () => {
     await controller.pollOnce();
 
     expect(controller.getSnapshot().recentRuns[0]?.status).toBe("completed");
-    expect(messages.filter((entry) => entry.message.customType === MESSAGE_TYPE_COMPLETION)).toHaveLength(1);
-    expect(userMessages).toHaveLength(1);
-    expect(userMessages[0]?.content).toContain("[DONE] Review auth diff");
-    expect(userMessages[0]?.content).toContain(`Full report: ${artifactPath}`);
-    expect(userMessages[0]?.content).toContain("Result excerpt:\nFull reviewer report");
-    expect(userMessages[0]?.content).not.toContain("Lazy subagent update");
-    expect(userMessages[0]?.content).not.toContain("- Summary: Found 3 issues in auth.ts");
+    expect(messages.filter((entry) => entry.message.customType === MESSAGE_TYPE_COMPLETION && entry.message.display === true)).toHaveLength(1);
+    expect(userMessages).toHaveLength(0);
+    const wakeMessages = hiddenCompletionMessages(messages);
+    expect(wakeMessages).toHaveLength(1);
+    expect(wakeMessages[0]?.message.content).toContain("[DONE] Review auth diff");
+    expect(wakeMessages[0]?.message.content).toContain(`Full report: ${artifactPath}`);
+    expect(wakeMessages[0]?.message.content).toContain("Result excerpt:\nFull reviewer report");
+    expect(wakeMessages[0]?.message.content).not.toContain("Lazy subagent update");
+    expect(wakeMessages[0]?.message.content).not.toContain("- Summary: Found 3 issues in auth.ts");
   });
 
   test("routes parallel group completion with all child report links and one aggregate summary", async () => {
-    const { api, userMessages } = createPi();
+    const { api, messages, userMessages } = createPi();
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-lazy-subagents-group-"));
     const resultPath = path.join(tempDir, "group-1.json");
     const groupReport = path.join(tempDir, "group-report.md");
@@ -456,19 +466,21 @@ describe("LazySubagentsController", () => {
 
     await controller.pollOnce();
 
-    expect(userMessages).toHaveLength(1);
-    expect(userMessages[0]?.content).toContain("[DONE] Parallel auth review");
-    expect(userMessages[0]?.content).toContain("Reports:");
-    expect(userMessages[0]?.content).toContain(`- Full report: ${groupReport}`);
-    expect(userMessages[0]?.content).toContain(`- Result file: ${resultPath}`);
-    expect(userMessages[0]?.content).toContain(`- scout / Inspect auth: ${reportA}`);
-    expect(userMessages[0]?.content).toContain(`- reviewer / Review auth: ${reportB}`);
-    expect(userMessages[0]?.content).toContain(`- verifier / Verify auth: ${reportC}`);
-    expect(userMessages[0]?.content).toContain("Summary:\nThree agents agree: fix auth coupling, race risk, and missing test coverage.");
-    expect(userMessages[0]?.content).toContain("Result excerpt:");
-    expect(userMessages[0]?.content).toContain("[scout]\nScout found auth coupling");
-    expect(userMessages[0]?.content).toContain("[review]\nReviewer found race risk");
-    expect(userMessages[0]?.content).toContain("[verify]\nVerifier found missing test");
+    expect(userMessages).toHaveLength(0);
+    const wakeMessages = hiddenCompletionMessages(messages);
+    expect(wakeMessages).toHaveLength(1);
+    expect(wakeMessages[0]?.message.content).toContain("[DONE] Parallel auth review");
+    expect(wakeMessages[0]?.message.content).toContain("Reports:");
+    expect(wakeMessages[0]?.message.content).toContain(`- Full report: ${groupReport}`);
+    expect(wakeMessages[0]?.message.content).toContain(`- Result file: ${resultPath}`);
+    expect(wakeMessages[0]?.message.content).toContain(`- scout / Inspect auth: ${reportA}`);
+    expect(wakeMessages[0]?.message.content).toContain(`- reviewer / Review auth: ${reportB}`);
+    expect(wakeMessages[0]?.message.content).toContain(`- verifier / Verify auth: ${reportC}`);
+    expect(wakeMessages[0]?.message.content).toContain("Summary:\nThree agents agree: fix auth coupling, race risk, and missing test coverage.");
+    expect(wakeMessages[0]?.message.content).toContain("Result excerpt:");
+    expect(wakeMessages[0]?.message.content).toContain("[scout]\nScout found auth coupling");
+    expect(wakeMessages[0]?.message.content).toContain("[review]\nReviewer found race risk");
+    expect(wakeMessages[0]?.message.content).toContain("[verify]\nVerifier found missing test");
   });
 
   test("routes failed runs back to the main agent even from legacy notify-only state", async () => {
@@ -495,7 +507,7 @@ describe("LazySubagentsController", () => {
       }],
     };
 
-    const { api, userMessages } = createPi();
+    const { api, messages, userMessages } = createPi();
     const controller = new LazySubagentsController(api as any, { launcher: new FakeLauncher(), now: () => 200 });
     const { ctx } = createContext({
       isIdle: true,
@@ -505,10 +517,12 @@ describe("LazySubagentsController", () => {
 
     await controller.handleSessionStart(ctx);
 
-    expect(userMessages).toHaveLength(1);
-    expect(userMessages[0]?.content).toContain("[FAILED] Review failed");
-    expect(userMessages[0]?.content).toContain("review process exited 1");
-    expect(userMessages[0]?.options).toBeUndefined();
+    expect(userMessages).toHaveLength(0);
+    const wakeMessages = messages.filter((entry) => entry.message.customType === MESSAGE_TYPE_FAILURE && entry.message.display === false);
+    expect(wakeMessages).toHaveLength(1);
+    expect(wakeMessages[0]?.message.content).toContain("[FAILED] Review failed");
+    expect(wakeMessages[0]?.message.content).toContain("review process exited 1");
+    expect(wakeMessages[0]?.options).toEqual({ triggerTurn: true, deliverAs: "steer" });
   });
 
   test("waitForRunSignal blocks via polling until a run is completed or needs attention", async () => {
@@ -1331,7 +1345,7 @@ describe("LazySubagentsController", () => {
   });
 
   test("supports result retrieval, pickup injection, cancel, and clear control actions", async () => {
-    const { api, userMessages } = createPi();
+    const { api, messages, userMessages } = createPi();
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-lazy-subagents-controller-"));
     const artifactPath = path.join(tempDir, "run-1-output.log");
     await fs.writeFile(artifactPath, "Full reviewer result", "utf8");
@@ -1364,7 +1378,7 @@ describe("LazySubagentsController", () => {
     expect(await controller.pickupRun("run-1")).toBe(true);
     const pickupMessage = userMessages.find((entry) => typeof entry.content === "string" && entry.content.includes("Lazy subagent result"));
     expect(pickupMessage?.content).toContain("Full reviewer result");
-    expect(userMessages.some((entry) => typeof entry.content === "string" && entry.content.includes("[DONE] Review auth diff"))).toBe(true);
+    expect(hiddenCompletionMessages(messages).some((entry) => typeof entry.message.content === "string" && entry.message.content.includes("[DONE] Review auth diff"))).toBe(true);
 
     expect(await controller.cancelRun("run-1")).toBe(false);
 
