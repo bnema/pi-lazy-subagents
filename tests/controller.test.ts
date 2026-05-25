@@ -483,6 +483,64 @@ describe("LazySubagentsController", () => {
     expect(wakeMessages[0]?.message.content).toContain("[verify]\nVerifier found missing test");
   });
 
+  test("routes group completion parent reports even when child artifact paths are missing", async () => {
+    const { api, messages, userMessages } = createPi();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-lazy-subagents-group-no-child-reports-"));
+    const resultPath = path.join(tempDir, "group-1.json");
+    const groupReport = path.join(tempDir, "group-report.md");
+    await fs.writeFile(groupReport, "Aggregate group report", "utf8");
+    await fs.writeFile(resultPath, JSON.stringify({
+      id: "group-1",
+      runId: "group-1",
+      state: "complete",
+      success: true,
+      summary: "Aggregate only summary.",
+      timestamp: 130,
+      results: [
+        { stepId: "scout", taskSummary: "Inspect auth", agent: "scout", output: "Scout found auth coupling" },
+        { stepId: "review", taskSummary: "Review auth", agent: "reviewer", output: "Reviewer found race risk" },
+      ],
+    }), "utf8");
+
+    const launcher = new FakeLauncher();
+    launcher.launchResults.set("group-1", { resultPath });
+    const controller = new LazySubagentsController(api as any, { launcher, createRunId: () => "group-1", now: () => 100 });
+    const { ctx } = createContext({ isIdle: true, hasPendingMessages: false });
+
+    await controller.handleSessionStart(ctx);
+    await controller.launchGroup(
+      {
+        title: "Parallel auth review",
+        taskSummary: "Parallel auth review",
+        children: [
+          { agent: "scout", prompt: "Inspect auth", taskSummary: "Inspect auth" },
+          { agent: "reviewer", prompt: "Review auth", taskSummary: "Review auth" },
+        ],
+      },
+      ctx,
+    );
+
+    launcher.updates.set("group-1", {
+      runId: "group-1",
+      status: "completed",
+      updatedAt: 130,
+      completedAt: 130,
+      artifactPath: groupReport,
+      resultPreview: "Aggregate only summary.",
+    });
+
+    await controller.pollOnce();
+
+    expect(userMessages).toHaveLength(0);
+    const wakeMessages = hiddenCompletionMessages(messages);
+    expect(wakeMessages).toHaveLength(1);
+    expect(wakeMessages[0]?.message.content).toContain("Reports:");
+    expect(wakeMessages[0]?.message.content).toContain(`- Full report: ${groupReport}`);
+    expect(wakeMessages[0]?.message.content).toContain(`- Result file: ${resultPath}`);
+    expect(wakeMessages[0]?.message.content).toContain("[scout]\nScout found auth coupling");
+    expect(wakeMessages[0]?.message.content).toContain("[review]\nReviewer found race risk");
+  });
+
   test("routes failed runs back to the main agent even from legacy notify-only state", async () => {
     const legacyPersisted = {
       version: 1,
@@ -1317,6 +1375,30 @@ describe("LazySubagentsController", () => {
 
     expect(controller.getSnapshot().recentRuns[0]?.status).toBe("failed");
     expect(messages.at(-1)?.message.customType).toBe(MESSAGE_TYPE_FAILURE);
+  });
+
+  test("ignores malformed array result files and falls back to artifact text", async () => {
+    const { api } = createPi();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-lazy-subagents-controller-"));
+    const resultPath = path.join(tempDir, "run-array.json");
+    const artifactPath = path.join(tempDir, "run-array.log");
+    await fs.writeFile(resultPath, "[]", "utf8");
+    await fs.writeFile(artifactPath, "Artifact fallback", "utf8");
+
+    const controller = new LazySubagentsController(api as any, { launcher: new FakeLauncher(), createRunId: () => "ignored", now: () => 210 });
+    const { ctx } = createContext({ isIdle: true, hasPendingMessages: false });
+
+    await controller.handleSessionStart(ctx);
+    (controller as any).registry.upsert(createRun({
+      id: "run-array",
+      kind: "workflow",
+      status: "completed",
+      artifactPath,
+      launchRef: { runId: "run-array", asyncId: "run-array", resultPath },
+      recentEvents: [],
+    }));
+
+    await expect(controller.getRunResult("run-array")).resolves.toBe("Artifact fallback");
   });
 
   test("prefers step errors when a step output is blank", async () => {

@@ -295,7 +295,7 @@ function truncateCompletionResult(text: string): string {
   return `${text.slice(0, COMPLETION_RESULT_EXCERPT_MAX_CHARS).trimEnd()}\n\n[Result excerpt truncated. Read the full report path above.]`;
 }
 
-function collectCompletionReports(run: RunRecord, childReports: CompletionReportLink[]): CompletionReportLink[] {
+function collectCompletionReports(run: RunRecord, childReports: CompletionReportLink[], includeParentReports: boolean): CompletionReportLink[] {
   const reports: CompletionReportLink[] = [];
   const seen = new Set<string>();
 
@@ -306,7 +306,7 @@ function collectCompletionReports(run: RunRecord, childReports: CompletionReport
     reports.push({ label, path: normalizedPath });
   };
 
-  if (childReports.length > 0) {
+  if (includeParentReports) {
     addReport("Full report", run.artifactPath);
     addReport("Result file", run.launchRef?.resultPath);
     addReport("Session file", run.sessionFile);
@@ -326,7 +326,8 @@ function formatCompletionInput(run: RunRecord, summary: string, result?: Complet
       ? "FAILED"
       : "ATTENTION";
   const reportPath = run.artifactPath ?? run.launchRef?.resultPath ?? run.sessionFile;
-  const reports = collectCompletionReports(run, result?.reports ?? []);
+  const includeParentReports = Boolean(result && run.kind !== "single");
+  const reports = collectCompletionReports(run, result?.reports ?? [], includeParentReports);
   const lines = [`[${signal}] ${run.title || run.taskSummary}`, ""];
 
   if (reports.length > 0) {
@@ -1157,8 +1158,8 @@ export class LazySubagentsController {
 
     try {
       const raw = await fsp.readFile(resultPath, "utf8");
-      const parsed = JSON.parse(raw) as ParsedRunResult;
-      return parsed && typeof parsed === "object" ? parsed : undefined;
+      const parsed = JSON.parse(raw) as unknown;
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as ParsedRunResult : undefined;
     } catch {
       return undefined;
     }
