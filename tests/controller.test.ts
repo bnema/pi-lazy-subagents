@@ -63,11 +63,15 @@ class FakeLauncher implements Launcher {
 
   async launchGroup(request: { runId: string }): Promise<LaunchResult> {
     if (this.launchGroupError) throw this.launchGroupError;
+    const override = this.launchResults.get(request.runId) ?? {};
     return {
       runId: request.runId,
       asyncId: request.runId,
-      asyncDir: `/tmp/${request.runId}`,
-      resultPath: `/tmp/results/${request.runId}.json`,
+      asyncDir: override.asyncDir ?? `/tmp/${request.runId}`,
+      resultPath: override.resultPath ?? `/tmp/results/${request.runId}.json`,
+      sessionFile: override.sessionFile,
+      artifactPath: override.artifactPath,
+      model: override.model,
     };
   }
 
@@ -394,6 +398,77 @@ describe("LazySubagentsController", () => {
     expect(userMessages[0]?.content).toContain("Result excerpt:\nFull reviewer report");
     expect(userMessages[0]?.content).not.toContain("Lazy subagent update");
     expect(userMessages[0]?.content).not.toContain("- Summary: Found 3 issues in auth.ts");
+  });
+
+  test("routes parallel group completion with all child report links and one aggregate summary", async () => {
+    const { api, userMessages } = createPi();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-lazy-subagents-group-"));
+    const resultPath = path.join(tempDir, "group-1.json");
+    const groupReport = path.join(tempDir, "group-report.md");
+    const reportA = path.join(tempDir, "output-a.log");
+    const reportB = path.join(tempDir, "output-b.log");
+    const reportC = path.join(tempDir, "output-c.log");
+    await fs.writeFile(groupReport, "Aggregate group report", "utf8");
+    await fs.writeFile(reportA, "Scout found auth coupling", "utf8");
+    await fs.writeFile(reportB, "Reviewer found race risk", "utf8");
+    await fs.writeFile(reportC, "Verifier found missing test", "utf8");
+    await fs.writeFile(resultPath, JSON.stringify({
+      id: "group-1",
+      runId: "group-1",
+      state: "complete",
+      success: true,
+      summary: "Three agents agree: fix auth coupling, race risk, and missing test coverage.",
+      timestamp: 130,
+      results: [
+        { stepId: "scout", taskSummary: "Inspect auth", agent: "scout", output: "Scout found auth coupling", artifactPaths: { outputPath: reportA } },
+        { stepId: "review", taskSummary: "Review auth", agent: "reviewer", output: "Reviewer found race risk", artifactPaths: { outputPath: reportB } },
+        { stepId: "verify", taskSummary: "Verify auth", agent: "verifier", output: "Verifier found missing test", artifactPaths: { outputPath: reportC } },
+      ],
+    }), "utf8");
+
+    const launcher = new FakeLauncher();
+    launcher.launchResults.set("group-1", { resultPath });
+    const controller = new LazySubagentsController(api as any, { launcher, createRunId: () => "group-1", now: () => 100 });
+    const { ctx } = createContext({ isIdle: true, hasPendingMessages: false });
+
+    await controller.handleSessionStart(ctx);
+    await controller.launchGroup(
+      {
+        title: "Parallel auth review",
+        taskSummary: "Parallel auth review",
+        children: [
+          { agent: "scout", prompt: "Inspect auth", taskSummary: "Inspect auth" },
+          { agent: "reviewer", prompt: "Review auth", taskSummary: "Review auth" },
+          { agent: "verifier", prompt: "Verify auth", taskSummary: "Verify auth" },
+        ],
+      },
+      ctx,
+    );
+
+    launcher.updates.set("group-1", {
+      runId: "group-1",
+      status: "completed",
+      updatedAt: 130,
+      completedAt: 130,
+      artifactPath: groupReport,
+      resultPreview: "Three agents agree: fix auth coupling, race risk, and missing test coverage.",
+    });
+
+    await controller.pollOnce();
+
+    expect(userMessages).toHaveLength(1);
+    expect(userMessages[0]?.content).toContain("[DONE] Parallel auth review");
+    expect(userMessages[0]?.content).toContain("Reports:");
+    expect(userMessages[0]?.content).toContain(`- Full report: ${groupReport}`);
+    expect(userMessages[0]?.content).toContain(`- Result file: ${resultPath}`);
+    expect(userMessages[0]?.content).toContain(`- scout / Inspect auth: ${reportA}`);
+    expect(userMessages[0]?.content).toContain(`- reviewer / Review auth: ${reportB}`);
+    expect(userMessages[0]?.content).toContain(`- verifier / Verify auth: ${reportC}`);
+    expect(userMessages[0]?.content).toContain("Summary:\nThree agents agree: fix auth coupling, race risk, and missing test coverage.");
+    expect(userMessages[0]?.content).toContain("Result excerpt:");
+    expect(userMessages[0]?.content).toContain("[scout]\nScout found auth coupling");
+    expect(userMessages[0]?.content).toContain("[review]\nReviewer found race risk");
+    expect(userMessages[0]?.content).toContain("[verify]\nVerifier found missing test");
   });
 
   test("routes failed runs back to the main agent even from legacy notify-only state", async () => {
