@@ -3,9 +3,12 @@ import { describe, expect, test } from "vitest";
 import {
   buildResultSummary,
   createSerialLineProcessor,
+  evaluateWorkflowCondition,
+  expandFanOutWorkflowStep,
   getReadyWorkflowStepIds,
   parseStructuredStepOutput,
   renderWorkflowPrompt,
+  renderWorkflowTemplate,
   runWorkflowStepWithRetries,
   shouldPersistEvent,
   shouldWriteStatusForUsageTotal,
@@ -154,5 +157,111 @@ describe("direct runner stdout processing", () => {
     ], 3);
 
     expect(ready).toEqual(["plan", "docs"]);
+  });
+
+  test("treats skipped workflow steps as terminal but not dependency-complete", () => {
+    const ready = getReadyWorkflowStepIds([
+      { id: "triage", status: "completed" },
+      { id: "security", status: "skipped", dependsOn: ["triage"] },
+      { id: "aggregate", status: "pending", dependsOn: ["security"] },
+      { id: "docs", status: "pending", dependsOn: ["triage"] },
+    ], 2);
+
+    expect(ready).toEqual(["docs"]);
+  });
+
+  test("evaluates workflow when expressions from structured upstream results", () => {
+    const results = {
+      triage: {
+        summary: "Review only security",
+        output: "",
+        structuredOutput: {
+          runSecurity: true,
+          runFrontend: false,
+          selected: ["security"],
+        },
+      },
+    };
+
+    expect(evaluateWorkflowCondition("{{triage.structured.runSecurity}}", results)).toBe(true);
+    expect(evaluateWorkflowCondition("{{triage.structured.runFrontend}}", results)).toBe(false);
+    expect(evaluateWorkflowCondition("{{triage.structured.selected}}", results)).toBe(true);
+  });
+
+  test("renders item templates for dynamic fan-out steps", () => {
+    const rendered = renderWorkflowTemplate(
+      "Agent {{item.agent}} handles {{item.scope}} after {{triage.summary}}",
+      {
+        triage: { summary: "triaged", output: "", structuredOutput: {} },
+      },
+      { agent: "reviewer", scope: "security" },
+    );
+
+    expect(rendered).toBe("Agent reviewer handles security after triaged");
+  });
+
+  test("expands fanOutFrom workflow steps from upstream structured arrays", () => {
+    const expansions = expandFanOutWorkflowStep(
+      {
+        id: "review",
+        agent: "{{item.agent}}",
+        taskSummary: "{{item.summary}}",
+        prompt: "Review {{item.scope}} using {{triage.json}}",
+        dependsOn: ["triage"],
+        fanOutFrom: { step: "triage", path: "structured.reviewers", idField: "id", maxItems: 3 },
+      },
+      {
+        triage: {
+          summary: "triaged",
+          output: "",
+          structuredOutput: {
+            reviewers: [
+              { id: "security", agent: "reviewer", summary: "Security review", scope: "security" },
+              { id: "tests", agent: "reviewer", summary: "Test review", scope: "tests" },
+            ],
+          },
+        },
+      },
+    );
+
+    expect(expansions).toEqual([
+      expect.objectContaining({ id: "review[security]", agent: "reviewer", taskSummary: "Security review" }),
+      expect.objectContaining({ id: "review[tests]", agent: "reviewer", taskSummary: "Test review" }),
+    ]);
+    expect(expansions[0].prompt).toContain("Review security using");
+  });
+
+  test("returns no fan-out expansions when maxItems is zero", () => {
+    const expansions = expandFanOutWorkflowStep(
+      {
+        id: "review",
+        agent: "reviewer",
+        taskSummary: "Review",
+        prompt: "Review",
+        fanOutFrom: { step: "triage", path: "structured.reviewers", maxItems: 0 },
+      },
+      { triage: { structuredOutput: { reviewers: [{ agent: "reviewer" }] } } },
+    );
+
+    expect(expansions).toEqual([]);
+  });
+
+  test("rejects duplicate generated fan-out step ids before scheduling children", () => {
+    expect(() => expandFanOutWorkflowStep(
+      {
+        id: "review",
+        agent: "reviewer",
+        taskSummary: "Review",
+        prompt: "Review",
+        fanOutFrom: { step: "triage", path: "structured.reviewers", idField: "id" },
+      },
+      {
+        triage: {
+          structuredOutput: {
+            reviewers: [{ id: "security" }, { id: "security" }],
+          },
+        },
+      },
+    )).toThrow("Duplicate generated workflow step id: review[security]");
   });
 });

@@ -217,7 +217,7 @@ export function formatWaitReport(result: Awaited<ReturnType<LazySubagentsControl
           ? `Lazy subagent needs attention: ${result.run.id}`
           : `Lazy subagent finished: ${result.run.id}`,
         ...formatRunStatus(result.run, now),
-        result.run.status === "completed" ? `Use action=result runId=${result.run.id} to read the result.` : undefined,
+        result.run.status === "completed" || result.run.status === "skipped" ? `Use action=result runId=${result.run.id} to read the result.` : undefined,
       ].filter((line): line is string => Boolean(line)).join("\n");
     case "timeout":
       return result.run
@@ -292,7 +292,7 @@ export function buildLazySubagentsHelp(): string {
     "  lazy_subagents action=list",
     "  lazy_subagents action=run agent=<agent> prompt=<prompt> [title=<title>]",
     "  lazy_subagents action=parallel children=[{agent,prompt,taskSummary?,cwd?}, ...] [title=<title>]",
-    "  lazy_subagents action=workflow steps=[{id,agent,prompt,taskSummary?,dependsOn?,retries?,outputMode?,outputSchema?,cwd?}, ...] [maxConcurrency=<n>] [title=<title>]",
+    "  lazy_subagents action=workflow steps=[{id,agent,prompt,taskSummary?,dependsOn?,retries?,outputMode?,outputSchema?,when?,fanOutFrom?,cwd?}, ...] [maxConcurrency=<n>] [title=<title>]",
     "  lazy_subagents action=status [runId=<runId>]",
     `  lazy_subagents action=wait [runId=<runId>] [timeoutMs=${DEFAULT_WAIT_TIMEOUT_MS}]`,
     "  lazy_subagents action=result runId=<runId>",
@@ -304,8 +304,8 @@ export function buildLazySubagentsHelp(): string {
     "Use /lazy-subagents list or lazy_subagents action=list to inspect available sub agents before choosing one.",
     "Use lazy_subagents action=parallel with children=[...] for two or more independent tasks that should run at the same time.",
     "workflow is for dependent pipelines that should pass step results directly in the background.",
-    "Workflow steps can retry transient failures with retries=<n> and can require JSON object results with outputMode=json.",
-    "Workflow steps can reference earlier results with {{stepId.summary}}, {{stepId.output}}, {{stepId.json}}, or structured fields such as {{stepId.structured.title}}.",
+    "Workflow steps can retry transient failures, require JSON object results, skip unnecessary work with when, and create dynamic children with fanOutFrom.",
+    "Workflow steps can reference earlier results with {{stepId.summary}}, {{stepId.output}}, {{stepId.json}}, structured fields such as {{stepId.structured.title}}, and {{item.field}} in fanOutFrom templates.",
     "",
     "Examples:",
     "  /lazy-subagents list",
@@ -315,7 +315,7 @@ export function buildLazySubagentsHelp(): string {
     "  lazy_subagents action=run agent=worker prompt=\"Implement the requested fix\"",
     "  lazy_subagents action=parallel children=[{agent:\"scout\",prompt:\"Inspect the package layout\"},{agent:\"reviewer\",prompt:\"Review the auth diff\"}]",
     "  lazy_subagents action=parallel children=[{agent:\"reviewer\",prompt:\"Review the diff\"},{agent:\"scout\",prompt:\"Find related docs\"},{agent:\"worker\",prompt:\"Prototype the isolated parser change\"}]",
-    "  lazy_subagents action=workflow steps=[{id:\"research\",agent:\"scout\",outputMode:\"json\",outputSchema:\"{ summary: string, findings: string[] }\",prompt:\"Inspect the package layout\"},{id:\"plan\",agent:\"reviewer\",dependsOn:[\"research\"],retries:2,prompt:\"Use {{research.summary}} and {{research.json}} to draft a refactor plan\"}] maxConcurrency=2",
+    "  lazy_subagents action=workflow steps=[{id:\"triage\",agent:\"scout\",outputMode:\"json\",outputSchema:\"{ summary: string, runSecurity: boolean, reviewers: Array<{ id: string, agent: string, prompt: string }> }\",prompt:\"Decide which reviewers are needed\"},{id:\"security\",agent:\"reviewer\",dependsOn:[\"triage\"],when:\"{{triage.structured.runSecurity}}\",prompt:\"Review security risks using {{triage.json}}\"},{id:\"review\",agent:\"{{item.agent}}\",dependsOn:[\"triage\"],fanOutFrom:{step:\"triage\",path:\"structured.reviewers\",idField:\"id\",maxItems:3},prompt:\"{{item.prompt}}\"}] maxConcurrency=2",
     "",
     "Tool note: action=run defaults agent to delegate.",
     "Default flow: launch, then return to the user or continue work. Signals arrive automatically.",

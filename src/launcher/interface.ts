@@ -31,12 +31,21 @@ export interface LaunchGroupChildRequest {
   cwd?: string;
 }
 
+export interface LaunchWorkflowFanOutFromRequest {
+  step: string;
+  path: string;
+  idField?: string;
+  maxItems?: number;
+}
+
 export interface LaunchWorkflowStepRequest extends LaunchGroupChildRequest {
   id: string;
   dependsOn?: string[];
   retries?: number;
   outputMode?: WorkflowStepOutputMode;
   outputSchema?: string;
+  when?: string;
+  fanOutFrom?: LaunchWorkflowFanOutFromRequest;
 }
 
 export interface LaunchGroupRequest extends LaunchRequestBase {

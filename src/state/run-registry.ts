@@ -6,7 +6,7 @@ import {
 import type { RunCounts, RunEvent, RunRecord, RunRegistrySnapshot, RunStatus } from "../types.js";
 
 const ACTIVE_STATUSES = new Set<RunStatus>(["queued", "running", "blocked", "paused"]);
-const TERMINAL_STATUSES = new Set<RunStatus>(["completed", "failed", "cancelled"]);
+const TERMINAL_STATUSES = new Set<RunStatus>(["completed", "skipped", "failed", "cancelled"]);
 
 export interface RunRegistryOptions {
   recentEventLimit?: number;
@@ -35,6 +35,7 @@ function createCounts(): RunCounts {
     running: 0,
     blocked: 0,
     completed: 0,
+    skipped: 0,
     failed: 0,
     cancelled: 0,
     paused: 0,

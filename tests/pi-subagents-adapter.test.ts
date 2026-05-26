@@ -97,6 +97,24 @@ describe("PiSubagentsAdapter helpers", () => {
     expect(children.map((child: any) => child.resolvedThinking)).toEqual(["xhigh", "high"]);
   });
 
+  test("carries profile resolution data for templated fan-out agents", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-lazy-subagents-"));
+    const asyncDir = path.join(tempDir, "async");
+    await fs.mkdir(path.join(tempDir, ".pi"), { recursive: true });
+    await fs.writeFile(path.join(tempDir, ".pi", "settings.json"), JSON.stringify({
+      subagents: { agentOverrides: { reviewer: { model: "anthropic/claude-opus-4", thinking: "high" } } },
+    }), "utf8");
+
+    const children = await buildRunnerChildren([
+      { id: "review", agent: "{{item.agent}}", taskSummary: "{{item.summary}}", prompt: "{{item.prompt}}", fanOutFrom: { step: "triage", path: "structured.reviewers" }, cwd: tempDir },
+    ], tempDir, asyncDir);
+
+    expect(children[0].agent).toBe("{{item.agent}}");
+    expect((children[0] as any).profileByAgent.reviewer.name).toBe("reviewer");
+    expect((children[0] as any).resolvedByAgent.reviewer.resolvedModel).toBe("anthropic/claude-opus-4");
+    expect((children[0] as any).resolvedByAgent.reviewer.resolvedThinking).toBe("high");
+  });
+
   test("normalizes launch metadata and temp scoping", () => {
     expect(resolveTempScopeId({ env: { USER: "bnema" }, getuid: undefined })).toBe("user-bnema");
 

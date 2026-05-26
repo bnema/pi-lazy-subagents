@@ -72,10 +72,10 @@ function toErrorMessage(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
-function getStructuredValue(structuredOutput, pathExpression) {
-  if (!structuredOutput || typeof structuredOutput !== "object") return undefined;
-  const segments = pathExpression.split(".").filter(Boolean);
-  let current = structuredOutput;
+function getPathValue(source, pathExpression) {
+  if (!pathExpression) return source;
+  const segments = String(pathExpression).split(".").filter(Boolean);
+  let current = source;
   for (const segment of segments) {
     if (!current || typeof current !== "object" || !(segment in current)) {
       return undefined;
@@ -83,6 +83,70 @@ function getStructuredValue(structuredOutput, pathExpression) {
     current = current[segment];
   }
   return current;
+}
+
+function getStructuredValue(structuredOutput, pathExpression) {
+  if (!structuredOutput || typeof structuredOutput !== "object") return undefined;
+  return getPathValue(structuredOutput, pathExpression);
+}
+
+function stringifyTemplateValue(value) {
+  if (value === undefined || value === null) return "";
+  return typeof value === "string" ? value : JSON.stringify(value);
+}
+
+function isTruthyWorkflowValue(value) {
+  if (value === undefined || value === null || value === false) return false;
+  if (typeof value === "string") return value.trim().length > 0 && value.trim().toLowerCase() !== "false";
+  if (typeof value === "number") return value !== 0 && Number.isFinite(value);
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === "object") return Object.keys(value).length > 0;
+  return Boolean(value);
+}
+
+function sanitizeGeneratedStepId(value) {
+  return String(value ?? "")
+    .trim()
+    .replace(/[^A-Za-z0-9_.-]+/g, "-")
+    .replace(/^-+|-+$/g, "") || "item";
+}
+
+function resolveWorkflowReference(stepId, fieldPath, results, item) {
+  if (stepId === "item") {
+    const itemValue = getPathValue(item, fieldPath);
+    if (itemValue === undefined) {
+      throw new Error(`Workflow item is missing field ${fieldPath}.`);
+    }
+    return itemValue;
+  }
+
+  const stepResult = results?.[stepId];
+  if (!stepResult) {
+    throw new Error(`Unknown workflow step reference: ${stepId}`);
+  }
+
+  if (fieldPath === "summary") {
+    return stepResult.summary ?? summarizeOutput(stepResult.output) ?? "";
+  }
+
+  if (fieldPath === "output") {
+    return stepResult.output ?? "";
+  }
+
+  if (fieldPath === "json") {
+    if (!stepResult.structuredOutput) {
+      throw new Error(`Workflow step ${stepId} has no structured output.`);
+    }
+    return stepResult.structuredOutput;
+  }
+
+  const normalizedPath = fieldPath.startsWith("structured.") ? fieldPath.slice("structured.".length) : fieldPath;
+  const structuredValue = getStructuredValue(stepResult.structuredOutput, normalizedPath);
+  if (structuredValue === undefined) {
+    throw new Error(`Workflow step ${stepId} is missing structured field ${normalizedPath}.`);
+  }
+
+  return structuredValue;
 }
 
 export function parseStructuredStepOutput(output, outputMode) {
@@ -151,36 +215,65 @@ export async function runWorkflowStepWithRetries({
   throw terminalError;
 }
 
-export function renderWorkflowPrompt(template, results) {
+export function renderWorkflowTemplate(template, results, item) {
   return String(template).replace(/\{\{\s*([A-Za-z0-9_-]+)\.([A-Za-z0-9_.-]+)\s*\}\}/g, (_match, stepId, fieldPath) => {
-    const stepResult = results?.[stepId];
-    if (!stepResult) {
-      throw new Error(`Unknown workflow step reference: ${stepId}`);
-    }
+    return stringifyTemplateValue(resolveWorkflowReference(stepId, fieldPath, results, item));
+  });
+}
 
-    if (fieldPath === "summary") {
-      const summary = stepResult.summary ?? summarizeOutput(stepResult.output) ?? "";
-      return summary;
-    }
+export function renderWorkflowPrompt(template, results) {
+  return renderWorkflowTemplate(template, results);
+}
 
-    if (fieldPath === "output") {
-      return stepResult.output ?? "";
-    }
+export function evaluateWorkflowCondition(expression, results, item) {
+  if (expression === undefined || expression === null || String(expression).trim() === "") return true;
+  const trimmed = String(expression).trim();
+  const referenceMatch = trimmed.match(/^\{\{\s*([A-Za-z0-9_-]+)\.([A-Za-z0-9_.-]+)\s*\}\}$/u);
+  if (referenceMatch) {
+    return isTruthyWorkflowValue(resolveWorkflowReference(referenceMatch[1], referenceMatch[2], results, item));
+  }
+  return isTruthyWorkflowValue(renderWorkflowTemplate(trimmed, results, item));
+}
 
-    if (fieldPath === "json") {
-      if (!stepResult.structuredOutput) {
-        throw new Error(`Workflow step ${stepId} has no structured output.`);
-      }
-      return JSON.stringify(stepResult.structuredOutput);
-    }
+export function expandFanOutWorkflowStep(step, results) {
+  const fanOut = step?.fanOutFrom;
+  if (!fanOut) return [];
 
-    const normalizedPath = fieldPath.startsWith("structured.") ? fieldPath.slice("structured.".length) : fieldPath;
-    const structuredValue = getStructuredValue(stepResult.structuredOutput, normalizedPath);
-    if (structuredValue === undefined) {
-      throw new Error(`Workflow step ${stepId} is missing structured field ${normalizedPath}.`);
-    }
+  const sourceResult = results?.[fanOut.step];
+  if (!sourceResult) {
+    throw new Error(`Workflow fanOutFrom source ${fanOut.step} is not available.`);
+  }
 
-    return typeof structuredValue === "string" ? structuredValue : JSON.stringify(structuredValue);
+  const pathExpression = String(fanOut.path ?? "");
+  const normalizedPath = pathExpression.startsWith("structured.") ? pathExpression.slice("structured.".length) : pathExpression;
+  const items = getStructuredValue(sourceResult.structuredOutput, normalizedPath);
+  if (items === undefined || items === null) return [];
+  if (!Array.isArray(items)) {
+    throw new Error(`Workflow fanOutFrom path ${fanOut.path} did not resolve to an array.`);
+  }
+
+  const maxItems = Number.isInteger(fanOut.maxItems) ? fanOut.maxItems : items.length;
+  const generatedIds = new Set();
+  return items.slice(0, Math.max(0, maxItems)).map((item, index) => {
+    const rawId = fanOut.idField ? getPathValue(item, fanOut.idField) : undefined;
+    const itemId = sanitizeGeneratedStepId(rawId ?? index + 1);
+    const generatedId = `${step.id}[${itemId}]`;
+    if (generatedIds.has(generatedId)) {
+      throw new Error(`Duplicate generated workflow step id: ${generatedId}`);
+    }
+    generatedIds.add(generatedId);
+    const render = (value) => typeof value === "string" ? renderWorkflowTemplate(value, results, item) : value;
+    return {
+      ...step,
+      id: generatedId,
+      agent: render(step.agent),
+      taskSummary: render(step.taskSummary),
+      prompt: render(step.prompt),
+      cwd: render(step.cwd),
+      fanOutFrom: undefined,
+      fanOutParentId: step.id,
+      fanOutItem: item,
+    };
   });
 }
 
@@ -232,6 +325,9 @@ function createInitialStatus(config) {
       status: "pending",
       taskSummary: child.taskSummary,
       dependsOn: child.dependsOn,
+      when: child.when,
+      fanOutFrom: child.fanOutFrom,
+      fanOutParentId: child.fanOutParentId,
       retries: child.retries ?? 0,
       maxAttempts: (child.retries ?? 0) + 1,
       attempt: 0,
@@ -508,12 +604,13 @@ async function runChild(config, statusPath, status, child, index, promptOverride
     stepId: child.id,
     taskSummary: child.taskSummary,
     dependsOn: child.dependsOn,
-    agent: child.profile.name,
+    agent: childAgentName(child),
     output: finalOutput,
     summary,
     structuredOutput,
     error: step.status === "completed" ? undefined : step.error,
     success: step.status === "completed",
+    status: step.status,
     attempt: attemptNumber,
     maxAttempts: (child.retries ?? 0) + 1,
     sessionFile,
@@ -525,15 +622,20 @@ async function runChild(config, statusPath, status, child, index, promptOverride
   };
 }
 
+function childAgentName(child) {
+  return child.agent ?? child.profile?.name ?? "delegate";
+}
+
 function failedChildResult(config, child, error, sessionFile, attempt = 1, attempts = []) {
   return {
     stepId: child.id,
     taskSummary: child.taskSummary,
     dependsOn: child.dependsOn,
-    agent: child.profile.name,
+    agent: childAgentName(child),
     output: "",
     error,
     success: false,
+    status: "failed",
     attempt,
     maxAttempts: (child.retries ?? 0) + 1,
     attempts,
@@ -543,6 +645,27 @@ function failedChildResult(config, child, error, sessionFile, attempt = 1, attem
     artifactPaths: {
       outputPath: path.join(config.asyncDir, child.outputFile),
     },
+  };
+}
+
+function skippedChildResult(child, reason, success = true) {
+  return {
+    stepId: child.id,
+    taskSummary: child.taskSummary,
+    dependsOn: child.dependsOn,
+    agent: childAgentName(child),
+    output: "",
+    summary: reason,
+    error: success ? undefined : reason,
+    success,
+    status: "skipped",
+    skipped: true,
+    skipReason: reason,
+    attempt: 0,
+    maxAttempts: (child.retries ?? 0) + 1,
+    attempts: [],
+    totalTokens: 0,
+    toolCount: 0,
   };
 }
 
@@ -562,14 +685,15 @@ function buildWorkflowResultsMap(results) {
   );
 }
 
-function markWorkflowStepsCancelled(status, stepIds, reason) {
+function markWorkflowStepsSkipped(status, stepIds, reason) {
   let changed = false;
   const wanted = new Set(stepIds);
   for (const step of status.steps ?? []) {
     if (!wanted.has(step.id) || (step.status !== "pending" && step.status !== "running")) continue;
-    step.status = "cancelled";
-    step.error = reason;
-    step.summary = undefined;
+    step.status = "skipped";
+    step.error = undefined;
+    step.skipReason = reason;
+    step.summary = reason;
     step.structuredOutput = undefined;
     step.endedAt = now();
     step.durationMs = step.startedAt ? Math.max(0, step.endedAt - step.startedAt) : 0;
@@ -607,45 +731,123 @@ async function runWorkflow(config, status) {
   const active = new Map();
   const maxConcurrency = Math.max(1, config.maxConcurrency ?? config.children.length);
 
+  const appendSyntheticStep = async (child) => {
+    const index = config.children.length;
+    child.sessionDir = path.join(config.asyncDir, `session-${index}`);
+    child.outputFile = `output-${index}.log`;
+    child.profile = child.profileByAgent?.[child.agent] ?? child.profile;
+    const resolvedAgentSettings = child.resolvedByAgent?.[child.agent];
+    child.resolvedModel = resolvedAgentSettings?.resolvedModel;
+    child.resolvedThinking = resolvedAgentSettings?.resolvedThinking;
+    config.children.push(child);
+    await ensureDir(child.sessionDir);
+    status.steps.push({
+      index,
+      id: child.id,
+      agent: child.profile?.name ?? child.agent,
+      model: child.resolvedModel,
+      thinking: child.resolvedThinking,
+      status: "pending",
+      taskSummary: child.taskSummary,
+      dependsOn: child.dependsOn,
+      when: child.when,
+      fanOutParentId: child.fanOutParentId,
+      retries: child.retries ?? 0,
+      maxAttempts: (child.retries ?? 0) + 1,
+      attempt: 0,
+      outputMode: child.outputMode ?? "text",
+      outputSchema: child.outputSchema,
+      outputFile: child.outputFile,
+    });
+  };
+
   while (results.length < config.children.length) {
-    const failedIds = new Set(results.filter((result) => !result.success).map((result) => result.stepId));
+    const failedIds = new Set(results.filter((result) => !result.success && !result.skipped).map((result) => result.stepId));
+    const skippedIds = new Set(results.filter((result) => result.skipped).map((result) => result.stepId));
+    const unsatisfiedIds = new Set([...failedIds, ...skippedIds]);
 
     const dependencyBlockedChildren = config.children.filter((child) => !results.some((result) => result.stepId === child.id))
-      .filter((child) => (child.dependsOn ?? []).some((dependencyId) => failedIds.has(dependencyId)));
+      .filter((child) => (child.dependsOn ?? []).some((dependencyId) => unsatisfiedIds.has(dependencyId)));
 
     if (dependencyBlockedChildren.length > 0) {
-      const changed = markWorkflowStepsCancelled(
+      const changed = markWorkflowStepsSkipped(
         status,
         dependencyBlockedChildren.map((child) => child.id),
-        "Skipped because a dependency failed.",
+        "Skipped because a dependency did not complete.",
       );
       if (changed) {
         await updateStatus(config.statusPath, status);
       }
       for (const child of dependencyBlockedChildren) {
         if (results.some((result) => result.stepId === child.id)) continue;
-        results.push(failedChildResult(config, child, "Skipped because a dependency failed.", undefined, 0, []));
+        results.push(skippedChildResult(child, "Skipped because a dependency did not complete.", false));
       }
       continue;
     }
 
     const readyStepIds = getReadyWorkflowStepIds(
-      (status.steps ?? []).filter((step) => !(step.dependsOn ?? []).some((dependencyId) => failedIds.has(dependencyId))),
+      (status.steps ?? []).filter((step) => !(step.dependsOn ?? []).some((dependencyId) => unsatisfiedIds.has(dependencyId))),
       maxConcurrency,
     );
 
+    let progressedWithoutActive = false;
     for (const stepId of readyStepIds) {
       if (active.has(stepId) || results.some((result) => result.stepId === stepId)) continue;
       const index = config.children.findIndex((child) => child.id === stepId);
       if (index < 0) continue;
       const child = config.children[index];
+      const workflowResults = buildWorkflowResultsMap(results);
+
+      if (!evaluateWorkflowCondition(child.when, workflowResults, child.fanOutItem)) {
+        const reason = `Skipped because when condition evaluated false: ${child.when}`;
+        markWorkflowStepsSkipped(status, [child.id], reason);
+        results.push(skippedChildResult(child, reason, true));
+        progressedWithoutActive = true;
+        await updateStatus(config.statusPath, status);
+        continue;
+      }
+
+      if (child.fanOutFrom) {
+        let expansions;
+        try {
+          expansions = expandFanOutWorkflowStep(child, workflowResults);
+        } catch (error) {
+          const message = toErrorMessage(error);
+          const step = status.steps[index];
+          step.status = "failed";
+          step.error = message;
+          step.endedAt = now();
+          await updateStatus(config.statusPath, status);
+          results.push(failedChildResult(config, child, message, undefined, 0, []));
+          progressedWithoutActive = true;
+          continue;
+        }
+
+        const reason = expansions.length === 0
+          ? `Skipped because fanOutFrom ${child.fanOutFrom.step}.${child.fanOutFrom.path} produced no children.`
+          : `Expanded into ${expansions.length} fan-out child step${expansions.length === 1 ? "" : "s"}.`;
+        markWorkflowStepsSkipped(status, [child.id], reason);
+        results.push(skippedChildResult(child, reason, true));
+        const existingStepIds = new Set(status.steps.map((step) => step.id));
+        for (const expansion of expansions) {
+          if (existingStepIds.has(expansion.id)) {
+            throw new Error(`Dynamic workflow step id collision: ${expansion.id}`);
+          }
+          existingStepIds.add(expansion.id);
+          await appendSyntheticStep(expansion);
+        }
+        progressedWithoutActive = true;
+        await updateStatus(config.statusPath, status);
+        continue;
+      }
+
       const task = runWorkflowStepWithRetries({
         maxAttempts: (child.retries ?? 0) + 1,
         executeAttempt: async (attempt) => {
           const workflowResults = buildWorkflowResultsMap(results);
           let renderedPrompt;
           try {
-            renderedPrompt = renderWorkflowPrompt(child.prompt, workflowResults);
+            renderedPrompt = renderWorkflowTemplate(child.prompt, workflowResults, child.fanOutItem);
           } catch (error) {
             const promptError = error instanceof Error ? error : new Error(String(error));
             promptError.nonRetryable = true;
@@ -694,10 +896,14 @@ async function runWorkflow(config, status) {
       active.set(stepId, task);
     }
 
+    if (active.size === 0 && progressedWithoutActive) {
+      continue;
+    }
+
     if (active.size === 0) {
       const unresolvedChildren = config.children.filter((child) => !results.some((result) => result.stepId === child.id));
       if (unresolvedChildren.length === 0) break;
-      const changed = markWorkflowStepsCancelled(
+      const changed = markWorkflowStepsSkipped(
         status,
         unresolvedChildren.map((child) => child.id),
         "Skipped because workflow dependencies could not be satisfied.",
@@ -707,7 +913,7 @@ async function runWorkflow(config, status) {
       }
       for (const child of unresolvedChildren) {
         if (results.some((result) => result.stepId === child.id)) continue;
-        results.push(failedChildResult(config, child, "Skipped because workflow dependencies could not be satisfied.", undefined, 0, []));
+        results.push(skippedChildResult(child, "Skipped because workflow dependencies could not be satisfied.", false));
       }
       break;
     }

@@ -1399,6 +1399,78 @@ describe("LazySubagentsController", () => {
       ctx,
     )).rejects.toThrow("invalid retries value");
 
+    await expect(controller.launchWorkflow(
+      {
+        title: "Invalid when",
+        taskSummary: "Invalid when",
+        steps: [
+          { id: "triage", agent: "scout", prompt: "Inspect", taskSummary: "Inspect", outputMode: "json" },
+          { id: "security", agent: "reviewer", prompt: "Review", taskSummary: "Review", dependsOn: ["triage"], when: "{{missing.structured.runSecurity}}" },
+        ],
+      },
+      ctx,
+    )).rejects.toThrow("when references unknown step missing");
+
+    await expect(controller.launchWorkflow(
+      {
+        title: "Invalid fanout source",
+        taskSummary: "Invalid fanout source",
+        steps: [
+          { id: "triage", agent: "scout", prompt: "Inspect", taskSummary: "Inspect", outputMode: "json" },
+          { id: "review", agent: "{{item.agent}}", prompt: "Review", taskSummary: "Review", dependsOn: ["triage"], fanOutFrom: { step: "missing", path: "structured.reviewers" } },
+        ],
+      },
+      ctx,
+    )).rejects.toThrow("fanOutFrom references unknown step missing");
+
+    await expect(controller.launchWorkflow(
+      {
+        title: "When without dependency",
+        taskSummary: "When without dependency",
+        steps: [
+          { id: "triage", agent: "scout", prompt: "Inspect", taskSummary: "Inspect", outputMode: "json" },
+          { id: "security", agent: "reviewer", prompt: "Review", taskSummary: "Review", when: "{{triage.structured.runSecurity}}" },
+        ],
+      },
+      ctx,
+    )).rejects.toThrow("when reference triage must be listed in dependsOn");
+
+    await expect(controller.launchWorkflow(
+      {
+        title: "Fanout without dependency",
+        taskSummary: "Fanout without dependency",
+        steps: [
+          { id: "triage", agent: "scout", prompt: "Inspect", taskSummary: "Inspect", outputMode: "json" },
+          { id: "review", agent: "{{item.agent}}", prompt: "Review", taskSummary: "Review", fanOutFrom: { step: "triage", path: "structured.reviewers" } },
+        ],
+      },
+      ctx,
+    )).rejects.toThrow("fanOutFrom source triage must be listed in dependsOn");
+
+    await expect(controller.launchWorkflow(
+      {
+        title: "Fanout from text source",
+        taskSummary: "Fanout from text source",
+        steps: [
+          { id: "triage", agent: "scout", prompt: "Inspect", taskSummary: "Inspect" },
+          { id: "review", agent: "{{item.agent}}", prompt: "Review", taskSummary: "Review", dependsOn: ["triage"], fanOutFrom: { step: "triage", path: "structured.reviewers" } },
+        ],
+      },
+      ctx,
+    )).rejects.toThrow("fanOutFrom source triage must use outputMode=json");
+
+    await expect(controller.launchWorkflow(
+      {
+        title: "Compound when",
+        taskSummary: "Compound when",
+        steps: [
+          { id: "triage", agent: "scout", prompt: "Inspect", taskSummary: "Inspect", outputMode: "json" },
+          { id: "security", agent: "reviewer", prompt: "Review", taskSummary: "Review", dependsOn: ["triage"], when: "{{triage.structured.runSecurity}} && {{triage.structured.runBackend}}" },
+        ],
+      },
+      ctx,
+    )).rejects.toThrow("when must be a single workflow reference");
+
     expect(launchWorkflowSpy).not.toHaveBeenCalled();
   });
 

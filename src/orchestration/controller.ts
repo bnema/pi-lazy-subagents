@@ -70,7 +70,7 @@ class ReadUpdateTimeoutError extends Error {
 }
 
 function isTerminalStatus(status: RunStatus): boolean {
-  return status === "completed" || status === "failed" || status === "cancelled" || status === "paused";
+  return status === "completed" || status === "skipped" || status === "failed" || status === "cancelled" || status === "paused";
 }
 
 function isPersistedStateEntry(value: unknown): value is { data?: unknown } {
@@ -106,6 +106,19 @@ function buildLaunchEvent(run: RunRecord, timestamp: number): RunEvent {
   };
 }
 
+const SINGLE_WORKFLOW_REFERENCE_PATTERN = /^\{\{\s*([A-Za-z0-9_-]+)\.([A-Za-z0-9_.-]+)\s*\}\}$/u;
+
+function extractWorkflowReferenceStepIds(template: string | undefined): string[] {
+  if (!template) return [];
+  return [...String(template).matchAll(/\{\{\s*([A-Za-z0-9_-]+)\.[A-Za-z0-9_.-]+\s*\}\}/gu)]
+    .map((match) => match[1])
+    .filter((stepId) => stepId !== "item");
+}
+
+function isSingleWorkflowReference(template: string | undefined): boolean {
+  return Boolean(template && SINGLE_WORKFLOW_REFERENCE_PATTERN.test(template.trim()));
+}
+
 function assertValidWorkflowRequest(request: ControllerLaunchWorkflowRequest): void {
   if (request.maxConcurrency !== undefined && (!Number.isInteger(request.maxConcurrency) || request.maxConcurrency < 1)) {
     throw new Error("maxConcurrency must be an integer greater than or equal to 1.");
@@ -137,9 +150,27 @@ function assertValidWorkflowRequest(request: ControllerLaunchWorkflowRequest): v
     if (step.retries !== undefined && (!Number.isInteger(step.retries) || step.retries < 0)) {
       throw new Error(`Workflow step ${id} has an invalid retries value. Expected a non-negative integer.`);
     }
+    if (step.when !== undefined && (typeof step.when !== "string" || step.when.trim().length === 0)) {
+      throw new Error(`Workflow step ${id} has an invalid when value. Expected a non-empty string.`);
+    }
+    if (step.when !== undefined && !isSingleWorkflowReference(step.when)) {
+      throw new Error(`Workflow step ${id} when must be a single workflow reference like {{triage.structured.runSecurity}}.`);
+    }
+    if (step.fanOutFrom) {
+      const sourceStep = step.fanOutFrom.step?.trim();
+      const pathExpression = step.fanOutFrom.path?.trim();
+      if (!sourceStep || !pathExpression) {
+        throw new Error(`Workflow step ${id} has an invalid fanOutFrom value. Expected step and path.`);
+      }
+      step.fanOutFrom.step = sourceStep;
+      step.fanOutFrom.path = pathExpression;
+      if (step.fanOutFrom.maxItems !== undefined && (!Number.isInteger(step.fanOutFrom.maxItems) || step.fanOutFrom.maxItems < 0)) {
+        throw new Error(`Workflow step ${id} has an invalid fanOutFrom maxItems value. Expected a non-negative integer.`);
+      }
+    }
   }
 
-  for (const { id, dependsOn } of normalizedSteps) {
+  for (const { id, step, dependsOn } of normalizedSteps) {
     for (const dependencyId of dependsOn) {
       if (!dependencyId) {
         throw new Error(`Workflow step ${id} has an empty dependency id.`);
@@ -149,6 +180,32 @@ function assertValidWorkflowRequest(request: ControllerLaunchWorkflowRequest): v
       }
       if (dependencyId === id) {
         throw new Error(`Workflow step ${id} cannot depend on itself.`);
+      }
+    }
+
+    for (const referencedStepId of extractWorkflowReferenceStepIds(step.when)) {
+      if (!ids.has(referencedStepId)) {
+        throw new Error(`Workflow step ${id} when references unknown step ${referencedStepId}.`);
+      }
+      if (!dependsOn.includes(referencedStepId)) {
+        throw new Error(`Workflow step ${id} when reference ${referencedStepId} must be listed in dependsOn.`);
+      }
+    }
+
+    if (step.fanOutFrom) {
+      const sourceStep = step.fanOutFrom.step;
+      if (!ids.has(sourceStep)) {
+        throw new Error(`Workflow step ${id} fanOutFrom references unknown step ${sourceStep}.`);
+      }
+      if (!dependsOn.includes(sourceStep)) {
+        throw new Error(`Workflow step ${id} fanOutFrom source ${sourceStep} must be listed in dependsOn.`);
+      }
+      if (sourceStep === id) {
+        throw new Error(`Workflow step ${id} cannot fanOutFrom itself.`);
+      }
+      const source = normalizedSteps.find((candidate) => candidate.id === sourceStep)?.step;
+      if (source?.outputMode !== "json") {
+        throw new Error(`Workflow step ${id} fanOutFrom source ${sourceStep} must use outputMode=json.`);
       }
     }
   }
@@ -273,6 +330,9 @@ type ParsedRunResult = {
     agent?: string;
     output?: string;
     error?: string;
+    status?: string;
+    skipped?: boolean;
+    skipReason?: string;
     artifactPaths?: {
       outputPath?: string;
     };
@@ -320,7 +380,7 @@ function collectCompletionReports(run: RunRecord, childReports: CompletionReport
 }
 
 function formatCompletionInput(run: RunRecord, summary: string, result?: CompletionResultDetails): string {
-  const signal = run.status === "completed"
+  const signal = run.status === "completed" || run.status === "skipped"
     ? "DONE"
     : run.status === "failed"
       ? "FAILED"
@@ -461,6 +521,7 @@ function createSnapshotCounts(runs: RunRecord[]): RunRegistrySnapshot["counts"] 
     running: runs.filter((run) => run.status === "running").length,
     blocked: runs.filter((run) => run.status === "blocked").length,
     completed: runs.filter((run) => run.status === "completed").length,
+    skipped: runs.filter((run) => run.status === "skipped").length,
     failed: runs.filter((run) => run.status === "failed").length,
     cancelled: runs.filter((run) => run.status === "cancelled").length,
     paused: runs.filter((run) => run.status === "paused").length,
@@ -475,7 +536,7 @@ function shouldKeepRunVisibleInUi(
   if (!isTerminalStatus(run.status)) return true;
   if (options.isPinned) return true;
   if (run.status === "failed" || run.status === "paused") return true;
-  if (run.status !== "completed") return false;
+  if (run.status !== "completed" && run.status !== "skipped") return false;
   if (options.isAcknowledged) return false;
   if (run.completedAt === undefined) return true;
   return options.now - run.completedAt <= DEFAULT_SUCCESS_VISIBILITY_GRACE_MS;
@@ -1115,7 +1176,7 @@ export class LazySubagentsController {
 
     if (!this.registry.markCompletionSurfaced(run.id, fingerprint)) return;
 
-    if (run.status === "completed") {
+    if (run.status === "completed" || run.status === "skipped") {
       this.sendVisiblePayload(createCompletionMessagePayload(run));
     } else if (run.status === "failed") {
       this.sendVisiblePayload(createFailureMessagePayload(run));
@@ -1131,7 +1192,7 @@ export class LazySubagentsController {
       return;
     }
 
-    const result = run.status === "completed" ? await this.getCompletionResultDetails(run) : undefined;
+    const result = run.status === "completed" || run.status === "skipped" ? await this.getCompletionResultDetails(run) : undefined;
     const summary = buildHiddenSummary(run, this.registry.snapshot(), { includePreview: !result?.text });
     const content = formatCompletionInput(run, summary.text, result);
     const isIdle = this.currentCtx?.isIdle() ?? false;
@@ -1180,7 +1241,7 @@ export class LazySubagentsController {
   private formatParsedResultText(parsed: ParsedRunResult): string | undefined {
     const outputs = parsed.results
       ?.map((entry) => {
-        const rawText = entry.output?.trim() ? entry.output : entry.error;
+        const rawText = entry.skipped ? `Skipped: ${entry.skipReason ?? entry.error ?? "workflow step skipped"}` : entry.output?.trim() ? entry.output : entry.error;
         const text = normalizeResultText(rawText);
         if (!text) return undefined;
         const label = entry.stepId ?? entry.taskSummary ?? entry.agent;

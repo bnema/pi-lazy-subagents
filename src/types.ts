@@ -6,6 +6,7 @@ export const RUN_STATUSES = [
   "running",
   "blocked",
   "completed",
+  "skipped",
   "failed",
   "cancelled",
   "paused",
@@ -75,6 +76,7 @@ export interface RunCounts {
   running: number;
   blocked: number;
   completed: number;
+  skipped: number;
   failed: number;
   cancelled: number;
   paused: number;

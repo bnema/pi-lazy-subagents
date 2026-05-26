@@ -41,7 +41,7 @@ export function buildFooterStatus(snapshot: RunRegistrySnapshot, theme?: StatusT
 
   const liveCount = countLiveRuns(snapshot);
   const attentionCount = needsAttention(snapshot);
-  const inboxCount = snapshot.recentRuns.filter((run) => run.status === "completed" && !run.attentionNeeded).length;
+  const inboxCount = snapshot.recentRuns.filter((run) => (run.status === "completed" || run.status === "skipped") && !run.attentionNeeded).length;
 
   const parts = [
     `${colorize(GLYPH_LAZY_SUBAGENTS, "accent", theme)} ${bold("lazy", theme)}`,

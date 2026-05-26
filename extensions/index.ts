@@ -7,15 +7,24 @@ import { LazySubagentsController } from "../src/orchestration/controller.js";
 import { buildLazySubagentsAgentList, buildLazySubagentsHelp, executeLazySubagentsCommand, formatLaunchAcknowledgement, formatStatusReport, formatWaitReport } from "../src/orchestration/commands.js";
 import { registerRunMessageRenderers } from "../src/ui/messages.js";
 
+const WorkflowFanOutFromSchema = Type.Object({
+  step: Type.String({ description: "Upstream JSON workflow step id that provides the array to fan out from." }),
+  path: Type.String({ description: "Structured output path for the array, for example structured.reviewers or reviewers." }),
+  idField: Type.Optional(Type.String({ description: "Optional field on each item used to build generated ids like review[security]. Defaults to the item index." })),
+  maxItems: Type.Optional(Type.Integer({ minimum: 0, description: "Optional cap for generated fan-out steps." })),
+});
+
 const WorkflowStepSchema = Type.Object({
   id: Type.String({ description: "Stable step id used for dependency wiring and prompt templates such as {{research.summary}} or {{research.output}}." }),
-  agent: Type.String({ description: "Child profile name for this workflow step." }),
-  prompt: Type.String({ description: "Task for this workflow step. You can reference earlier step results with {{stepId.summary}}, {{stepId.output}}, {{stepId.json}}, or structured fields such as {{stepId.structured.title}}." }),
+  agent: Type.String({ description: "Child profile name for this workflow step. fanOutFrom steps may use {{item.agent}}." }),
+  prompt: Type.String({ description: "Task for this workflow step. You can reference earlier step results with {{stepId.summary}}, {{stepId.output}}, {{stepId.json}}, structured fields such as {{stepId.structured.title}}, and {{item.field}} inside fanOutFrom templates." }),
   taskSummary: Type.Optional(Type.String({ description: "Optional shorter label for this workflow step in status surfaces." })),
   dependsOn: Type.Optional(Type.Array(Type.String(), { description: "Optional list of earlier workflow step ids that must complete before this step starts." })),
   retries: Type.Optional(Type.Integer({ minimum: 0, description: "How many extra attempts to allow after the first failed attempt for this workflow step." })),
   outputMode: Type.Optional(Type.Union([Type.Literal("text"), Type.Literal("json")], { description: "How this workflow step should shape its final answer. Use json to require a JSON object result." })),
   outputSchema: Type.Optional(Type.String({ description: "Optional schema guidance for json workflow output. This text is appended to the worker prompt so the final response matches the expected object shape." })),
+  when: Type.Optional(Type.String({ description: "Optional condition evaluated after dependencies complete. Use references such as {{triage.structured.runSecurity}}; falsey values skip the step without launching a child." })),
+  fanOutFrom: Type.Optional(WorkflowFanOutFromSchema),
   cwd: Type.Optional(Type.String()),
 });
 
@@ -124,8 +133,8 @@ export default function lazySubagentsExtension(pi: ExtensionAPI): void {
       "Use action=list to choose an agent; action=run defaults to delegate.",
       "Use action=run for one child and action=parallel for independent children.",
       "Use action=workflow for dependent pipelines that should stay off the main session context and pass step results directly in the background.",
-      "Workflow steps support retries=<n>, outputMode=json, and outputSchema for resilient structured handoffs.",
-      "Workflow steps can reference earlier results with {{stepId.summary}}, {{stepId.output}}, {{stepId.json}}, or structured fields such as {{stepId.structured.title}}.",
+      "Workflow steps support retries=<n>, outputMode=json, outputSchema, when conditions, and fanOutFrom dynamic children.",
+      "Workflow steps can reference earlier results with {{stepId.summary}}, {{stepId.output}}, {{stepId.json}}, structured fields such as {{stepId.structured.title}}, and {{item.field}} inside fanOutFrom templates.",
       "After run/parallel/workflow, do not call wait or status right away. Return to the user or continue other work.",
       "Subagents always report terminal results back to the main agent; completed, failed, paused, and attention states all return as follow-up input automatically.",
       "Use action=wait only for explicit blocking requests or non-interactive scripts.",

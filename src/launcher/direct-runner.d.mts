@@ -1,3 +1,11 @@
+import type { LaunchWorkflowStepRequest } from "./interface.js";
+
+export type ExpandedWorkflowStep = LaunchWorkflowStepRequest & {
+  fanOutFrom?: undefined;
+  fanOutParentId?: string;
+  fanOutItem?: unknown;
+};
+
 export interface SerialLineProcessor {
   enqueue(lines: string[]): void;
   flush(finalLine?: string): Promise<void>;
@@ -16,7 +24,7 @@ export type WorkflowPromptResult = {
 
 export type WorkflowStatusStep = {
   id?: string;
-  status?: "pending" | "running" | "completed" | "failed" | "paused" | "cancelled";
+  status?: "pending" | "running" | "completed" | "skipped" | "failed" | "paused" | "cancelled";
   dependsOn?: string[];
 };
 
@@ -45,6 +53,9 @@ export type RunnerResultSummaryInput = {
 
 export function buildResultSummary(results: RunnerResultSummaryInput[], maxChildLength?: number): string;
 export function renderWorkflowPrompt(template: string, results: Record<string, WorkflowPromptResult> | undefined): string;
+export function renderWorkflowTemplate(template: string, results: Record<string, WorkflowPromptResult> | undefined, item?: unknown): string;
+export function evaluateWorkflowCondition(expression: string | undefined, results: Record<string, WorkflowPromptResult> | undefined, item?: unknown): boolean;
+export function expandFanOutWorkflowStep(step: LaunchWorkflowStepRequest, results: Record<string, WorkflowPromptResult> | undefined): ExpandedWorkflowStep[];
 export function parseStructuredStepOutput(output: string, outputMode: "json" | "text" | undefined): Record<string, unknown> | undefined;
 export function getReadyWorkflowStepIds(steps: WorkflowStatusStep[], maxConcurrency: number): string[];
 export function runWorkflowStepWithRetries<T>(options: {

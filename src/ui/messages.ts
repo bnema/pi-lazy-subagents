@@ -216,6 +216,7 @@ function pinnedStatusColor(status: string): "accent" | "success" | "warning" | "
     case "running":
       return "accent";
     case "completed":
+    case "skipped":
       return "success";
     case "blocked":
     case "paused":

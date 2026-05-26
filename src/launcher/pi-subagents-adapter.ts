@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
-import { getAgentProfile, type AgentProfile } from "./agent-profiles.js";
+import { getAgentProfile, listAvailableAgentProfiles, type AgentProfile } from "./agent-profiles.js";
 import type {
   LaunchChildRequest,
   LaunchGroupRequest,
@@ -32,9 +32,17 @@ type DirectAsyncStatusStep = {
   attempt?: number;
   outputMode?: "text" | "json";
   outputSchema?: string;
+  when?: string;
+  fanOutFrom?: {
+    step?: string;
+    path?: string;
+    idField?: string;
+    maxItems?: number;
+  };
+  fanOutParentId?: string;
   summary?: string;
   structuredOutput?: Record<string, unknown>;
-  status?: "pending" | "running" | "completed" | "failed" | "paused" | "cancelled";
+  status?: "pending" | "running" | "completed" | "skipped" | "failed" | "paused" | "cancelled";
   currentTool?: string;
   toolCount?: number;
   totalTokens?: number;
@@ -75,6 +83,9 @@ type DirectResultFile = {
     agent?: string;
     summary?: string;
     structuredOutput?: Record<string, unknown>;
+    status?: "completed" | "skipped" | "failed" | "paused" | "cancelled";
+    skipped?: boolean;
+    skipReason?: string;
     attempt?: number;
     maxAttempts?: number;
     attempts?: Array<{ attempt: number; success: boolean; error?: string }>;
@@ -104,12 +115,21 @@ interface RunnerChildConfig {
   retries?: number;
   outputMode?: "text" | "json";
   outputSchema?: string;
+  when?: string;
+  fanOutFrom?: {
+    step: string;
+    path: string;
+    idField?: string;
+    maxItems?: number;
+  };
   cwd: string;
   sessionDir: string;
   outputFile: string;
   profile: AgentProfile;
   resolvedModel?: string;
   resolvedThinking?: string;
+  profileByAgent?: Record<string, AgentProfile>;
+  resolvedByAgent?: Record<string, { resolvedModel?: string; resolvedThinking?: string }>;
 }
 
 interface RunnerConfig {
@@ -193,7 +213,7 @@ function defaultResultsDir(): string {
 }
 
 function isTerminalStatus(status: RunStatus): boolean {
-  return status === "completed" || status === "failed" || status === "cancelled" || status === "paused";
+  return status === "completed" || status === "skipped" || status === "failed" || status === "cancelled" || status === "paused";
 }
 
 function summarizeText(text: string | undefined, maxLength = 240): string | undefined {
@@ -302,7 +322,7 @@ function formatResolvedModelLabel(model: string | undefined, thinking: string | 
 }
 
 async function buildRunnerChildren(
-  children: Array<Pick<RunnerChildConfig, "id" | "agent" | "taskSummary" | "prompt" | "dependsOn" | "retries" | "outputMode" | "outputSchema"> & { cwd?: string }>,
+  children: Array<Pick<RunnerChildConfig, "id" | "agent" | "taskSummary" | "prompt" | "dependsOn" | "retries" | "outputMode" | "outputSchema" | "when" | "fanOutFrom"> & { cwd?: string }>,
   baseCwd: string,
   asyncDir: string,
 ): Promise<RunnerChildConfig[]> {
@@ -323,7 +343,12 @@ async function buildRunnerChildren(
   return await Promise.all(children.map(async (child, index) => {
     const cwd = child.cwd ?? baseCwd;
     const settings = await loadSettingsForCwd(cwd);
-    const profile = getAgentProfile(child.agent);
+    const profile = child.fanOutFrom && child.agent.includes("{{") ? getAgentProfile("delegate") : getAgentProfile(child.agent);
+    const profileByAgent = Object.fromEntries(listAvailableAgentProfiles().map((availableProfile) => [availableProfile.name, availableProfile]));
+    const resolvedByAgent = Object.fromEntries(Object.entries(profileByAgent).map(([agentName, availableProfile]) => [agentName, {
+      resolvedModel: resolveEffectiveModel(availableProfile, agentName, settings),
+      resolvedThinking: resolveEffectiveThinking(availableProfile, agentName, settings),
+    }]));
     return {
       id: child.id,
       agent: child.agent,
@@ -333,12 +358,16 @@ async function buildRunnerChildren(
       retries: child.retries,
       outputMode: child.outputMode,
       outputSchema: child.outputSchema,
+      when: child.when,
+      fanOutFrom: child.fanOutFrom,
       cwd,
       sessionDir: childSessionDir(asyncDir, index),
       outputFile: childOutputFile(index),
       profile,
       resolvedModel: resolveEffectiveModel(profile, child.agent, settings),
       resolvedThinking: resolveEffectiveThinking(profile, child.agent, settings),
+      profileByAgent,
+      resolvedByAgent,
     };
   }));
 }
@@ -379,7 +408,7 @@ function buildEvent(runId: string, status: RunStatus, updatedAt: number, summary
     };
   }
 
-  if (status === "completed") {
+  if (status === "completed" || status === "skipped") {
     return {
       id: `${runId}:${updatedAt}:completion`,
       category: "completion",
@@ -505,7 +534,8 @@ export function normalizeAsyncResult(runId: string, result: DirectResultFile): N
   const summary = summarizeText(
     result.summary
       ?? result.results?.find((child) => child.error)?.error
-      ?? result.results?.find((child) => child.output)?.output,
+      ?? result.results?.find((child) => child.output)?.output
+      ?? result.results?.find((child) => child.skipped)?.skipReason,
   );
 
   const toolCounts = result.results?.map((child) => child.toolCount).filter((value): value is number => typeof value === "number");

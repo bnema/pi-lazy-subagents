@@ -43,7 +43,7 @@ function needsAttention(run: RunRecord): boolean {
 }
 
 function isSuccessfulInboxRun(run: RunRecord, isPinned: boolean): boolean {
-  return run.status === "completed"
+  return (run.status === "completed" || run.status === "skipped")
     && !run.attentionNeeded
     && !isPinned;
 }
@@ -82,6 +82,7 @@ function shortTitle(run: RunRecord): string {
 
 function latestMeta(run: RunRecord, now: number): string | undefined {
   if (run.status === "completed" && run.completedAt) return `done ${formatAge({ now, timestamp: run.completedAt })}`;
+  if (run.status === "skipped" && run.completedAt) return `skipped ${formatAge({ now, timestamp: run.completedAt })}`;
   if (run.status === "failed" && run.completedAt) return `failed ${formatAge({ now, timestamp: run.completedAt })}`;
   if (run.status === "cancelled" && run.completedAt) return `cancelled ${formatAge({ now, timestamp: run.completedAt })}`;
   if (run.status === "paused") return `paused ${formatDuration(now - run.updatedAt)}`;

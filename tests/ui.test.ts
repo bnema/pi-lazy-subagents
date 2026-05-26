@@ -55,6 +55,7 @@ function createSnapshot(runs: RunRecord[]): RunRegistrySnapshot {
       running: runs.filter((run) => run.status === "running").length,
       blocked: runs.filter((run) => run.status === "blocked").length,
       completed: runs.filter((run) => run.status === "completed").length,
+      skipped: runs.filter((run) => run.status === "skipped").length,
       failed: runs.filter((run) => run.status === "failed").length,
       cancelled: runs.filter((run) => run.status === "cancelled").length,
       paused: runs.filter((run) => run.status === "paused").length,
