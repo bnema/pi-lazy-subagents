@@ -1191,14 +1191,14 @@ export class LazySubagentsController {
   }
 
   private formatParsedResultReports(parsed: ParsedRunResult): CompletionReportLink[] {
-    return parsed.results
-      ?.map((entry) => {
+    return (parsed.results ?? [])
+      .map((entry) => {
         const reportPath = normalizeResultText(entry.artifactPaths?.outputPath);
         if (!reportPath) return undefined;
         const label = [entry.agent, entry.taskSummary].filter(Boolean).join(" / ") || entry.stepId || "report";
         return { label, path: reportPath };
       })
-      .filter((entry): entry is CompletionReportLink => Boolean(entry)) ?? [];
+      .filter((entry): entry is CompletionReportLink => Boolean(entry));
   }
 
   private async readResultText(run: RunRecord): Promise<string | undefined> {
@@ -1207,6 +1207,11 @@ export class LazySubagentsController {
   }
 
   private async getCompletionResultDetails(run: RunRecord): Promise<CompletionResultDetails | undefined> {
+    if (run.kind === "single") {
+      const artifactText = await this.readArtifactText(run);
+      if (artifactText) return { text: artifactText, reports: [] };
+    }
+
     const parsed = await this.readResultFile(run);
     if (parsed) {
       const text = this.formatParsedResultText(parsed);

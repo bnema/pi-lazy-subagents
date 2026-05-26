@@ -1406,7 +1406,7 @@ describe("LazySubagentsController", () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-lazy-subagents-controller-"));
     const firstArtifactPath = path.join(tempDir, "output-0.log");
     const resultPath = path.join(tempDir, "group-result.json");
-    await fs.writeFile(firstArtifactPath, "Reuse review only", "utf8");
+    await fs.writeFile(firstArtifactPath, "Only present in first child artifact", "utf8");
     await fs.writeFile(resultPath, JSON.stringify({
       id: "group-1",
       runId: "group-1",
@@ -1434,6 +1434,7 @@ describe("LazySubagentsController", () => {
     expect(result).toContain("[reuse]\nReuse review only");
     expect(result).toContain("[quality]\nQuality review complete");
     expect(result).toContain("[efficiency]\nEfficiency review complete");
+    expect(result).not.toContain("Only present in first child artifact");
   });
 
   test("prefers step errors when a step output is blank", async () => {
@@ -1502,7 +1503,9 @@ describe("LazySubagentsController", () => {
     expect(await controller.pickupRun("run-1")).toBe(true);
     const pickupMessage = userMessages.find((entry) => typeof entry.content === "string" && entry.content.includes("Lazy subagent result"));
     expect(pickupMessage?.content).toContain("Full reviewer result");
-    expect(hiddenCompletionMessages(messages).some((entry) => typeof entry.message.content === "string" && entry.message.content.includes("[DONE] Review auth diff"))).toBe(true);
+    const completionWake = hiddenCompletionMessages(messages).find((entry) => typeof entry.message.content === "string" && entry.message.content.includes("[DONE] Review auth diff"));
+    expect(completionWake?.message.content).toContain("Full reviewer result");
+    expect(completionWake?.message.content).not.toContain("Structured reviewer result");
 
     expect(await controller.cancelRun("run-1")).toBe(false);
 
