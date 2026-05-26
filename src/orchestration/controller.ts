@@ -837,6 +837,13 @@ export class LazySubagentsController {
     const run = this.registry.get(runId);
     if (!run) return undefined;
 
+    if (run.kind === "group" || run.kind === "workflow") {
+      const resultText = await this.readResultText(run);
+      if (resultText) return resultText;
+
+      return await this.readArtifactText(run);
+    }
+
     const artifactText = await this.readArtifactText(run);
     if (artifactText) return artifactText;
 

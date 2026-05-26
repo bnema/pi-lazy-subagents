@@ -1401,6 +1401,41 @@ describe("LazySubagentsController", () => {
     await expect(controller.getRunResult("run-array")).resolves.toBe("Artifact fallback");
   });
 
+  test("prefers aggregate result text over first child artifact for group runs", async () => {
+    const { api } = createPi();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-lazy-subagents-controller-"));
+    const firstArtifactPath = path.join(tempDir, "output-0.log");
+    const resultPath = path.join(tempDir, "group-result.json");
+    await fs.writeFile(firstArtifactPath, "Reuse review only", "utf8");
+    await fs.writeFile(resultPath, JSON.stringify({
+      id: "group-1",
+      runId: "group-1",
+      results: [
+        { stepId: "reuse", output: "Reuse review only" },
+        { stepId: "quality", output: "Quality review complete" },
+        { stepId: "efficiency", output: "Efficiency review complete" },
+      ],
+    }), "utf8");
+
+    const controller = new LazySubagentsController(api as any, { launcher: new FakeLauncher(), createRunId: () => "ignored", now: () => 210 });
+    const { ctx } = createContext({ isIdle: true, hasPendingMessages: false });
+
+    await controller.handleSessionStart(ctx);
+    (controller as any).registry.upsert(createRun({
+      id: "group-1",
+      kind: "group",
+      status: "completed",
+      artifactPath: firstArtifactPath,
+      launchRef: { runId: "group-1", asyncId: "group-1", resultPath },
+      recentEvents: [],
+    }));
+
+    const result = await controller.getRunResult("group-1");
+    expect(result).toContain("[reuse]\nReuse review only");
+    expect(result).toContain("[quality]\nQuality review complete");
+    expect(result).toContain("[efficiency]\nEfficiency review complete");
+  });
+
   test("prefers step errors when a step output is blank", async () => {
     const { api } = createPi();
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-lazy-subagents-controller-"));
@@ -1430,8 +1465,15 @@ describe("LazySubagentsController", () => {
     const { api, messages, userMessages } = createPi();
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-lazy-subagents-controller-"));
     const artifactPath = path.join(tempDir, "run-1-output.log");
+    const resultPath = path.join(tempDir, "run-1-result.json");
     await fs.writeFile(artifactPath, "Full reviewer result", "utf8");
+    await fs.writeFile(resultPath, JSON.stringify({
+      id: "run-1",
+      runId: "run-1",
+      results: [{ stepId: "review", output: "Structured reviewer result" }],
+    }), "utf8");
     const launcher = new FakeLauncher();
+    launcher.launchResults.set("run-1", { resultPath });
     const controller = new LazySubagentsController(api as any, { launcher, createRunId: () => "run-1", now: () => 200 });
     const { ctx } = createContext({ isIdle: true, hasPendingMessages: false });
 
