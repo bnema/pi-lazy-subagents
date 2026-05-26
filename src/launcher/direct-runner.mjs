@@ -57,6 +57,17 @@ function summarizeOutput(text, maxLength = 400) {
   return singleLine.length <= maxLength ? singleLine : `${singleLine.slice(0, maxLength - 1).trimEnd()}…`;
 }
 
+export function buildResultSummary(results, maxChildLength = 200) {
+  const lines = results
+    .map((result) => {
+      const text = summarizeOutput(result.summary || result.output || result.error || "(no output)", maxChildLength);
+      return text ? `${formatResultLabel(result)}: ${text}` : undefined;
+    })
+    .filter(Boolean);
+
+  return lines.length > 0 ? lines.join("\n") : "";
+}
+
 function toErrorMessage(error) {
   return error instanceof Error ? error.message : String(error);
 }
@@ -570,11 +581,7 @@ function markWorkflowStepsCancelled(status, stepIds, reason) {
 async function writeResult(config, status, results) {
   const timestamp = now();
   const success = results.every((result) => result.success);
-  const summary = summarizeOutput(
-    results
-      .map((result) => `${formatResultLabel(result)}: ${result.output || result.error || "(no output)"}`)
-      .join("\n\n"),
-  );
+  const summary = buildResultSummary(results);
 
   await writeJson(config.resultPath, {
     id: config.runId,

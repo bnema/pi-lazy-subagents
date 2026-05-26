@@ -265,23 +265,87 @@ function formatPickupMessage(run: RunRecord, result: string): string {
 
 const COMPLETION_RESULT_EXCERPT_MAX_CHARS = 12_000;
 
+type ParsedRunResult = {
+  summary?: string;
+  results?: Array<{
+    stepId?: string;
+    taskSummary?: string;
+    agent?: string;
+    output?: string;
+    error?: string;
+    artifactPaths?: {
+      outputPath?: string;
+    };
+  }>;
+};
+
+type CompletionReportLink = {
+  label: string;
+  path: string;
+};
+
+type CompletionResultDetails = {
+  text?: string;
+  summary?: string;
+  reports: CompletionReportLink[];
+};
+
 function truncateCompletionResult(text: string): string {
   if (text.length <= COMPLETION_RESULT_EXCERPT_MAX_CHARS) return text;
   return `${text.slice(0, COMPLETION_RESULT_EXCERPT_MAX_CHARS).trimEnd()}\n\n[Result excerpt truncated. Read the full report path above.]`;
 }
 
-function formatCompletionInput(run: RunRecord, summary: string, resultText?: string): string {
+function collectCompletionReports(run: RunRecord, childReports: CompletionReportLink[], includeParentReports: boolean): CompletionReportLink[] {
+  const reports: CompletionReportLink[] = [];
+  const seen = new Set<string>();
+
+  const addReport = (label: string, reportPath: string | undefined): void => {
+    const normalizedPath = normalizeResultText(reportPath);
+    if (!normalizedPath || seen.has(normalizedPath)) return;
+    seen.add(normalizedPath);
+    reports.push({ label, path: normalizedPath });
+  };
+
+  if (includeParentReports) {
+    addReport("Full report", run.artifactPath);
+    addReport("Result file", run.launchRef?.resultPath);
+    addReport("Session file", run.sessionFile);
+  }
+
+  for (const report of childReports) {
+    addReport(report.label, report.path);
+  }
+
+  return reports;
+}
+
+function formatCompletionInput(run: RunRecord, summary: string, result?: CompletionResultDetails): string {
   const signal = run.status === "completed"
     ? "DONE"
     : run.status === "failed"
       ? "FAILED"
       : "ATTENTION";
   const reportPath = run.artifactPath ?? run.launchRef?.resultPath ?? run.sessionFile;
+  const includeParentReports = run.kind !== "single";
+  const reports = collectCompletionReports(run, result?.reports ?? [], includeParentReports);
   const lines = [`[${signal}] ${run.title || run.taskSummary}`, ""];
 
-  if (reportPath) lines.push(`Full report: ${reportPath}`, "");
-  if (resultText && run.status === "completed") {
-    lines.push("Result excerpt:", truncateCompletionResult(resultText));
+  if (reports.length > 0) {
+    lines.push("Reports:");
+    for (const report of reports) {
+      lines.push(`- ${report.label}: ${report.path}`);
+    }
+    lines.push("");
+  } else if (reportPath) {
+    lines.push(`Full report: ${reportPath}`, "");
+  }
+
+  if (result?.summary) {
+    lines.push("Summary:", result.summary, "");
+  }
+
+  if (result?.text && run.status === "completed") {
+    lines.push("Result excerpt:", truncateCompletionResult(result.text));
     return lines.join("\n");
   }
 
@@ -773,6 +837,13 @@ export class LazySubagentsController {
     const run = this.registry.get(runId);
     if (!run) return undefined;
 
+    if (run.kind === "group" || run.kind === "workflow") {
+      const resultText = await this.readResultText(run);
+      if (resultText) return resultText;
+
+      return await this.readArtifactText(run);
+    }
+
     const artifactText = await this.readArtifactText(run);
     if (artifactText) return artifactText;
 
@@ -1060,18 +1131,21 @@ export class LazySubagentsController {
       return;
     }
 
-    const resultText = run.status === "completed" ? await this.getRunResult(run.id) : undefined;
-    const summary = buildHiddenSummary(run, this.registry.snapshot(), { includePreview: !resultText });
-    const content = formatCompletionInput(run, summary.text, resultText);
+    const result = run.status === "completed" ? await this.getCompletionResultDetails(run) : undefined;
+    const summary = buildHiddenSummary(run, this.registry.snapshot(), { includePreview: !result?.text });
+    const content = formatCompletionInput(run, summary.text, result);
     const isIdle = this.currentCtx?.isIdle() ?? false;
     const hasPendingMessages = this.currentCtx?.hasPendingMessages() ?? true;
 
-    if (isIdle && !hasPendingMessages) {
-      this.pi.sendUserMessage(content);
-      return;
-    }
-
-    this.pi.sendUserMessage(content, { deliverAs: decision.deliverAs });
+    this.pi.sendMessage({
+      customType: run.status === "failed" ? MESSAGE_TYPE_FAILURE : run.status === "paused" ? MESSAGE_TYPE_ATTENTION : MESSAGE_TYPE_COMPLETION,
+      content,
+      display: false,
+      details: { runId: run.id, status: run.status, routedCompletion: true },
+    }, {
+      triggerTurn: isIdle && !hasPendingMessages,
+      deliverAs: decision.deliverAs,
+    });
   }
 
   private async readArtifactText(run: RunRecord): Promise<string | undefined> {
@@ -1085,35 +1159,75 @@ export class LazySubagentsController {
     }
   }
 
-  private async readResultText(run: RunRecord): Promise<string | undefined> {
+  private async readResultFile(run: RunRecord): Promise<ParsedRunResult | undefined> {
     const resultPath = run.launchRef?.resultPath;
     if (!resultPath) return undefined;
 
     try {
       const raw = await fsp.readFile(resultPath, "utf8");
-      const parsed = JSON.parse(raw) as {
-        summary?: string;
-        results?: Array<{ stepId?: string; taskSummary?: string; agent?: string; output?: string; error?: string }>;
+      const parsed = JSON.parse(raw) as unknown;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
+      const result = parsed as ParsedRunResult;
+      return {
+        ...result,
+        results: Array.isArray(result.results) ? result.results : [],
       };
-
-      const outputs = parsed.results
-        ?.map((entry) => {
-          const rawText = entry.output?.trim() ? entry.output : entry.error;
-          const text = normalizeResultText(rawText);
-          if (!text) return undefined;
-          const label = entry.stepId ?? entry.taskSummary ?? entry.agent;
-          return label ? `[${label}]\n${text}` : text;
-        })
-        .filter((entry): entry is string => Boolean(entry));
-
-      if (outputs && outputs.length > 0) {
-        return outputs.length === 1 ? outputs[0] : outputs.join("\n\n");
-      }
-
-      return normalizeResultText(parsed.summary);
     } catch {
       return undefined;
     }
+  }
+
+  private formatParsedResultText(parsed: ParsedRunResult): string | undefined {
+    const outputs = parsed.results
+      ?.map((entry) => {
+        const rawText = entry.output?.trim() ? entry.output : entry.error;
+        const text = normalizeResultText(rawText);
+        if (!text) return undefined;
+        const label = entry.stepId ?? entry.taskSummary ?? entry.agent;
+        return label ? `[${label}]\n${text}` : text;
+      })
+      .filter((entry): entry is string => Boolean(entry));
+
+    if (outputs && outputs.length > 0) {
+      return outputs.length === 1 ? outputs[0] : outputs.join("\n\n");
+    }
+
+    return normalizeResultText(parsed.summary);
+  }
+
+  private formatParsedResultReports(parsed: ParsedRunResult): CompletionReportLink[] {
+    return (parsed.results ?? [])
+      .map((entry) => {
+        const reportPath = normalizeResultText(entry.artifactPaths?.outputPath);
+        if (!reportPath) return undefined;
+        const label = [entry.agent, entry.taskSummary].filter(Boolean).join(" / ") || entry.stepId || "report";
+        return { label, path: reportPath };
+      })
+      .filter((entry): entry is CompletionReportLink => Boolean(entry));
+  }
+
+  private async readResultText(run: RunRecord): Promise<string | undefined> {
+    const parsed = await this.readResultFile(run);
+    return parsed ? this.formatParsedResultText(parsed) : undefined;
+  }
+
+  private async getCompletionResultDetails(run: RunRecord): Promise<CompletionResultDetails | undefined> {
+    if (run.kind === "single") {
+      const artifactText = await this.readArtifactText(run);
+      if (artifactText) return { text: artifactText, reports: [] };
+    }
+
+    const parsed = await this.readResultFile(run);
+    if (parsed) {
+      const parsedText = this.formatParsedResultText(parsed);
+      const summary = normalizeResultText(parsed.summary);
+      const text = parsedText && parsedText.trim() !== summary?.trim() ? parsedText : undefined;
+      const reports = this.formatParsedResultReports(parsed);
+      if (text || summary || reports.length > 0) return { text, summary, reports };
+    }
+
+    const artifactText = await this.readArtifactText(run);
+    return artifactText ? { text: artifactText, reports: [] } : undefined;
   }
 
   private getLiveUiSnapshot(now = this.now()): RunRegistrySnapshot {

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 
 import {
+  buildResultSummary,
   createSerialLineProcessor,
   getReadyWorkflowStepIds,
   parseStructuredStepOutput,
@@ -127,6 +128,20 @@ describe("direct runner stdout processing", () => {
 
   test("throws when a workflow prompt references an unknown step id", () => {
     expect(() => renderWorkflowPrompt("{{missing.summary}}", {})).toThrow("Unknown workflow step reference: missing");
+  });
+
+  test("builds per-child result summaries instead of truncating the combined first output", () => {
+    const summary = buildResultSummary([
+      { stepId: "reuse", output: "Reuse finding ".repeat(80), success: true },
+      { stepId: "quality", output: "Quality finding about duplicated assertions", success: true },
+      { stepId: "efficiency", error: "Efficiency reviewer failed", success: false },
+    ]);
+
+    expect(summary).toContain("reuse: Reuse finding");
+    expect(summary).toContain("quality: Quality finding about duplicated assertions");
+    expect(summary).toContain("efficiency: Efficiency reviewer failed");
+    expect(summary.indexOf("reuse:")).toBeLessThan(summary.indexOf("quality:"));
+    expect(summary.indexOf("quality:")).toBeLessThan(summary.indexOf("efficiency:"));
   });
 
   test("selects ready workflow steps from dependency-complete pending work", () => {

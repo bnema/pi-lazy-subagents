@@ -63,11 +63,15 @@ class FakeLauncher implements Launcher {
 
   async launchGroup(request: { runId: string }): Promise<LaunchResult> {
     if (this.launchGroupError) throw this.launchGroupError;
+    const override = this.launchResults.get(request.runId) ?? {};
     return {
       runId: request.runId,
       asyncId: request.runId,
-      asyncDir: `/tmp/${request.runId}`,
-      resultPath: `/tmp/results/${request.runId}.json`,
+      asyncDir: override.asyncDir ?? `/tmp/${request.runId}`,
+      resultPath: override.resultPath ?? `/tmp/results/${request.runId}.json`,
+      sessionFile: override.sessionFile,
+      artifactPath: override.artifactPath,
+      model: override.model,
     };
   }
 
@@ -165,6 +169,10 @@ function createPi() {
       },
     },
   };
+}
+
+function hiddenCompletionMessages(messages: Array<{ message: any; options: any }>): Array<{ message: any; options: any }> {
+  return messages.filter((entry) => entry.message.customType === MESSAGE_TYPE_COMPLETION && entry.message.display === false);
 }
 
 describe("LazySubagentsController", () => {
@@ -287,7 +295,7 @@ describe("LazySubagentsController", () => {
       resultPreview: "Found 3 issues",
     }));
 
-    const { api, userMessages } = createPi();
+    const { api, messages, userMessages } = createPi();
     const controller = new LazySubagentsController(api as any, { launcher: new FakeLauncher(), now: () => 200 });
     const { ctx } = createContext({
       isIdle: true,
@@ -297,10 +305,12 @@ describe("LazySubagentsController", () => {
 
     await controller.handleSessionStart(ctx);
 
-    expect(userMessages).toHaveLength(1);
-    expect(userMessages[0]?.content).toContain("[DONE] Review finished offline");
-    expect(userMessages[0]?.content).toContain("Lazy subagent update");
-    expect(userMessages[0]?.options).toBeUndefined();
+    expect(userMessages).toHaveLength(0);
+    const wakeMessages = hiddenCompletionMessages(messages);
+    expect(wakeMessages).toHaveLength(1);
+    expect(wakeMessages[0]?.message.content).toContain("[DONE] Review finished offline");
+    expect(wakeMessages[0]?.message.content).toContain("Lazy subagent update");
+    expect(wakeMessages[0]?.options).toEqual({ triggerTurn: true, deliverAs: "steer" });
   });
 
   test("defers completion surfacing while the main session context is unavailable", async () => {
@@ -341,10 +351,12 @@ describe("LazySubagentsController", () => {
 
     await controller.handleSessionStart(restoredCtx);
 
-    expect(userMessages).toHaveLength(1);
-    expect(userMessages[0]?.content).toContain("[DONE] Review auth diff");
-    expect(userMessages[0]?.content).toContain("Lazy subagent update");
-    expect(userMessages[0]?.options).toBeUndefined();
+    expect(userMessages).toHaveLength(0);
+    const wakeMessages = hiddenCompletionMessages(messages);
+    expect(wakeMessages).toHaveLength(1);
+    expect(wakeMessages[0]?.message.content).toContain("[DONE] Review auth diff");
+    expect(wakeMessages[0]?.message.content).toContain("Lazy subagent update");
+    expect(wakeMessages[0]?.options).toEqual({ triggerTurn: true, deliverAs: "steer" });
   });
 
   test("launches a child, emits a launch card, persists state, and routes completion once", async () => {
@@ -387,13 +399,192 @@ describe("LazySubagentsController", () => {
     await controller.pollOnce();
 
     expect(controller.getSnapshot().recentRuns[0]?.status).toBe("completed");
-    expect(messages.filter((entry) => entry.message.customType === MESSAGE_TYPE_COMPLETION)).toHaveLength(1);
-    expect(userMessages).toHaveLength(1);
-    expect(userMessages[0]?.content).toContain("[DONE] Review auth diff");
-    expect(userMessages[0]?.content).toContain(`Full report: ${artifactPath}`);
-    expect(userMessages[0]?.content).toContain("Result excerpt:\nFull reviewer report");
-    expect(userMessages[0]?.content).not.toContain("Lazy subagent update");
-    expect(userMessages[0]?.content).not.toContain("- Summary: Found 3 issues in auth.ts");
+    expect(messages.filter((entry) => entry.message.customType === MESSAGE_TYPE_COMPLETION && entry.message.display === true)).toHaveLength(1);
+    expect(userMessages).toHaveLength(0);
+    const wakeMessages = hiddenCompletionMessages(messages);
+    expect(wakeMessages).toHaveLength(1);
+    expect(wakeMessages[0]?.message.content).toContain("[DONE] Review auth diff");
+    expect(wakeMessages[0]?.message.content).toContain(`Full report: ${artifactPath}`);
+    expect(wakeMessages[0]?.message.content).toContain("Result excerpt:\nFull reviewer report");
+    expect(wakeMessages[0]?.message.content).not.toContain("Lazy subagent update");
+    expect(wakeMessages[0]?.message.content).not.toContain("- Summary: Found 3 issues in auth.ts");
+  });
+
+  test("routes parallel group completion with all child report links and one aggregate summary", async () => {
+    const { api, messages, userMessages } = createPi();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-lazy-subagents-group-"));
+    const resultPath = path.join(tempDir, "group-1.json");
+    const groupReport = path.join(tempDir, "group-report.md");
+    const reportA = path.join(tempDir, "output-a.log");
+    const reportB = path.join(tempDir, "output-b.log");
+    const reportC = path.join(tempDir, "output-c.log");
+    await fs.writeFile(groupReport, "Aggregate group report", "utf8");
+    await fs.writeFile(reportA, "Scout found auth coupling", "utf8");
+    await fs.writeFile(reportB, "Reviewer found race risk", "utf8");
+    await fs.writeFile(reportC, "Verifier found missing test", "utf8");
+    await fs.writeFile(resultPath, JSON.stringify({
+      id: "group-1",
+      runId: "group-1",
+      state: "complete",
+      success: true,
+      summary: "Three agents agree: fix auth coupling, race risk, and missing test coverage.",
+      timestamp: 130,
+      results: [
+        { stepId: "scout", taskSummary: "Inspect auth", agent: "scout", output: "Scout found auth coupling", artifactPaths: { outputPath: reportA } },
+        { stepId: "review", taskSummary: "Review auth", agent: "reviewer", output: "Reviewer found race risk", artifactPaths: { outputPath: reportB } },
+        { stepId: "verify", taskSummary: "Verify auth", agent: "verifier", output: "Verifier found missing test", artifactPaths: { outputPath: reportC } },
+      ],
+    }), "utf8");
+
+    const launcher = new FakeLauncher();
+    launcher.launchResults.set("group-1", { resultPath });
+    const controller = new LazySubagentsController(api as any, { launcher, createRunId: () => "group-1", now: () => 100 });
+    const { ctx } = createContext({ isIdle: true, hasPendingMessages: false });
+
+    await controller.handleSessionStart(ctx);
+    await controller.launchGroup(
+      {
+        title: "Parallel auth review",
+        taskSummary: "Parallel auth review",
+        children: [
+          { agent: "scout", prompt: "Inspect auth", taskSummary: "Inspect auth" },
+          { agent: "reviewer", prompt: "Review auth", taskSummary: "Review auth" },
+          { agent: "verifier", prompt: "Verify auth", taskSummary: "Verify auth" },
+        ],
+      },
+      ctx,
+    );
+
+    launcher.updates.set("group-1", {
+      runId: "group-1",
+      status: "completed",
+      updatedAt: 130,
+      completedAt: 130,
+      artifactPath: groupReport,
+      resultPreview: "Three agents agree: fix auth coupling, race risk, and missing test coverage.",
+    });
+
+    await controller.pollOnce();
+
+    expect(userMessages).toHaveLength(0);
+    const wakeMessages = hiddenCompletionMessages(messages);
+    expect(wakeMessages).toHaveLength(1);
+    expect(wakeMessages[0]?.message.content).toContain("[DONE] Parallel auth review");
+    expect(wakeMessages[0]?.message.content).toContain("Reports:");
+    expect(wakeMessages[0]?.message.content).toContain(`- Full report: ${groupReport}`);
+    expect(wakeMessages[0]?.message.content).toContain(`- Result file: ${resultPath}`);
+    expect(wakeMessages[0]?.message.content).toContain(`- scout / Inspect auth: ${reportA}`);
+    expect(wakeMessages[0]?.message.content).toContain(`- reviewer / Review auth: ${reportB}`);
+    expect(wakeMessages[0]?.message.content).toContain(`- verifier / Verify auth: ${reportC}`);
+    expect(wakeMessages[0]?.message.content).toContain("Summary:\nThree agents agree: fix auth coupling, race risk, and missing test coverage.");
+    expect(wakeMessages[0]?.message.content).toContain("Result excerpt:");
+    expect(wakeMessages[0]?.message.content).toContain("[scout]\nScout found auth coupling");
+    expect(wakeMessages[0]?.message.content).toContain("[review]\nReviewer found race risk");
+    expect(wakeMessages[0]?.message.content).toContain("[verify]\nVerifier found missing test");
+  });
+
+  test("routes group completion parent reports even when child artifact paths are missing", async () => {
+    const { api, messages, userMessages } = createPi();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-lazy-subagents-group-no-child-reports-"));
+    const resultPath = path.join(tempDir, "group-1.json");
+    const groupReport = path.join(tempDir, "group-report.md");
+    await fs.writeFile(groupReport, "Aggregate group report", "utf8");
+    await fs.writeFile(resultPath, JSON.stringify({
+      id: "group-1",
+      runId: "group-1",
+      state: "complete",
+      success: true,
+      summary: "Aggregate only summary.",
+      timestamp: 130,
+      results: [
+        { stepId: "scout", taskSummary: "Inspect auth", agent: "scout", output: "Scout found auth coupling" },
+        { stepId: "review", taskSummary: "Review auth", agent: "reviewer", output: "Reviewer found race risk" },
+      ],
+    }), "utf8");
+
+    const launcher = new FakeLauncher();
+    launcher.launchResults.set("group-1", { resultPath });
+    const controller = new LazySubagentsController(api as any, { launcher, createRunId: () => "group-1", now: () => 100 });
+    const { ctx } = createContext({ isIdle: true, hasPendingMessages: false });
+
+    await controller.handleSessionStart(ctx);
+    await controller.launchGroup(
+      {
+        title: "Parallel auth review",
+        taskSummary: "Parallel auth review",
+        children: [
+          { agent: "scout", prompt: "Inspect auth", taskSummary: "Inspect auth" },
+          { agent: "reviewer", prompt: "Review auth", taskSummary: "Review auth" },
+        ],
+      },
+      ctx,
+    );
+
+    launcher.updates.set("group-1", {
+      runId: "group-1",
+      status: "completed",
+      updatedAt: 130,
+      completedAt: 130,
+      artifactPath: groupReport,
+      resultPreview: "Aggregate only summary.",
+    });
+
+    await controller.pollOnce();
+
+    expect(userMessages).toHaveLength(0);
+    const wakeMessages = hiddenCompletionMessages(messages);
+    expect(wakeMessages).toHaveLength(1);
+    expect(wakeMessages[0]?.message.content).toContain("Reports:");
+    expect(wakeMessages[0]?.message.content).toContain(`- Full report: ${groupReport}`);
+    expect(wakeMessages[0]?.message.content).toContain(`- Result file: ${resultPath}`);
+    expect(wakeMessages[0]?.message.content).toContain("[scout]\nScout found auth coupling");
+    expect(wakeMessages[0]?.message.content).toContain("[review]\nReviewer found race risk");
+  });
+
+  test("routes summary-only group completion without duplicating the summary as excerpt", async () => {
+    const { api, messages } = createPi();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-lazy-subagents-summary-only-"));
+    const resultPath = path.join(tempDir, "group-1.json");
+    await fs.writeFile(resultPath, JSON.stringify({
+      id: "group-1",
+      runId: "group-1",
+      state: "complete",
+      success: true,
+      summary: "Only a high-level aggregate summary.",
+      timestamp: 130,
+    }), "utf8");
+
+    const launcher = new FakeLauncher();
+    launcher.launchResults.set("group-1", { resultPath });
+    const controller = new LazySubagentsController(api as any, { launcher, createRunId: () => "group-1", now: () => 100 });
+    const { ctx } = createContext({ isIdle: true, hasPendingMessages: false });
+
+    await controller.handleSessionStart(ctx);
+    await controller.launchGroup(
+      {
+        title: "Parallel auth review",
+        taskSummary: "Parallel auth review",
+        children: [{ agent: "scout", prompt: "Inspect auth", taskSummary: "Inspect auth" }],
+      },
+      ctx,
+    );
+
+    launcher.updates.set("group-1", {
+      runId: "group-1",
+      status: "completed",
+      updatedAt: 130,
+      completedAt: 130,
+      resultPreview: "Only a high-level aggregate summary.",
+    });
+
+    await controller.pollOnce();
+
+    const wakeMessages = hiddenCompletionMessages(messages);
+    expect(wakeMessages).toHaveLength(1);
+    expect(wakeMessages[0]?.message.content).toContain("Reports:");
+    expect(wakeMessages[0]?.message.content).toContain(`- Result file: ${resultPath}`);
+    expect(wakeMessages[0]?.message.content).toContain("Summary:\nOnly a high-level aggregate summary.");
+    expect(wakeMessages[0]?.message.content).not.toContain("Result excerpt:");
   });
 
   test("routes failed runs back to the main agent even from legacy notify-only state", async () => {
@@ -420,7 +611,7 @@ describe("LazySubagentsController", () => {
       }],
     };
 
-    const { api, userMessages } = createPi();
+    const { api, messages, userMessages } = createPi();
     const controller = new LazySubagentsController(api as any, { launcher: new FakeLauncher(), now: () => 200 });
     const { ctx } = createContext({
       isIdle: true,
@@ -430,10 +621,12 @@ describe("LazySubagentsController", () => {
 
     await controller.handleSessionStart(ctx);
 
-    expect(userMessages).toHaveLength(1);
-    expect(userMessages[0]?.content).toContain("[FAILED] Review failed");
-    expect(userMessages[0]?.content).toContain("review process exited 1");
-    expect(userMessages[0]?.options).toBeUndefined();
+    expect(userMessages).toHaveLength(0);
+    const wakeMessages = messages.filter((entry) => entry.message.customType === MESSAGE_TYPE_FAILURE && entry.message.display === false);
+    expect(wakeMessages).toHaveLength(1);
+    expect(wakeMessages[0]?.message.content).toContain("[FAILED] Review failed");
+    expect(wakeMessages[0]?.message.content).toContain("review process exited 1");
+    expect(wakeMessages[0]?.options).toEqual({ triggerTurn: true, deliverAs: "steer" });
   });
 
   test("waitForRunSignal blocks via polling until a run is completed or needs attention", async () => {
@@ -1230,6 +1423,66 @@ describe("LazySubagentsController", () => {
     expect(messages.at(-1)?.message.customType).toBe(MESSAGE_TYPE_FAILURE);
   });
 
+  test("ignores malformed array result files and falls back to artifact text", async () => {
+    const { api } = createPi();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-lazy-subagents-controller-"));
+    const resultPath = path.join(tempDir, "run-array.json");
+    const artifactPath = path.join(tempDir, "run-array.log");
+    await fs.writeFile(resultPath, "[]", "utf8");
+    await fs.writeFile(artifactPath, "Artifact fallback", "utf8");
+
+    const controller = new LazySubagentsController(api as any, { launcher: new FakeLauncher(), createRunId: () => "ignored", now: () => 210 });
+    const { ctx } = createContext({ isIdle: true, hasPendingMessages: false });
+
+    await controller.handleSessionStart(ctx);
+    (controller as any).registry.upsert(createRun({
+      id: "run-array",
+      kind: "workflow",
+      status: "completed",
+      artifactPath,
+      launchRef: { runId: "run-array", asyncId: "run-array", resultPath },
+      recentEvents: [],
+    }));
+
+    await expect(controller.getRunResult("run-array")).resolves.toBe("Artifact fallback");
+  });
+
+  test("prefers aggregate result text over first child artifact for group runs", async () => {
+    const { api } = createPi();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-lazy-subagents-controller-"));
+    const firstArtifactPath = path.join(tempDir, "output-0.log");
+    const resultPath = path.join(tempDir, "group-result.json");
+    await fs.writeFile(firstArtifactPath, "Only present in first child artifact", "utf8");
+    await fs.writeFile(resultPath, JSON.stringify({
+      id: "group-1",
+      runId: "group-1",
+      results: [
+        { stepId: "reuse", output: "Reuse review only" },
+        { stepId: "quality", output: "Quality review complete" },
+        { stepId: "efficiency", output: "Efficiency review complete" },
+      ],
+    }), "utf8");
+
+    const controller = new LazySubagentsController(api as any, { launcher: new FakeLauncher(), createRunId: () => "ignored", now: () => 210 });
+    const { ctx } = createContext({ isIdle: true, hasPendingMessages: false });
+
+    await controller.handleSessionStart(ctx);
+    (controller as any).registry.upsert(createRun({
+      id: "group-1",
+      kind: "group",
+      status: "completed",
+      artifactPath: firstArtifactPath,
+      launchRef: { runId: "group-1", asyncId: "group-1", resultPath },
+      recentEvents: [],
+    }));
+
+    const result = await controller.getRunResult("group-1");
+    expect(result).toContain("[reuse]\nReuse review only");
+    expect(result).toContain("[quality]\nQuality review complete");
+    expect(result).toContain("[efficiency]\nEfficiency review complete");
+    expect(result).not.toContain("Only present in first child artifact");
+  });
+
   test("prefers step errors when a step output is blank", async () => {
     const { api } = createPi();
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-lazy-subagents-controller-"));
@@ -1256,11 +1509,18 @@ describe("LazySubagentsController", () => {
   });
 
   test("supports result retrieval, pickup injection, cancel, and clear control actions", async () => {
-    const { api, userMessages } = createPi();
+    const { api, messages, userMessages } = createPi();
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-lazy-subagents-controller-"));
     const artifactPath = path.join(tempDir, "run-1-output.log");
+    const resultPath = path.join(tempDir, "run-1-result.json");
     await fs.writeFile(artifactPath, "Full reviewer result", "utf8");
+    await fs.writeFile(resultPath, JSON.stringify({
+      id: "run-1",
+      runId: "run-1",
+      results: [{ stepId: "review", output: "Structured reviewer result" }],
+    }), "utf8");
     const launcher = new FakeLauncher();
+    launcher.launchResults.set("run-1", { resultPath });
     const controller = new LazySubagentsController(api as any, { launcher, createRunId: () => "run-1", now: () => 200 });
     const { ctx } = createContext({ isIdle: true, hasPendingMessages: false });
 
@@ -1289,7 +1549,9 @@ describe("LazySubagentsController", () => {
     expect(await controller.pickupRun("run-1")).toBe(true);
     const pickupMessage = userMessages.find((entry) => typeof entry.content === "string" && entry.content.includes("Lazy subagent result"));
     expect(pickupMessage?.content).toContain("Full reviewer result");
-    expect(userMessages.some((entry) => typeof entry.content === "string" && entry.content.includes("[DONE] Review auth diff"))).toBe(true);
+    const completionWake = hiddenCompletionMessages(messages).find((entry) => typeof entry.message.content === "string" && entry.message.content.includes("[DONE] Review auth diff"));
+    expect(completionWake?.message.content).toContain("Full reviewer result");
+    expect(completionWake?.message.content).not.toContain("Structured reviewer result");
 
     expect(await controller.cancelRun("run-1")).toBe(false);
 

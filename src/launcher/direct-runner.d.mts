@@ -33,6 +33,17 @@ export interface WorkflowRetryExecutionResult<T = unknown> {
   finalResult: T;
 }
 
+export type RunnerResultSummaryInput = {
+  stepId?: string;
+  taskSummary?: string;
+  agent?: string;
+  summary?: string;
+  output?: string;
+  error?: string;
+  [key: string]: unknown;
+};
+
+export function buildResultSummary(results: RunnerResultSummaryInput[], maxChildLength?: number): string;
 export function renderWorkflowPrompt(template: string, results: Record<string, WorkflowPromptResult> | undefined): string;
 export function parseStructuredStepOutput(output: string, outputMode: "json" | "text" | undefined): Record<string, unknown> | undefined;
 export function getReadyWorkflowStepIds(steps: WorkflowStatusStep[], maxConcurrency: number): string[];
