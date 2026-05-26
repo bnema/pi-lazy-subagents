@@ -541,6 +541,52 @@ describe("LazySubagentsController", () => {
     expect(wakeMessages[0]?.message.content).toContain("[review]\nReviewer found race risk");
   });
 
+  test("routes summary-only group completion without duplicating the summary as excerpt", async () => {
+    const { api, messages } = createPi();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-lazy-subagents-summary-only-"));
+    const resultPath = path.join(tempDir, "group-1.json");
+    await fs.writeFile(resultPath, JSON.stringify({
+      id: "group-1",
+      runId: "group-1",
+      state: "complete",
+      success: true,
+      summary: "Only a high-level aggregate summary.",
+      timestamp: 130,
+    }), "utf8");
+
+    const launcher = new FakeLauncher();
+    launcher.launchResults.set("group-1", { resultPath });
+    const controller = new LazySubagentsController(api as any, { launcher, createRunId: () => "group-1", now: () => 100 });
+    const { ctx } = createContext({ isIdle: true, hasPendingMessages: false });
+
+    await controller.handleSessionStart(ctx);
+    await controller.launchGroup(
+      {
+        title: "Parallel auth review",
+        taskSummary: "Parallel auth review",
+        children: [{ agent: "scout", prompt: "Inspect auth", taskSummary: "Inspect auth" }],
+      },
+      ctx,
+    );
+
+    launcher.updates.set("group-1", {
+      runId: "group-1",
+      status: "completed",
+      updatedAt: 130,
+      completedAt: 130,
+      resultPreview: "Only a high-level aggregate summary.",
+    });
+
+    await controller.pollOnce();
+
+    const wakeMessages = hiddenCompletionMessages(messages);
+    expect(wakeMessages).toHaveLength(1);
+    expect(wakeMessages[0]?.message.content).toContain("Reports:");
+    expect(wakeMessages[0]?.message.content).toContain(`- Result file: ${resultPath}`);
+    expect(wakeMessages[0]?.message.content).toContain("Summary:\nOnly a high-level aggregate summary.");
+    expect(wakeMessages[0]?.message.content).not.toContain("Result excerpt:");
+  });
+
   test("routes failed runs back to the main agent even from legacy notify-only state", async () => {
     const legacyPersisted = {
       version: 1,

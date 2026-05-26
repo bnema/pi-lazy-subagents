@@ -65,7 +65,7 @@ export function buildResultSummary(results, maxChildLength = 200) {
     })
     .filter(Boolean);
 
-  return lines.length > 0 ? lines.join("\n") : undefined;
+  return lines.length > 0 ? lines.join("\n") : "";
 }
 
 function toErrorMessage(error) {

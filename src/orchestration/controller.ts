@@ -326,7 +326,7 @@ function formatCompletionInput(run: RunRecord, summary: string, result?: Complet
       ? "FAILED"
       : "ATTENTION";
   const reportPath = run.artifactPath ?? run.launchRef?.resultPath ?? run.sessionFile;
-  const includeParentReports = Boolean(result && run.kind !== "single");
+  const includeParentReports = run.kind !== "single";
   const reports = collectCompletionReports(run, result?.reports ?? [], includeParentReports);
   const lines = [`[${signal}] ${run.title || run.taskSummary}`, ""];
 
@@ -1166,7 +1166,12 @@ export class LazySubagentsController {
     try {
       const raw = await fsp.readFile(resultPath, "utf8");
       const parsed = JSON.parse(raw) as unknown;
-      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as ParsedRunResult : undefined;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
+      const result = parsed as ParsedRunResult;
+      return {
+        ...result,
+        results: Array.isArray(result.results) ? result.results : [],
+      };
     } catch {
       return undefined;
     }
@@ -1214,8 +1219,9 @@ export class LazySubagentsController {
 
     const parsed = await this.readResultFile(run);
     if (parsed) {
-      const text = this.formatParsedResultText(parsed);
+      const parsedText = this.formatParsedResultText(parsed);
       const summary = normalizeResultText(parsed.summary);
+      const text = parsedText && parsedText.trim() !== summary?.trim() ? parsedText : undefined;
       const reports = this.formatParsedResultReports(parsed);
       if (text || summary || reports.length > 0) return { text, summary, reports };
     }
