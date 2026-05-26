@@ -278,7 +278,7 @@ export function expandFanOutWorkflowStep(step, results) {
 }
 
 export function getReadyWorkflowStepIds(steps, maxConcurrency) {
-  const runningCount = steps.filter((step) => step.status === "running").length;
+  const runningCount = steps.filter((step) => step.status === "running" && !(step.fanOutFrom && Array.isArray(step.fanOutChildIds))).length;
   const availableSlots = Math.max(0, maxConcurrency - runningCount);
   if (availableSlots === 0) return [];
 
@@ -673,6 +673,72 @@ function formatResultLabel(result) {
   return result.stepId ?? result.taskSummary ?? result.agent ?? "step";
 }
 
+function fanOutChildResultEntry(result) {
+  return {
+    id: result.stepId,
+    taskSummary: result.taskSummary,
+    status: result.status ?? (result.skipped ? "skipped" : result.success ? "completed" : "failed"),
+    success: Boolean(result.success),
+    skipped: result.skipped === true ? true : undefined,
+    summary: result.summary ?? summarizeOutput(result.output || result.error || "") ?? "",
+    output: result.output ?? "",
+    structuredOutput: result.structuredOutput,
+    error: result.error,
+    totalTokens: result.totalTokens,
+    toolCount: result.toolCount,
+  };
+}
+
+export function aggregateFanOutGroupResult(groupStep, childResults) {
+  const children = childResults.map(fanOutChildResultEntry);
+  const failedCount = children.filter((child) => !child.success).length;
+  const skippedCount = children.filter((child) => child.skipped || child.status === "skipped").length;
+  const completedCount = children.filter((child) => child.success && !child.skipped && child.status !== "skipped").length;
+  const totalTokens = children.reduce((sum, child) => sum + (typeof child.totalTokens === "number" ? child.totalTokens : 0), 0);
+  const toolCount = children.reduce((sum, child) => sum + (typeof child.toolCount === "number" ? child.toolCount : 0), 0);
+  const success = failedCount === 0;
+  const status = success ? (completedCount === 0 && skippedCount > 0 ? "skipped" : "completed") : "failed";
+  const countParts = [];
+  if (completedCount > 0) countParts.push(`${completedCount} completed`);
+  if (failedCount > 0) countParts.push(`${failedCount} failed`);
+  if (skippedCount > 0) countParts.push(`${skippedCount} skipped`);
+  const summary = `Fan-out group ${groupStep.id} ${success ? "completed" : "failed"}: ${countParts.join(", ") || "0 children"}.`;
+  const output = children.map((child) => {
+    const label = child.taskSummary || child.id;
+    const text = child.summary || child.error || summarizeOutput(child.output) || "";
+    return `## ${label}\nStatus: ${child.status}\n${text}`.trim();
+  }).join("\n\n");
+  const firstError = children.find((child) => child.error)?.error;
+
+  return {
+    stepId: groupStep.id,
+    taskSummary: groupStep.taskSummary,
+    dependsOn: groupStep.dependsOn,
+    agent: childAgentName(groupStep),
+    output,
+    summary,
+    error: success ? undefined : firstError ?? summary,
+    success,
+    status,
+    skipped: status === "skipped" ? true : undefined,
+    skipReason: status === "skipped" ? summary : undefined,
+    attempt: 0,
+    maxAttempts: (groupStep.retries ?? 0) + 1,
+    attempts: [],
+    totalTokens,
+    toolCount,
+    structuredOutput: {
+      status,
+      success,
+      summary,
+      completedCount,
+      failedCount,
+      skippedCount,
+      children,
+    },
+  };
+}
+
 function buildWorkflowResultsMap(results) {
   return Object.fromEntries(
     results
@@ -683,6 +749,21 @@ function buildWorkflowResultsMap(results) {
         structuredOutput: result.structuredOutput,
       }]),
   );
+}
+
+function updateFanOutGroupStatus(status, groupStep, aggregate) {
+  const step = (status.steps ?? []).find((candidate) => candidate.id === groupStep.id);
+  if (!step) return false;
+  step.status = aggregate.status;
+  step.error = aggregate.error;
+  step.skipReason = aggregate.skipReason;
+  step.summary = aggregate.summary;
+  step.structuredOutput = aggregate.structuredOutput;
+  step.totalTokens = aggregate.totalTokens;
+  step.toolCount = aggregate.toolCount;
+  step.endedAt = now();
+  step.durationMs = step.startedAt ? Math.max(0, step.endedAt - step.startedAt) : 0;
+  return true;
 }
 
 function markWorkflowStepsSkipped(status, stepIds, reason) {
@@ -762,6 +843,32 @@ async function runWorkflow(config, status) {
   };
 
   while (results.length < config.children.length) {
+    const groupChildrenByParent = new Map();
+    for (const child of config.children) {
+      if (!child.fanOutParentId) continue;
+      const list = groupChildrenByParent.get(child.fanOutParentId) ?? [];
+      list.push(child);
+      groupChildrenByParent.set(child.fanOutParentId, list);
+    }
+
+    let aggregatedGroups = false;
+    for (const groupChild of config.children.filter((child) => child.fanOutFrom && !results.some((result) => result.stepId === child.id))) {
+      const fanOutChildren = groupChildrenByParent.get(groupChild.id);
+      if (!fanOutChildren || fanOutChildren.length === 0) continue;
+      const childResults = fanOutChildren
+        .map((child) => results.find((result) => result.stepId === child.id))
+        .filter(Boolean);
+      if (childResults.length !== fanOutChildren.length) continue;
+      const aggregate = aggregateFanOutGroupResult(groupChild, childResults);
+      updateFanOutGroupStatus(status, groupChild, aggregate);
+      results.push(aggregate);
+      aggregatedGroups = true;
+    }
+    if (aggregatedGroups) {
+      await updateStatus(config.statusPath, status);
+      continue;
+    }
+
     const failedIds = new Set(results.filter((result) => !result.success && !result.skipped).map((result) => result.stepId));
     const skippedIds = new Set(results.filter((result) => result.skipped).map((result) => result.stepId));
     const unsatisfiedIds = new Set([...failedIds, ...skippedIds]);
@@ -823,11 +930,20 @@ async function runWorkflow(config, status) {
           continue;
         }
 
-        const reason = expansions.length === 0
-          ? `Skipped because fanOutFrom ${child.fanOutFrom.step}.${child.fanOutFrom.path} produced no children.`
-          : `Expanded into ${expansions.length} fan-out child step${expansions.length === 1 ? "" : "s"}.`;
-        markWorkflowStepsSkipped(status, [child.id], reason);
-        results.push(skippedChildResult(child, reason, true));
+        if (expansions.length === 0) {
+          const reason = `Skipped because fanOutFrom ${child.fanOutFrom.step}.${child.fanOutFrom.path} produced no children.`;
+          markWorkflowStepsSkipped(status, [child.id], reason);
+          results.push(skippedChildResult(child, reason, true));
+          progressedWithoutActive = true;
+          await updateStatus(config.statusPath, status);
+          continue;
+        }
+
+        const groupStatusStep = status.steps[index];
+        groupStatusStep.status = "running";
+        groupStatusStep.startedAt = groupStatusStep.startedAt ?? now();
+        groupStatusStep.summary = `Expanded into ${expansions.length} fan-out child step${expansions.length === 1 ? "" : "s"}.`;
+        groupStatusStep.fanOutChildIds = expansions.map((expansion) => expansion.id);
         const existingStepIds = new Set(status.steps.map((step) => step.id));
         for (const expansion of expansions) {
           if (existingStepIds.has(expansion.id)) {

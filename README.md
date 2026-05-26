@@ -94,7 +94,7 @@ Workflow steps also support:
 - `outputMode: "json"` to require a JSON object final response;
 - `outputSchema` to describe the expected JSON shape for downstream management/orchestration;
 - `when` to skip a step when an upstream structured value is falsey;
-- `fanOutFrom` to expand one template step into dynamic child steps from an upstream JSON array.
+- `fanOutFrom` to expand one logical step into a fan-out group from an upstream JSON array. Downstream steps depend on the logical group id and receive its aggregate through `{{group.summary}}`, `{{group.output}}`, `{{group.json}}`, and `{{group.structured.children}}`.
 
 Example parallel launch:
 
@@ -105,7 +105,7 @@ lazy_subagents action=parallel children=[{agent:"reviewer",prompt:"Review the di
 Example workflow launch:
 
 ```text
-lazy_subagents action=workflow maxConcurrency=2 steps=[{id:"triage",agent:"scout",retries:1,outputMode:"json",outputSchema:"{ summary: string, runSecurity: boolean, reviewers: Array<{ id: string, agent: string, prompt: string }> }",prompt:"Inspect the diff and choose only necessary reviewers."},{id:"security",agent:"reviewer",dependsOn:["triage"],when:"{{triage.structured.runSecurity}}",prompt:"Review security risks using {{triage.json}}"},{id:"review",agent:"{{item.agent}}",dependsOn:["triage"],fanOutFrom:{step:"triage",path:"structured.reviewers",idField:"id",maxItems:3},prompt:"{{item.prompt}}\n\nTriage: {{triage.json}}"}]
+lazy_subagents action=workflow maxConcurrency=2 steps=[{id:"triage",agent:"scout",retries:1,outputMode:"json",outputSchema:"{ summary: string, runSecurity: boolean, reviewers: Array<{ id: string, agent: string, prompt: string }> }",prompt:"Inspect the diff and choose only necessary reviewers."},{id:"security",agent:"reviewer",dependsOn:["triage"],when:"{{triage.structured.runSecurity}}",prompt:"Review security risks using {{triage.json}}"},{id:"review",agent:"{{item.agent}}",dependsOn:["triage"],fanOutFrom:{step:"triage",path:"structured.reviewers",idField:"id",maxItems:3},prompt:"{{item.prompt}}\n\nTriage: {{triage.json}}"},{id:"synth",agent:"delegate",dependsOn:["review"],prompt:"Synthesize all reviews: {{review.json}}"}]
 ```
 
 ## UX notes
@@ -113,6 +113,7 @@ lazy_subagents action=workflow maxConcurrency=2 steps=[{id:"triage",agent:"scout
 - Default flow: launch, then return to the user or continue work. Signals arrive automatically.
 - Use `workflow` when later steps should consume earlier results without reinjecting every intermediate output into the main chat.
 - `when` and empty `fanOutFrom` steps become `skipped` without launching a child; failed or skipped dependencies block dependent descendants.
+- Non-empty `fanOutFrom` steps stay as logical group barriers until every expanded child finishes. The group then becomes `completed`, `failed`, or `skipped` and downstream steps can consume the aggregate without knowing child ids.
 - Invalid workflow graphs are rejected before launch: duplicate ids, missing dependencies, self-dependencies, cycles, and fractional concurrency are not allowed.
 - `wait` blocks. Use it only for explicit blocking requests or non-interactive scripts.
 - `status` is for health checks: human request, suspected stall, or about 60 seconds with no signal. Do not poll.

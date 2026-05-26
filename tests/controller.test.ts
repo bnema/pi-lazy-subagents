@@ -813,6 +813,26 @@ describe("LazySubagentsController", () => {
     expect(widgets.at(-1)?.[1]?.join("\n") ?? "").not.toContain("Done recent");
   });
 
+  test("cleans up acknowledged skipped runs after the acknowledged TTL", async () => {
+    const registry = new RunRegistry();
+    registry.upsert(createRun({ id: "skipped-old", status: "skipped", title: "Skipped old", updatedAt: 100, completedAt: 100, resultPreview: "skipped" }));
+    registry.acknowledgeRun("skipped-old");
+
+    const { api } = createPi();
+    const launcher = new FakeLauncher();
+    const controller = new LazySubagentsController(api as any, { launcher, now: () => 100 + 5 * 60_000 + 1 });
+    const persisted = createPersistedState(registry.serialize(), 100);
+    const { ctx } = createContext({
+      entries: [{ type: "custom", customType: PERSISTED_STATE_ENTRY, data: persisted }],
+      branchEntries: [{ type: "custom", customType: PERSISTED_STATE_ENTRY, data: persisted }],
+    });
+
+    await controller.handleSessionStart(ctx);
+    await controller.pollOnce();
+
+    expect(controller.getSnapshot().runs.map((run) => run.id)).not.toContain("skipped-old");
+  });
+
   test("hides acknowledged successes from live UI but keeps pinned and failed runs visible", async () => {
     const registry = new RunRegistry();
     registry.upsert(createRun({ id: "done-hidden", status: "completed", title: "Done hidden", updatedAt: 100, completedAt: 100 }));

@@ -1,4 +1,7 @@
 import type { LaunchWorkflowStepRequest } from "./interface.js";
+import type { FanOutGroupResult, WorkflowStepResult } from "./workflow-results.js";
+
+export type { FanOutGroupResult, FanOutGroupStructuredOutput, WorkflowChildResultSnapshot, WorkflowResultMetrics, WorkflowStepResult, WorkflowStepResultBase, WorkflowTerminalStatus } from "./workflow-results.js";
 
 export type ExpandedWorkflowStep = LaunchWorkflowStepRequest & {
   fanOutFrom?: undefined;
@@ -28,6 +31,7 @@ export type WorkflowStatusStep = {
   dependsOn?: string[];
 };
 
+
 export interface WorkflowRetryAttemptResult<T = unknown> {
   attempt: number;
   success: boolean;
@@ -56,6 +60,7 @@ export function renderWorkflowPrompt(template: string, results: Record<string, W
 export function renderWorkflowTemplate(template: string, results: Record<string, WorkflowPromptResult> | undefined, item?: unknown): string;
 export function evaluateWorkflowCondition(expression: string | undefined, results: Record<string, WorkflowPromptResult> | undefined, item?: unknown): boolean;
 export function expandFanOutWorkflowStep(step: LaunchWorkflowStepRequest, results: Record<string, WorkflowPromptResult> | undefined): ExpandedWorkflowStep[];
+export function aggregateFanOutGroupResult(groupStep: LaunchWorkflowStepRequest, childResults: WorkflowStepResult[]): FanOutGroupResult;
 export function parseStructuredStepOutput(output: string, outputMode: "json" | "text" | undefined): Record<string, unknown> | undefined;
 export function getReadyWorkflowStepIds(steps: WorkflowStatusStep[], maxConcurrency: number): string[];
 export function runWorkflowStepWithRetries<T>(options: {

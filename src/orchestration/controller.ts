@@ -21,6 +21,7 @@ import {
   WIDGET_KEY,
 } from "../defaults.js";
 import type { LaunchChildRequest, LaunchGroupRequest, LaunchResult, LaunchWorkflowRequest, Launcher, LauncherRuntimeContext, NormalizedRunUpdate } from "../launcher/interface.js";
+import type { WorkflowStepResult } from "../launcher/workflow-results.js";
 import { PiSubagentsAdapter } from "../launcher/pi-subagents-adapter.js";
 import { createPersistedState, restorePersistedState } from "../state/persistence.js";
 import { RunRegistry } from "../state/run-registry.js";
@@ -324,19 +325,7 @@ const COMPLETION_RESULT_EXCERPT_MAX_CHARS = 12_000;
 
 type ParsedRunResult = {
   summary?: string;
-  results?: Array<{
-    stepId?: string;
-    taskSummary?: string;
-    agent?: string;
-    output?: string;
-    error?: string;
-    status?: string;
-    skipped?: boolean;
-    skipReason?: string;
-    artifactPaths?: {
-      outputPath?: string;
-    };
-  }>;
+  results?: WorkflowStepResult[];
 };
 
 type CompletionReportLink = {
@@ -1309,7 +1298,7 @@ export class LazySubagentsController {
 
   private hasPendingUiGraceWindow(now = this.now()): boolean {
     return this.registry.snapshot().runs.some((run) => (
-      run.status === "completed"
+      (run.status === "completed" || run.status === "skipped")
       && !this.registry.isPinned(run.id)
       && !this.registry.isAcknowledged(run.id)
       && run.completedAt !== undefined
@@ -1319,7 +1308,7 @@ export class LazySubagentsController {
 
   private hasPendingAcknowledgedCleanupWindow(now = this.now()): boolean {
     return this.registry.snapshot().runs.some((run) => (
-      run.status === "completed"
+      (run.status === "completed" || run.status === "skipped")
       && !this.registry.isPinned(run.id)
       && this.registry.isAcknowledged(run.id)
       && run.completedAt !== undefined
@@ -1329,7 +1318,7 @@ export class LazySubagentsController {
 
   private cleanupAcknowledgedCompletedRuns(now = this.now()): boolean {
     const removed = this.registry.clearRuns((run) => (
-      run.status === "completed"
+      (run.status === "completed" || run.status === "skipped")
       && !this.registry.isPinned(run.id)
       && this.registry.isAcknowledged(run.id)
       && run.completedAt !== undefined

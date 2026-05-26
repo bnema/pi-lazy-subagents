@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 
 import {
+  aggregateFanOutGroupResult,
   buildResultSummary,
   createSerialLineProcessor,
   evaluateWorkflowCondition,
@@ -263,5 +264,81 @@ describe("direct runner stdout processing", () => {
         },
       },
     )).toThrow("Duplicate generated workflow step id: review[security]");
+  });
+
+  test("aggregates fan-out child results into a logical group result for downstream templates", () => {
+    const aggregate = aggregateFanOutGroupResult(
+      { id: "review", taskSummary: "Run reviews", agent: "{{item.agent}}", prompt: "Review" },
+      [
+        { stepId: "review[security]", taskSummary: "Security", status: "completed", success: true, summary: "No auth gaps", output: "security output", structuredOutput: { severity: "low" }, totalTokens: 100, toolCount: 3 },
+        { stepId: "review[tests]", taskSummary: "Tests", status: "completed", success: true, summary: "Add edge tests", output: "tests output", totalTokens: 50, toolCount: 2 },
+      ],
+    );
+
+    expect(aggregate).toMatchObject({
+      stepId: "review",
+      taskSummary: "Run reviews",
+      status: "completed",
+      success: true,
+      summary: "Fan-out group review completed: 2 completed.",
+      totalTokens: 150,
+      toolCount: 5,
+    });
+    expect(aggregate.structuredOutput.children).toEqual([
+      expect.objectContaining({ id: "review[security]", taskSummary: "Security", success: true, structuredOutput: { severity: "low" } }),
+      expect.objectContaining({ id: "review[tests]", taskSummary: "Tests", success: true }),
+    ]);
+
+    const workflowResults = {
+      review: {
+        summary: aggregate.summary,
+        output: aggregate.output,
+        structuredOutput: aggregate.structuredOutput,
+      },
+    };
+    expect(renderWorkflowTemplate("Synthesize {{review.summary}} / {{review.json}}", workflowResults)).toContain("Fan-out group review completed");
+    expect(renderWorkflowTemplate("{{review.structured.children.0.summary}}", workflowResults)).toBe("No auth gaps");
+  });
+
+  test("aggregates failed and skipped fan-out children into a failed logical group", () => {
+    const aggregate = aggregateFanOutGroupResult(
+      { id: "review", taskSummary: "Run reviews", agent: "reviewer", prompt: "Review" },
+      [
+        { stepId: "review[security]", taskSummary: "Security", status: "failed", success: false, error: "security failed", totalTokens: 10, toolCount: 1 },
+        { stepId: "review[docs]", taskSummary: "Docs", status: "skipped", success: true, skipped: true, summary: "Skipped by condition", totalTokens: 0, toolCount: 0 },
+      ],
+    );
+
+    expect(aggregate).toMatchObject({
+      stepId: "review",
+      status: "failed",
+      success: false,
+      summary: "Fan-out group review failed: 1 failed, 1 skipped.",
+      error: "security failed",
+      totalTokens: 10,
+      toolCount: 1,
+    });
+    expect(aggregate.structuredOutput.children).toEqual([
+      expect.objectContaining({ id: "review[security]", status: "failed", success: false, error: "security failed" }),
+      expect.objectContaining({ id: "review[docs]", status: "skipped", success: true, skipped: true }),
+    ]);
+  });
+
+  test("treats completed fan-out group as the dependency barrier for downstream steps", () => {
+    expect(getReadyWorkflowStepIds([
+      { id: "triage", status: "completed" },
+      { id: "review", status: "running", dependsOn: ["triage"] },
+      { id: "review[security]", status: "completed", dependsOn: ["triage"] },
+      { id: "review[tests]", status: "completed", dependsOn: ["triage"] },
+      { id: "synth", status: "pending", dependsOn: ["review"] },
+    ], 4)).toEqual([]);
+
+    expect(getReadyWorkflowStepIds([
+      { id: "triage", status: "completed" },
+      { id: "review", status: "completed", dependsOn: ["triage"] },
+      { id: "review[security]", status: "completed", dependsOn: ["triage"] },
+      { id: "review[tests]", status: "completed", dependsOn: ["triage"] },
+      { id: "synth", status: "pending", dependsOn: ["review"] },
+    ], 4)).toEqual(["synth"]);
   });
 });
