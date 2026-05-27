@@ -87,11 +87,11 @@ For tool calls, `action=run` defaults to `delegate`.
 
 Use `action=parallel` for independent tasks that can run together. The group reports completion/attention as one tracked run.
 
-Use `action=workflow` for dependency-aware pipelines that should stay off the main session context. Each step can reference earlier step results with `{{stepId.summary}}`, `{{stepId.output}}`, `{{stepId.json}}`, or structured fields such as `{{stepId.structured.title}}`.
+Use `action=workflow` for dependency-aware pipelines that should stay off the main session context. Each step can reference earlier step results with `{{stepId.summary}}`, `{{stepId.output}}`, `{{stepId.json}}`, or structured fields such as `{{stepId.structured.title}}`. If a step references another step in `prompt`, `when`, or `fanOutFrom`, list that step in `dependsOn` so the scheduler knows the data dependency.
 
 Workflow steps also support:
 - `retries` for transient failures;
-- `outputMode: "json"` to require a JSON object final response;
+- `outputMode: "json"` to require a JSON object final response. Raw JSON is preferred, but fenced `json` blocks and embedded JSON objects are accepted for resilience;
 - `outputSchema` to describe the expected JSON shape for downstream management/orchestration;
 - `when` to skip a step when an upstream structured value is falsey;
 - `fanOutFrom` to expand one logical step into a fan-out group from an upstream JSON array. Downstream steps depend on the logical group id and receive its aggregate through `{{group.summary}}`, `{{group.output}}`, `{{group.json}}`, and `{{group.structured.children}}`.

@@ -90,6 +90,20 @@ describe("direct runner stdout processing", () => {
     });
   });
 
+  test("parses fenced JSON object outputs when json mode is requested", () => {
+    expect(parseStructuredStepOutput('Analysis complete.\n\n```json\n{"summary":"done","next":"implement"}\n```', "json")).toEqual({
+      summary: "done",
+      next: "implement",
+    });
+  });
+
+  test("parses embedded JSON object outputs when json mode is requested", () => {
+    expect(parseStructuredStepOutput('Here is the result:\n{"summary":"done","nested":{"ok":true}}\nUse it downstream.', "json")).toEqual({
+      summary: "done",
+      nested: { ok: true },
+    });
+  });
+
   test("rejects invalid structured JSON outputs", () => {
     expect(() => parseStructuredStepOutput("", "json")).toThrow("Expected a JSON object response");
     expect(() => parseStructuredStepOutput("[]", "json")).toThrow("Expected a JSON object response");

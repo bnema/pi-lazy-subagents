@@ -149,6 +149,54 @@ function resolveWorkflowReference(stepId, fieldPath, results, item) {
   return structuredValue;
 }
 
+function extractFencedJsonCandidate(text) {
+  const match = text.match(/```(?:json|JSON)?\s*\n([\s\S]*?)\n```/u);
+  return match?.[1]?.trim();
+}
+
+function extractBalancedJsonObjectCandidate(text) {
+  const start = text.indexOf("{");
+  if (start < 0) return undefined;
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let index = start; index < text.length; index += 1) {
+    const char = text[index];
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+    if (char === "{") depth += 1;
+    if (char === "}") depth -= 1;
+    if (depth === 0) return text.slice(start, index + 1).trim();
+  }
+
+  return undefined;
+}
+
+function parseJsonObjectCandidate(candidate) {
+  if (!candidate) return undefined;
+  const parsed = JSON.parse(candidate);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Expected a JSON object response for structured workflow output.");
+  }
+  return parsed;
+}
+
 export function parseStructuredStepOutput(output, outputMode) {
   if (outputMode !== "json") return undefined;
   const trimmed = String(output ?? "").trim();
@@ -156,18 +204,22 @@ export function parseStructuredStepOutput(output, outputMode) {
     throw new Error("Expected a JSON object response, but the workflow step returned an empty output.");
   }
 
-  let parsed;
-  try {
-    parsed = JSON.parse(trimmed);
-  } catch (error) {
-    throw new Error(`Expected a JSON object response, but parsing failed: ${toErrorMessage(error)}`);
+  const candidates = [
+    trimmed,
+    extractFencedJsonCandidate(trimmed),
+    extractBalancedJsonObjectCandidate(trimmed),
+  ];
+  let lastError;
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    try {
+      return parseJsonObjectCandidate(candidate);
+    } catch (error) {
+      lastError = error;
+    }
   }
 
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("Expected a JSON object response for structured workflow output.");
-  }
-
-  return parsed;
+  throw new Error(`Expected a JSON object response, but parsing failed: ${toErrorMessage(lastError ?? "no JSON object found")}`);
 }
 
 export async function runWorkflowStepWithRetries({
