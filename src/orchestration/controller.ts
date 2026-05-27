@@ -13,7 +13,7 @@ import {
   MAX_WAIT_TIMEOUT_MS,
   MESSAGE_TYPE_ATTENTION,
   MESSAGE_TYPE_COMPLETION,
-   MESSAGE_TYPE_PIN,
+  MESSAGE_TYPE_PIN,
   MESSAGE_TYPE_FAILURE,
   MESSAGE_TYPE_LAUNCH,
   PERSISTED_STATE_ENTRY,
@@ -833,7 +833,7 @@ export class LazySubagentsController {
 
   async waitForRunSignal(
     runId?: string,
-    options: { timeoutMs?: number; signal?: AbortSignal } = {},
+    options: { timeoutMs?: number; signal?: AbortSignal; ctx?: ExtensionContext } = {},
   ): Promise<WaitForRunSignalResult> {
     const requestedTimeoutMs = options.timeoutMs;
     const normalizedTimeoutMs = typeof requestedTimeoutMs === "number" && Number.isFinite(requestedTimeoutMs) && requestedTimeoutMs > 0
@@ -842,6 +842,7 @@ export class LazySubagentsController {
     const timeoutMs = Math.min(normalizedTimeoutMs, MAX_WAIT_TIMEOUT_MS);
     const startedWaitingAt = this.now();
     let latchedSelectedRunId = runId;
+    let surfacedPinnedRunId: string | undefined;
 
     const selectRun = (): WaitForRunSignalResult => {
       const snapshot = this.registry.snapshot();
@@ -863,11 +864,19 @@ export class LazySubagentsController {
 
       let selected = selectRun();
       if (selected.status !== "ready") return selected;
+      if (!surfacedPinnedRunId) {
+        await this.surfacePinnedRun(selected.run.id, options.ctx);
+        surfacedPinnedRunId = selected.run.id;
+      }
       if (isReady(selected.run)) return selected;
 
       await this.pollOnce();
       selected = selectRun();
       if (selected.status !== "ready") return selected;
+      if (surfacedPinnedRunId !== selected.run.id) {
+        await this.surfacePinnedRun(selected.run.id, options.ctx);
+        surfacedPinnedRunId = selected.run.id;
+      }
       if (isReady(selected.run)) return selected;
 
       const remaining = timeoutMs - (this.now() - startedWaitingAt);
@@ -922,9 +931,14 @@ export class LazySubagentsController {
   }
 
   async pinRun(runId: string, ctx?: ExtensionContext): Promise<boolean> {
+    return await this.surfacePinnedRun(runId, ctx);
+  }
+
+  private async surfacePinnedRun(runId: string, ctx?: ExtensionContext): Promise<boolean> {
     if (ctx) this.captureContext(ctx);
     const run = this.registry.get(runId);
     if (!run) return false;
+    if (this.registry.isPinned(runId)) return true;
 
     this.registry.pinRun(runId);
     if (run.launchRef) {

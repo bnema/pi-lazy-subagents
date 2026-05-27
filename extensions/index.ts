@@ -216,7 +216,7 @@ export default function lazySubagentsExtension(pi: ExtensionAPI): void {
           return { content: [{ type: "text", text: formatStatusReport(controller.getSnapshot(), params.runId) }], details: { action: params.action, runId: params.runId } };
         case "wait":
           return {
-            content: [{ type: "text", text: formatWaitReport(await controller.waitForRunSignal(params.runId, { timeoutMs: params.timeoutMs, signal: _signal })) }],
+            content: [{ type: "text", text: formatWaitReport(await controller.waitForRunSignal(params.runId, { timeoutMs: params.timeoutMs, signal: _signal, ctx })) }],
             details: { action: params.action, runId: params.runId, timeoutMs: params.timeoutMs },
           };
         case "result": {

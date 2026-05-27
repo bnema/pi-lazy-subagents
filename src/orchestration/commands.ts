@@ -344,7 +344,7 @@ export async function executeLazySubagentsCommand(
       await controller.pollOnce();
       return formatStatusReport(controller.getSnapshot(), parsed.runId);
     case "wait":
-      return formatWaitReport(await controller.waitForRunSignal(parsed.runId, { timeoutMs: parsed.timeoutMs }));
+      return formatWaitReport(await controller.waitForRunSignal(parsed.runId, { timeoutMs: parsed.timeoutMs, ctx }));
     case "result": {
       const result = await controller.getRunResult(parsed.runId);
       if (result) controller.acknowledgeRun(parsed.runId);

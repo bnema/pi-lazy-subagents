@@ -1125,6 +1125,70 @@ describe("LazySubagentsController", () => {
     expect(messages.filter((entry) => entry.message.customType === MESSAGE_TYPE_ATTENTION)).toHaveLength(0);
   });
 
+  test("wait surfaces the selected run through the pinned progress view", async () => {
+    const { api, messages } = createPi();
+    const launcher = new FakeLauncher();
+    const controller = new LazySubagentsController(api as any, { launcher, createRunId: () => "run-1", now: () => 100 });
+    const { ctx } = createContext({ isIdle: true, hasPendingMessages: false });
+
+    await controller.handleSessionStart(ctx);
+    await controller.launchChild(
+      {
+        agent: "reviewer",
+        title: "Review auth diff",
+        taskSummary: "Review auth diff",
+        prompt: "Review the auth diff and summarize the issues.",
+      },
+      ctx,
+    );
+
+    launcher.updates.set("run-1", {
+      runId: "run-1",
+      status: "completed",
+      updatedAt: 120,
+      completedAt: 120,
+      resultPreview: "Looks good overall.",
+    });
+
+    const result = await controller.waitForRunSignal("run-1", { ctx });
+
+    expect(result.status).toBe("ready");
+    expect(messages.some((entry) => entry.message.customType === MESSAGE_TYPE_PIN && entry.message.details?.runId === "run-1")).toBe(true);
+    expect(controller.getPinnedRunLines("run-1").join("\n")).toContain("Review auth diff");
+  });
+
+  test("wait does not duplicate an already pinned progress view", async () => {
+    const { api, messages } = createPi();
+    const launcher = new FakeLauncher();
+    const controller = new LazySubagentsController(api as any, { launcher, createRunId: () => "run-1", now: () => 100 });
+    const { ctx } = createContext({ isIdle: true, hasPendingMessages: false });
+
+    await controller.handleSessionStart(ctx);
+    await controller.launchChild(
+      {
+        agent: "reviewer",
+        title: "Review auth diff",
+        taskSummary: "Review auth diff",
+        prompt: "Review the auth diff and summarize the issues.",
+      },
+      ctx,
+    );
+    expect(await controller.pinRun("run-1", ctx)).toBe(true);
+
+    launcher.updates.set("run-1", {
+      runId: "run-1",
+      status: "completed",
+      updatedAt: 120,
+      completedAt: 120,
+      resultPreview: "Looks good overall.",
+    });
+
+    const result = await controller.waitForRunSignal("run-1", { ctx });
+
+    expect(result.status).toBe("ready");
+    expect(messages.filter((entry) => entry.message.customType === MESSAGE_TYPE_PIN && entry.message.details?.runId === "run-1")).toHaveLength(1);
+  });
+
   test("pins a run into chat and renders detailed progress lines from child events", async () => {
     const { api, messages } = createPi();
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-lazy-subagents-pin-"));
