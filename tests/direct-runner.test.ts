@@ -6,6 +6,7 @@ import {
   createSerialLineProcessor,
   evaluateWorkflowCondition,
   expandFanOutWorkflowStep,
+  getDependencyBlockedSkip,
   getReadyWorkflowStepIds,
   parseStructuredStepOutput,
   renderWorkflowPrompt,
@@ -183,6 +184,28 @@ describe("direct runner stdout processing", () => {
     ], 2);
 
     expect(ready).toEqual(["docs"]);
+  });
+
+  test("keeps dependency-blocked skips successful when the blocker was also skipped", () => {
+    expect(getDependencyBlockedSkip(
+      { dependsOn: ["review"] },
+      new Set(),
+      new Set(["review"]),
+    )).toEqual({
+      reason: "Skipped because a dependency was skipped.",
+      success: true,
+    });
+  });
+
+  test("marks dependency-blocked skips failed when the blocker failed", () => {
+    expect(getDependencyBlockedSkip(
+      { dependsOn: ["review"] },
+      new Set(["review"]),
+      new Set(),
+    )).toEqual({
+      reason: "Skipped because a dependency did not complete.",
+      success: false,
+    });
   });
 
   test("evaluates workflow when expressions from structured upstream results", () => {

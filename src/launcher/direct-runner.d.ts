@@ -62,6 +62,7 @@ export function evaluateWorkflowCondition(expression: string | undefined, result
 export function expandFanOutWorkflowStep(step: LaunchWorkflowStepRequest, results: Record<string, WorkflowPromptResult> | undefined): ExpandedWorkflowStep[];
 export function aggregateFanOutGroupResult(groupStep: LaunchWorkflowStepRequest, childResults: WorkflowStepResult[]): FanOutGroupResult;
 export function parseStructuredStepOutput(output: string, outputMode: "json" | "text" | undefined): Record<string, unknown> | undefined;
+export function getDependencyBlockedSkip(child: { dependsOn?: string[] }, failedIds: Set<string>, skippedIds: Set<string>): { reason: string; success: boolean } | undefined;
 export function getReadyWorkflowStepIds(steps: WorkflowStatusStep[], maxConcurrency: number): string[];
 export function runWorkflowStepWithRetries<T>(options: {
   maxAttempts: number;
