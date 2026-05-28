@@ -329,6 +329,23 @@ export function expandFanOutWorkflowStep(step, results) {
   });
 }
 
+export function getDependencyBlockedSkip(child, failedIds, skippedIds) {
+  const dependencyIds = child.dependsOn ?? [];
+  if (dependencyIds.some((dependencyId) => failedIds.has(dependencyId))) {
+    return {
+      reason: "Skipped because a dependency did not complete.",
+      success: false,
+    };
+  }
+  if (dependencyIds.some((dependencyId) => skippedIds.has(dependencyId))) {
+    return {
+      reason: "Skipped because a dependency was skipped.",
+      success: true,
+    };
+  }
+  return undefined;
+}
+
 export function getReadyWorkflowStepIds(steps, maxConcurrency) {
   const runningCount = steps.filter((step) => step.status === "running" && !(step.fanOutFrom && Array.isArray(step.fanOutChildIds))).length;
   const availableSlots = Math.max(0, maxConcurrency - runningCount);
@@ -925,21 +942,23 @@ async function runWorkflow(config, status) {
     const skippedIds = new Set(results.filter((result) => result.skipped).map((result) => result.stepId));
     const unsatisfiedIds = new Set([...failedIds, ...skippedIds]);
 
-    const dependencyBlockedChildren = config.children.filter((child) => !results.some((result) => result.stepId === child.id))
-      .filter((child) => (child.dependsOn ?? []).some((dependencyId) => unsatisfiedIds.has(dependencyId)));
+    const dependencyBlockedChildren = config.children
+      .map((child) => ({
+        child,
+        skip: results.some((result) => result.stepId === child.id)
+          ? undefined
+          : getDependencyBlockedSkip(child, failedIds, skippedIds),
+      }))
+      .filter((entry) => entry.skip);
 
     if (dependencyBlockedChildren.length > 0) {
-      const changed = markWorkflowStepsSkipped(
-        status,
-        dependencyBlockedChildren.map((child) => child.id),
-        "Skipped because a dependency did not complete.",
-      );
-      if (changed) {
-        await updateStatus(config.statusPath, status);
-      }
-      for (const child of dependencyBlockedChildren) {
+      for (const { child, skip } of dependencyBlockedChildren) {
+        const changed = markWorkflowStepsSkipped(status, [child.id], skip.reason);
+        if (changed) {
+          await updateStatus(config.statusPath, status);
+        }
         if (results.some((result) => result.stepId === child.id)) continue;
-        results.push(skippedChildResult(child, "Skipped because a dependency did not complete.", false));
+        results.push(skippedChildResult(child, skip.reason, skip.success));
       }
       continue;
     }
