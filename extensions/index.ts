@@ -1,4 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
 import { DEFAULT_WAIT_TIMEOUT_MS, MAX_WAIT_TIMEOUT_MS, TOOL_NAME } from "../src/defaults.js";
@@ -89,6 +90,29 @@ function shortTitle(text: string): string {
   return singleLine.length <= 72 ? singleLine : `${singleLine.slice(0, 71).trimEnd()}…`;
 }
 
+function isWaitProgressDetails(value: unknown): value is { kind: "wait-progress"; lines: string[] } {
+  return typeof value === "object"
+    && value !== null
+    && (value as { kind?: unknown }).kind === "wait-progress"
+    && Array.isArray((value as { lines?: unknown }).lines);
+}
+
+function renderLazySubagentsToolResult(result: { content?: Array<{ type?: string; text?: string }>; details?: unknown }, options: { expanded?: boolean }, theme: { fg(color: string, text: string): string; bold(text: string): string }) {
+  if (isWaitProgressDetails(result.details)) {
+    const lines = options.expanded ? result.details.lines : result.details.lines.slice(0, 11);
+    const text = lines.map((line, index) => {
+      if (index === 0) return theme.fg("toolTitle", theme.bold(line));
+      if (index === 1) return theme.fg("muted", line);
+      if (line.startsWith("  ")) return theme.fg("dim", line);
+      return line;
+    }).join("\n");
+    return new Text(text, 0, 0);
+  }
+
+  const fallback = result.content?.find((part) => part.type === "text")?.text ?? "";
+  return new Text(fallback, 0, 0);
+}
+
 export default function lazySubagentsExtension(pi: ExtensionAPI): void {
   const controller = new LazySubagentsController(pi);
 
@@ -145,6 +169,14 @@ export default function lazySubagentsExtension(pi: ExtensionAPI): void {
       "Use action=result after terminal completion, pickup to inject the result, pin for durable live progress, and clear/cancel to manage runs.",
     ],
     parameters: ToolParamsSchema,
+    renderCall(args, theme) {
+      const action = typeof args.action === "string" ? args.action : "";
+      const target = typeof args.runId === "string" ? ` ${theme.fg("accent", args.runId.slice(0, 8))}` : "";
+      return new Text(`${theme.fg("toolTitle", theme.bold("lazy_subagents "))}${action}${target}`, 0, 0);
+    },
+    renderResult(result, options, theme) {
+      return renderLazySubagentsToolResult(result, options, theme);
+    },
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       switch (params.action) {
         case "help":
@@ -216,7 +248,7 @@ export default function lazySubagentsExtension(pi: ExtensionAPI): void {
           return { content: [{ type: "text", text: formatStatusReport(controller.getSnapshot(), params.runId) }], details: { action: params.action, runId: params.runId } };
         case "wait":
           return {
-            content: [{ type: "text", text: formatWaitReport(await controller.waitForRunSignal(params.runId, { timeoutMs: params.timeoutMs, signal: _signal, ctx })) }],
+            content: [{ type: "text", text: formatWaitReport(await controller.waitForRunSignal(params.runId, { timeoutMs: params.timeoutMs, signal: _signal, ctx, onUpdate: _onUpdate })) }],
             details: { action: params.action, runId: params.runId, timeoutMs: params.timeoutMs },
           };
         case "result": {

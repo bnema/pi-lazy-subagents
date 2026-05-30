@@ -89,6 +89,36 @@ describe("extension entrypoint", () => {
     expect(guidance).toContain("pin");
   });
 
+  test("tool renderer shows wait progress details in the active tool row", () => {
+    const { api, tools } = createPi();
+    lazySubagentsExtension(api as any);
+
+    const tool = tools.find((entry) => entry.name === TOOL_NAME);
+    const theme = {
+      fg: (color: string, text: string) => `<${color}:${text}>`,
+      bold: (text: string) => `*${text}*`,
+    };
+
+    const call = tool.renderCall({ action: "wait", runId: "abcdef12-3456" }, theme).render(160).join("\n");
+    expect(call).toContain("lazy_subagents");
+    expect(call).toContain("wait");
+    expect(call).toContain("abcdef12");
+
+    const rendered = tool.renderResult({
+      content: [{ type: "text", text: "fallback" }],
+      details: {
+        kind: "wait-progress",
+        runId: "run-1",
+        status: "running",
+        lines: [" Review auth diff", "reviewer · running", "  tool start · read · /repo/src/auth.ts"],
+      },
+    }, { expanded: false }, theme).render(160).join("\n");
+
+    expect(rendered).toContain("Review auth diff");
+    expect(rendered).toContain("reviewer · running");
+    expect(rendered).toContain("tool start");
+  });
+
   test("clears footer and widget state on shutdown", async () => {
     const { api, events } = createPi();
     lazySubagentsExtension(api as any);

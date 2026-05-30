@@ -115,11 +115,11 @@ lazy_subagents action=workflow maxConcurrency=2 steps=[{id:"triage",agent:"scout
 - `when` and empty `fanOutFrom` steps become `skipped` without launching a child; failed or skipped dependencies block dependent descendants.
 - Non-empty `fanOutFrom` steps stay as logical group barriers until every expanded child finishes. The group then becomes `completed`, `failed`, or `skipped` and downstream steps can consume the aggregate without knowing child ids.
 - Invalid workflow graphs are rejected before launch: duplicate ids, missing dependencies, self-dependencies, cycles, and fractional concurrency are not allowed.
-- `wait` blocks. Use it only for explicit blocking requests or non-interactive scripts.
+- `wait` blocks. Use it only for explicit blocking requests or non-interactive scripts. In interactive Pi, blocking waits render live progress in the active tool row while marking the run pinned for widget visibility.
 - `status` is for health checks: human request, suspected stall, or about 60 seconds with no signal. Do not poll.
 - `result` reads final output; it is not a live tail.
 - `pickup` injects a completed result into chat.
-- `pin` keeps live progress visible without repeated status checks.
+- `pin` keeps background progress visible without repeated status checks. Explicit pins add a durable progress card to chat; wait-time auto-pins use the tool row as the live surface.
 - completed successes auto-hide after a grace window; failed, paused, and pinned runs stay until resolved or cleared.
 
 ## Manual smoke test

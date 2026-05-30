@@ -16,6 +16,7 @@ import {
   GLYPH_RUNNING,
   GLYPH_WAITING,
 } from "../src/ui/glyphs.js";
+import { buildLiveRunViewModel } from "../src/ui/live-run-view-model.js";
 import { buildWidgetLines } from "../src/ui/widget.js";
 import { MESSAGE_TYPE_PIN } from "../src/defaults.js";
 import type { RunRecord, RunRegistrySnapshot } from "../src/types.js";
@@ -168,6 +169,60 @@ describe("visibility helpers", () => {
     expect(text).toContain("model (openai-codex) gpt-5.4 • xhigh");
     expect(text).toContain("/lazy-subagents status run-9");
     expect(text.match(/Narrow dumber audio-shutdown review/g)?.length).toBe(1);
+  });
+
+  test("builds compact and expanded live run view model lines", () => {
+    const run = createRun({
+      id: "run-42",
+      agent: "reviewer",
+      title: "Review auth diff",
+      status: "running",
+      currentTool: "read",
+      toolCount: 2,
+      model: "(openai-codex) gpt-5.4 • xhigh",
+    });
+    run.currentTool = "read";
+    run.toolCount = 2;
+    run.totalTokens = 6_079;
+
+    const compact = buildLiveRunViewModel(run, {
+      progressLines: [
+        "tool start · read · /repo/src/auth.ts",
+        "assistant · first progress line",
+        "assistant · latest progress line",
+      ],
+      progressStats: { turnCount: 2, lastTurnTokens: 4_321 },
+      expanded: false,
+    });
+
+    expect(compact.lines.join("\n")).toContain(`${GLYPH_PINNED} Review auth diff`);
+    expect(compact.lines.join("\n")).toContain("reviewer · running · 2 turns · last 4.3k tok · read · 2 tools · 6.1k tokens");
+    expect(compact.lines.join("\n")).toContain("model (openai-codex) gpt-5.4 • xhigh");
+    expect(compact.lines.join("\n")).not.toContain("run run-42");
+    expect(compact.lines.join("\n")).toContain("assistant · latest progress line");
+
+    const expanded = buildLiveRunViewModel(run, {
+      progressLines: compact.detailLines,
+      progressStats: { turnCount: 2, lastTurnTokens: 4_321 },
+      expanded: true,
+    });
+
+    expect(expanded.lines.join("\n")).toContain("run run-42");
+  });
+
+  test("builds live run view model fallback detail lines from recent events", () => {
+    const run = createRun({
+      id: "run-events",
+      title: "Review auth diff",
+      status: "blocked",
+      recentEvents: [
+        { id: "event-1", category: "progress", timestamp: 10, summary: "\n  Working on auth diff  ", status: "running" },
+      ],
+    });
+
+    const view = buildLiveRunViewModel(run, { expanded: false });
+
+    expect(view.lines.join("\n")).toContain("Working on auth diff");
   });
 
   test("renders pinned run messages from the latest getter output instead of freezing a snapshot", () => {

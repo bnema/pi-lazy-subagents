@@ -38,9 +38,10 @@ import {
   type RunMessagePayload,
 } from "../ui/messages.js";
 import { buildFooterStatus } from "../ui/status.js";
-import { GLYPH_PINNED } from "../ui/glyphs.js";
 import { buildWidgetLines, createWidgetContent } from "../ui/widget.js";
+import { buildLiveRunViewModel } from "../ui/live-run-view-model.js";
 import { formatCompactThousands, formatDuration } from "../utils/time.js";
+import { summarizeSingleLine } from "../utils/text.js";
 
 export interface LazySubagentsControllerOptions {
   launcher?: Launcher;
@@ -53,6 +54,18 @@ export interface LazySubagentsControllerOptions {
 export type ControllerLaunchChildRequest = Omit<LaunchChildRequest, "runId">;
 export type ControllerLaunchGroupRequest = Omit<LaunchGroupRequest, "runId">;
 export type ControllerLaunchWorkflowRequest = Omit<LaunchWorkflowRequest, "runId">;
+
+export interface WaitProgressDetails {
+  kind: "wait-progress";
+  runId: string;
+  status: RunStatus;
+  lines: string[];
+}
+
+export type WaitProgressUpdate = {
+  content: Array<{ type: "text"; text: string }>;
+  details: WaitProgressDetails;
+};
 
 export type WaitForRunSignalResult =
   | { status: "ready"; run: RunRecord }
@@ -433,12 +446,6 @@ function extractAssistantText(message: { role?: string; content?: Array<{ type?:
   return text || undefined;
 }
 
-function summarizeSingleLine(text: string | undefined, maxLength = 160): string | undefined {
-  const singleLine = text?.replace(/\s+/g, " ").trim();
-  if (!singleLine) return undefined;
-  return singleLine.length <= maxLength ? singleLine : `${singleLine.slice(0, maxLength - 1).trimEnd()}…`;
-}
-
 function formatToolProgressDetail(event: Record<string, any>): string | undefined {
   const args = event.args;
   if (!args || typeof args !== "object") return undefined;
@@ -541,6 +548,7 @@ export class LazySubagentsController {
   private readonly trackedLaunches = new Map<string, LaunchResult>();
   private readonly progressLines = new Map<string, string[]>();
   private readonly progressStats = new Map<string, { turnCount: number; lastTurnTokens?: number }>();
+  private readonly surfacedPinnedMessages = new Set<string>();
   private renderedStatus: string | undefined;
   private renderedWidgetSignature: string | undefined;
   private currentCtx: ExtensionContext | undefined;
@@ -833,7 +841,7 @@ export class LazySubagentsController {
 
   async waitForRunSignal(
     runId?: string,
-    options: { timeoutMs?: number; signal?: AbortSignal; ctx?: ExtensionContext } = {},
+    options: { timeoutMs?: number; signal?: AbortSignal; ctx?: ExtensionContext; onUpdate?: (update: WaitProgressUpdate) => void } = {},
   ): Promise<WaitForRunSignalResult> {
     const requestedTimeoutMs = options.timeoutMs;
     const normalizedTimeoutMs = typeof requestedTimeoutMs === "number" && Number.isFinite(requestedTimeoutMs) && requestedTimeoutMs > 0
@@ -843,6 +851,7 @@ export class LazySubagentsController {
     const startedWaitingAt = this.now();
     let latchedSelectedRunId = runId;
     let surfacedPinnedRunId: string | undefined;
+    let lastWaitProgressSignature: string | undefined;
 
     const selectRun = (): WaitForRunSignalResult => {
       const snapshot = this.registry.snapshot();
@@ -858,6 +867,15 @@ export class LazySubagentsController {
     };
 
     const isReady = (run: RunRecord): boolean => isTerminalStatus(run.status) || run.attentionNeeded || run.status === "blocked";
+    const emitWaitProgress = (run: RunRecord): void => {
+      if (!options.onUpdate) return;
+      const lines = this.getPinnedRunLines(run.id, false);
+      const details: WaitProgressDetails = { kind: "wait-progress", runId: run.id, status: run.status, lines };
+      const signature = JSON.stringify(details);
+      if (signature === lastWaitProgressSignature) return;
+      lastWaitProgressSignature = signature;
+      options.onUpdate({ content: [{ type: "text", text: lines.join("\n") }], details });
+    };
 
     while (true) {
       if (options.signal?.aborted) return { status: "aborted" };
@@ -865,18 +883,20 @@ export class LazySubagentsController {
       let selected = selectRun();
       if (selected.status !== "ready") return selected;
       if (!surfacedPinnedRunId) {
-        await this.surfacePinnedRun(selected.run.id, options.ctx);
+        await this.surfacePinnedRun(selected.run.id, options.ctx, { sendMessage: false });
         surfacedPinnedRunId = selected.run.id;
       }
+      emitWaitProgress(selected.run);
       if (isReady(selected.run)) return selected;
 
       await this.pollOnce();
       selected = selectRun();
       if (selected.status !== "ready") return selected;
       if (surfacedPinnedRunId !== selected.run.id) {
-        await this.surfacePinnedRun(selected.run.id, options.ctx);
+        await this.surfacePinnedRun(selected.run.id, options.ctx, { sendMessage: false });
         surfacedPinnedRunId = selected.run.id;
       }
+      emitWaitProgress(selected.run);
       if (isReady(selected.run)) return selected;
 
       const remaining = timeoutMs - (this.now() - startedWaitingAt);
@@ -934,25 +954,31 @@ export class LazySubagentsController {
     return await this.surfacePinnedRun(runId, ctx);
   }
 
-  private async surfacePinnedRun(runId: string, ctx?: ExtensionContext): Promise<boolean> {
+  private async surfacePinnedRun(runId: string, ctx?: ExtensionContext, options: { sendMessage?: boolean } = {}): Promise<boolean> {
     if (ctx) this.captureContext(ctx);
     const run = this.registry.get(runId);
     if (!run) return false;
-    if (this.registry.isPinned(runId)) return true;
+    const shouldSendMessage = options.sendMessage ?? true;
+    const alreadyPinned = this.registry.isPinned(runId);
 
-    this.registry.pinRun(runId);
+    if (!alreadyPinned) {
+      this.registry.pinRun(runId);
+    }
     if (run.launchRef) {
       await this.refreshProgressLines(runId, run.launchRef);
     }
 
-    this.pi.sendMessage({
-      customType: MESSAGE_TYPE_PIN,
-      content: `Pinned lazy subagent progress for ${run.id}.`,
-      display: true,
-      details: { runId },
-    });
+    if (shouldSendMessage && !this.surfacedPinnedMessages.has(runId)) {
+      this.pi.sendMessage({
+        customType: MESSAGE_TYPE_PIN,
+        content: `Pinned lazy subagent progress for ${run.id}.`,
+        display: true,
+        details: { runId },
+      });
+      this.surfacedPinnedMessages.add(runId);
+    }
 
-    this.persistState();
+    if (!alreadyPinned) this.persistState();
     this.renderUi();
     return true;
   }
@@ -961,26 +987,11 @@ export class LazySubagentsController {
     const run = this.registry.get(runId);
     if (!run) return [`Pinned lazy subagent ${runId} not found.`];
 
-    const title = run.title || run.taskSummary;
-    const stats = this.progressStats.get(runId);
-    const metaParts = [run.agent, run.status];
-    if (stats?.turnCount) metaParts.push(`${stats.turnCount} turns`);
-    if (stats?.lastTurnTokens) metaParts.push(`last ${formatCompactThousands(stats.lastTurnTokens)} tok`);
-    if (run.currentTool) metaParts.push(run.currentTool);
-    if (run.toolCount !== undefined && run.toolCount > 0) metaParts.push(`${run.toolCount} tools`);
-    if (run.totalTokens !== undefined && run.totalTokens > 0) metaParts.push(`${formatCompactThousands(run.totalTokens)} tokens`);
-
-    const detailLines = this.progressLines.get(runId)
-      ?? run.recentEvents.map((event) => summarizeSingleLine(event.summary)).filter((line): line is string => Boolean(line));
-    const visibleLines = detailLines.slice(Math.max(0, detailLines.length - (expanded ? 20 : 8)));
-
-    return [
-      `${GLYPH_PINNED} ${title}`,
-      metaParts.join(" · "),
-      ...(run.model ? [`model ${run.model}`] : []),
-      ...(expanded ? [`run ${run.id}`] : []),
-      ...visibleLines.map((line) => `  ${line}`),
-    ];
+    return buildLiveRunViewModel(run, {
+      expanded,
+      progressLines: this.progressLines.get(runId),
+      progressStats: this.progressStats.get(runId),
+    }).lines;
   }
 
   async cancelRun(runId: string, ctx?: ExtensionContext): Promise<boolean> {
@@ -1023,6 +1034,7 @@ export class LazySubagentsController {
     for (const id of removed) {
       this.trackedLaunches.delete(id);
       this.progressLines.delete(id);
+      this.surfacedPinnedMessages.delete(id);
     }
 
     if (removed.length > 0) {

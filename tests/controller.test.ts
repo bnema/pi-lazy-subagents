@@ -1125,7 +1125,53 @@ describe("LazySubagentsController", () => {
     expect(messages.filter((entry) => entry.message.customType === MESSAGE_TYPE_ATTENTION)).toHaveLength(0);
   });
 
-  test("wait surfaces the selected run through the pinned progress view", async () => {
+  test("wait emits live tool updates for the selected run without requiring transcript pin surfacing", async () => {
+    const { api, messages } = createPi();
+    const launcher = new FakeLauncher();
+    const controller = new LazySubagentsController(api as any, { launcher, createRunId: () => "run-1", now: () => 100 });
+    const { ctx, widgets } = createContext({ isIdle: true, hasPendingMessages: false });
+    const updates: any[] = [];
+
+    await controller.handleSessionStart(ctx);
+    await controller.launchChild(
+      {
+        agent: "reviewer",
+        title: "Review auth diff",
+        taskSummary: "Review auth diff",
+        prompt: "Review the auth diff and summarize the issues.",
+      },
+      ctx,
+    );
+
+    launcher.updates.set("run-1", {
+      runId: "run-1",
+      status: "completed",
+      updatedAt: 120,
+      completedAt: 120,
+      resultPreview: "Looks good overall.",
+      currentTool: "read",
+      toolCount: 1,
+      totalTokens: 42,
+    });
+
+    const result = await controller.waitForRunSignal("run-1", { ctx, onUpdate: (update) => updates.push(update) });
+
+    expect(result.status).toBe("ready");
+    expect(messages.some((entry) => entry.message.customType === MESSAGE_TYPE_PIN && entry.message.details?.runId === "run-1")).toBe(false);
+    expect(updates.length).toBeGreaterThan(0);
+    expect(updates.at(-1)?.details?.kind).toBe("wait-progress");
+    expect(updates.at(-1)?.details?.runId).toBe("run-1");
+    expect(updates.at(-1)?.details?.lines.join("\n")).toContain("Review auth diff");
+    expect(updates.at(-1)?.details?.lines.join("\n")).toContain("read");
+    expect(widgets.at(-1)?.[1]?.join("\n")).toContain("1 pinned");
+
+    expect(await controller.pinRun("run-1", ctx)).toBe(true);
+    expect(messages.filter((entry) => entry.message.customType === MESSAGE_TYPE_PIN && entry.message.details?.runId === "run-1")).toHaveLength(1);
+    expect(await controller.pinRun("run-1", ctx)).toBe(true);
+    expect(messages.filter((entry) => entry.message.customType === MESSAGE_TYPE_PIN && entry.message.details?.runId === "run-1")).toHaveLength(1);
+  });
+
+  test("wait marks the selected run as pinned without surfacing a transcript pin card", async () => {
     const { api, messages } = createPi();
     const launcher = new FakeLauncher();
     const controller = new LazySubagentsController(api as any, { launcher, createRunId: () => "run-1", now: () => 100 });
@@ -1153,7 +1199,7 @@ describe("LazySubagentsController", () => {
     const result = await controller.waitForRunSignal("run-1", { ctx });
 
     expect(result.status).toBe("ready");
-    expect(messages.some((entry) => entry.message.customType === MESSAGE_TYPE_PIN && entry.message.details?.runId === "run-1")).toBe(true);
+    expect(messages.some((entry) => entry.message.customType === MESSAGE_TYPE_PIN && entry.message.details?.runId === "run-1")).toBe(false);
     expect(controller.getPinnedRunLines("run-1").join("\n")).toContain("Review auth diff");
   });
 
