@@ -491,7 +491,7 @@ export function createSerialLineProcessor(processLine, onError) {
 
 function buildPiArgs(child, promptOverride, continueSessionFile) {
   if (continueSessionFile) {
-    const args = ["--continue", continueSessionFile];
+    const args = ["--mode", "json", "--session", continueSessionFile];
     if (child.resolvedModel) {
       args.push("--model", child.resolvedModel);
     }

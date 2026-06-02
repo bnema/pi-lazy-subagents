@@ -25,7 +25,7 @@ import type { LaunchChildRequest, LaunchGroupRequest, LaunchResult, LaunchWorkfl
 import type { WorkflowStepResult } from "../launcher/workflow-results.js";
 import { PiSubagentsAdapter } from "../launcher/pi-subagents-adapter.js";
 import { createPersistedState, restorePersistedState } from "../state/persistence.js";
-import { RunRegistry } from "../state/run-registry.js";
+import { RunRegistry, validateRunName } from "../state/run-registry.js";
 import { buildCompletionFingerprint } from "../state/dedupe.js";
 import type { RunEvent, RunRecord, RunRegistrySnapshot, RunStatus } from "../types.js";
 import { decideCompletionRouting } from "./completion-router.js";
@@ -634,8 +634,20 @@ export class LazySubagentsController {
     this.currentCtx = undefined;
   }
 
+  private validateLaunchName(name: string | undefined): void {
+    if (!name) return;
+    const normalized = validateRunName(name);
+    if (!normalized) {
+      throw new Error(`Invalid run name "${name}". Names must be 1-64 characters, lowercase alphanumeric, hyphens, or underscores, starting with alphanumeric.`);
+    }
+    if (!this.registry.isNameAvailable(normalized)) {
+      throw new Error(`Run name "${name}" is already in use by another non-archived run.`);
+    }
+  }
+
   async launchChild(request: ControllerLaunchChildRequest, ctx: ExtensionContext): Promise<RunRecord> {
     this.captureContext(ctx);
+    this.validateLaunchName(request.name);
 
     const runId = this.createRunId();
     const timestamp = this.now();
@@ -716,6 +728,7 @@ export class LazySubagentsController {
 
   async launchGroup(request: ControllerLaunchGroupRequest, ctx: ExtensionContext): Promise<RunRecord> {
     this.captureContext(ctx);
+    this.validateLaunchName(request.name);
 
     const runId = this.createRunId();
     const timestamp = this.now();
@@ -796,6 +809,7 @@ export class LazySubagentsController {
 
   async launchWorkflow(request: ControllerLaunchWorkflowRequest, ctx: ExtensionContext): Promise<RunRecord> {
     this.captureContext(ctx);
+    this.validateLaunchName(request.name);
     assertValidWorkflowRequest(request);
 
     const runId = this.createRunId();
@@ -943,12 +957,20 @@ export class LazySubagentsController {
       throw new Error(`Run ${runId} has no saved session file to continue from.`);
     }
 
-    // 3. Clear stale artifacts so readUpdate won't return the previous result
-    try { await fsp.unlink(statusPath); } catch { /* ok if missing */ }
-    try { await fsp.unlink(resultPath); } catch { /* ok if missing */ }
-    // Clear the output artifact file so the next poll sees fresh output
+    // 3. Backup stale artifacts so readUpdate won't return the previous result.
+    //    On launcher failure we restore these backups to avoid data loss.
+    const backupPaths: string[] = [];
+    const backupFile = async (src: string): Promise<void> => {
+      const dst = `${src}.cont-bak`;
+      try {
+        await fsp.rename(src, dst);
+        backupPaths.push(src);
+      } catch { /* ok if missing */ }
+    };
+    await backupFile(statusPath);
+    await backupFile(resultPath);
     if (existing.artifactPath) {
-      try { await fsp.unlink(existing.artifactPath); } catch { /* ok if missing */ }
+      await backupFile(existing.artifactPath);
     }
 
     // 4. Reset the run and renew the lease
@@ -992,8 +1014,19 @@ export class LazySubagentsController {
       this.renderUi(ctx);
       this.refreshPoller();
       this.queuePoll();
+
+      // Clean up backup files now that the new launch has succeeded
+      for (const src of backupPaths) {
+        try { await fsp.unlink(`${src}.cont-bak`); } catch { /* ok */ }
+      }
+
       return stored;
     } catch (error) {
+      // Restore backup files so prior results are not lost
+      for (const src of backupPaths) {
+        try { await fsp.rename(`${src}.cont-bak`, src); } catch { /* ok */ }
+      }
+
       // Revert the run back to its previous terminal state
       this.registry.updateRun(runId, {
         status: existing.status,
@@ -1286,6 +1319,11 @@ export class LazySubagentsController {
     const previousAttention = existing.attentionNeeded;
 
     if (hasStateChange) {
+      const isNewTerminal = isTerminalStatus(update.status) && !isTerminalStatus(existing.status);
+      const newLease = isNewTerminal && existing.name && update.completedAt !== undefined
+        ? update.completedAt + DEFAULT_NAMED_RUN_LEASE_MS
+        : undefined;
+
       this.registry.updateRun(runId, {
         status: update.status,
         updatedAt: update.updatedAt,
@@ -1298,6 +1336,7 @@ export class LazySubagentsController {
         toolCount: update.toolCount,
         totalTokens: mergeTotalTokens(existing.totalTokens, update.totalTokens),
         attentionNeeded: update.attentionNeeded ?? false,
+        leaseExpiry: newLease ?? existing.leaseExpiry,
       });
     }
 
@@ -1510,6 +1549,25 @@ export class LazySubagentsController {
     ));
   }
 
+  /**
+   * Keep the poller alive while any named completed/skipped run is still
+   * within its lease window, so the UI refreshes at lease expiry.
+   */
+  private hasPendingNamedLeaseWindow(now = this.now()): boolean {
+    return this.registry.snapshot().runs.some((run) => (
+      (run.status === "completed" || run.status === "skipped")
+      && !this.registry.isPinned(run.id)
+      && !this.registry.isAcknowledged(run.id)
+      && run.name
+      && run.leaseExpiry !== undefined
+      && now <= run.leaseExpiry
+    ));
+  }
+
+  /**
+   * Remove acknowledged completed/skipped runs after their TTL.
+   * Named runs are preserved until their lease expires, even if acknowledged.
+   */
   private cleanupAcknowledgedCompletedRuns(now = this.now()): boolean {
     const removed = this.registry.clearRuns((run) => (
       (run.status === "completed" || run.status === "skipped")
@@ -1517,6 +1575,7 @@ export class LazySubagentsController {
       && this.registry.isAcknowledged(run.id)
       && run.completedAt !== undefined
       && now - run.completedAt > DEFAULT_ACKNOWLEDGED_SUCCESS_TTL_MS
+      && !(run.name && run.leaseExpiry !== undefined && now <= run.leaseExpiry)
     ));
 
     for (const runId of removed) {
@@ -1666,7 +1725,7 @@ export class LazySubagentsController {
   }
 
   private refreshPoller(): void {
-    if (this.trackedLaunches.size === 0 && !this.hasPendingUiGraceWindow() && !this.hasPendingAcknowledgedCleanupWindow()) {
+    if (this.trackedLaunches.size === 0 && !this.hasPendingUiGraceWindow() && !this.hasPendingAcknowledgedCleanupWindow() && !this.hasPendingNamedLeaseWindow()) {
       this.stopPoller();
       return;
     }

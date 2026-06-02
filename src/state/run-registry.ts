@@ -88,7 +88,7 @@ function inferRunIdFromFingerprint(fingerprint: string): string | undefined {
   return fingerprint.slice(0, separatorIndex);
 }
 
-function validateRunName(name: string): string | null {
+export function validateRunName(name: string): string | null {
   const trimmed = name.trim().toLowerCase();
   if (!trimmed || trimmed.length > MAX_RUN_NAME_LENGTH) return null;
   if (!RUN_NAME_PATTERN.test(trimmed)) return null;
