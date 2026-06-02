@@ -456,6 +456,14 @@ export function mapAsyncStateToRunStatus(state: DirectAsyncState): RunStatus {
   }
 }
 
+export function computeResultPath(resultsDir: string, asyncId: string): string {
+  return path.join(resultsDir, `${asyncId}.json`);
+}
+
+export function legacyResultPathFromAsyncDir(asyncDir: string, asyncId: string): string {
+  return computeResultPath(path.join(asyncDir, "..", "..", "results"), asyncId);
+}
+
 export function normalizeAsyncLaunchResult(
   runId: string,
   asyncId: string,
@@ -467,7 +475,7 @@ export function normalizeAsyncLaunchResult(
     runId,
     asyncId,
     asyncDir,
-    resultPath: path.join(resultsDir, `${asyncId}.json`),
+    resultPath: computeResultPath(resultsDir, asyncId),
     model,
   };
 }
@@ -623,7 +631,10 @@ export class PiSubagentsAdapter implements Launcher {
     await fsp.writeFile(configPath, JSON.stringify(config, null, 2), "utf8");
     await spawnDetachedRunner(configPath, cwd);
 
-    return normalizeAsyncLaunchResult(config.runId, config.runId, config.asyncDir, this.resultsDir, summarizeResolvedModels(config.children));
+    return {
+      ...normalizeAsyncLaunchResult(config.runId, config.runId, config.asyncDir, this.resultsDir, summarizeResolvedModels(config.children)),
+      resultPath: config.resultPath,
+    };
   }
 
   async continueChild(request: ContinueLaunchRequest, _runtime: LauncherRuntimeContext): Promise<LaunchResult> {
@@ -663,7 +674,7 @@ export class PiSubagentsAdapter implements Launcher {
       piBin: this.piBin,
       asyncDir,
       resultsDir: this.resultsDir,
-      resultPath: path.join(this.resultsDir, `${request.runId}.json`),
+      resultPath: computeResultPath(this.resultsDir, request.runId),
       statusPath: path.join(asyncDir, "status.json"),
       eventsPath: path.join(asyncDir, "events.jsonl"),
       children: await buildRunnerChildren([
@@ -688,7 +699,7 @@ export class PiSubagentsAdapter implements Launcher {
       piBin: this.piBin,
       asyncDir,
       resultsDir: this.resultsDir,
-      resultPath: path.join(this.resultsDir, `${request.runId}.json`),
+      resultPath: computeResultPath(this.resultsDir, request.runId),
       statusPath: path.join(asyncDir, "status.json"),
       eventsPath: path.join(asyncDir, "events.jsonl"),
       children: await buildRunnerChildren(request.children, cwd, asyncDir),
@@ -707,7 +718,7 @@ export class PiSubagentsAdapter implements Launcher {
       piBin: this.piBin,
       asyncDir,
       resultsDir: this.resultsDir,
-      resultPath: path.join(this.resultsDir, `${request.runId}.json`),
+      resultPath: computeResultPath(this.resultsDir, request.runId),
       statusPath: path.join(asyncDir, "status.json"),
       eventsPath: path.join(asyncDir, "events.jsonl"),
       children: await buildRunnerChildren(request.steps, cwd, asyncDir),
@@ -731,7 +742,7 @@ export class PiSubagentsAdapter implements Launcher {
   async cancel(launch: LaunchResult): Promise<boolean> {
     const asyncDir = launch.asyncDir ?? path.join(this.asyncDirRoot, launch.asyncId);
     const statusPath = path.join(asyncDir, "status.json");
-    const resultPath = launch.resultPath ?? path.join(this.resultsDir, `${launch.asyncId}.json`);
+    const resultPath = launch.resultPath ?? computeResultPath(this.resultsDir, launch.asyncId);
     const status = await readJsonFile<{
       runId?: string;
       mode?: "single" | "parallel" | "workflow";
@@ -811,6 +822,8 @@ export class PiSubagentsAdapter implements Launcher {
 
 export const __testHooks = {
   buildRunnerChildren,
+  computeResultPath,
+  legacyResultPathFromAsyncDir,
   mapAsyncStateToRunStatus,
   normalizeAsyncLaunchResult,
   normalizeAsyncStatus,

@@ -20,6 +20,7 @@ export function createSerialLineProcessor(
 ): SerialLineProcessor;
 
 export function resolveCompletedSessionFile(sessionDir: string, continueSessionFile?: string): Promise<string | undefined>;
+export function buildPiArgs(child: any, promptOverride?: string, continueSessionFile?: string): string[];
 
 export type WorkflowPromptResult = {
   summary?: string;

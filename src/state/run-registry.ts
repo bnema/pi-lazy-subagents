@@ -264,7 +264,7 @@ export class RunRegistry {
     this.releaseName(runId);
 
     this.nameIndex.set(normalized, runId);
-    run.name = name;
+    this.runs.set(runId, { ...run, name });
     return true;
   }
 

@@ -23,7 +23,7 @@ import {
 } from "../defaults.js";
 import type { LaunchChildRequest, LaunchGroupRequest, LaunchResult, LaunchWorkflowRequest, Launcher, LauncherRuntimeContext, NormalizedRunUpdate } from "../launcher/interface.js";
 import type { WorkflowStepResult } from "../launcher/workflow-results.js";
-import { PiSubagentsAdapter } from "../launcher/pi-subagents-adapter.js";
+import { legacyResultPathFromAsyncDir, PiSubagentsAdapter } from "../launcher/pi-subagents-adapter.js";
 import { createPersistedState, restorePersistedState } from "../state/persistence.js";
 import { RunRegistry, validateRunName } from "../state/run-registry.js";
 import { buildCompletionFingerprint } from "../state/dedupe.js";
@@ -948,7 +948,7 @@ export class LazySubagentsController {
 
     const asyncDir = existing.launchRef.asyncDir;
     const statusPath = path.join(asyncDir, "status.json");
-    const resultPath = existing.launchRef.resultPath ?? path.join(asyncDir, "..", "..", "results", `${existing.launchRef.asyncId}.json`);
+    const resultPath = existing.launchRef.resultPath ?? legacyResultPathFromAsyncDir(asyncDir, existing.launchRef.asyncId);
     const eventsPath = path.join(asyncDir, "events.jsonl");
 
     // Find the session file to continue from
@@ -974,6 +974,7 @@ export class LazySubagentsController {
     };
     await backupFile(statusPath);
     await backupFile(resultPath);
+    await backupFile(eventsPath);
     if (existing.artifactPath) {
       await backupFile(existing.artifactPath);
     }
@@ -1044,6 +1045,9 @@ export class LazySubagentsController {
         completedAt: existing.completedAt,
         resultPreview: existing.resultPreview,
         errorPreview: existing.errorPreview,
+        currentTool: existing.currentTool,
+        toolCount: existing.toolCount,
+        attentionNeeded: existing.attentionNeeded,
         leaseExpiry: existing.leaseExpiry,
       });
       throw error;

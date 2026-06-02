@@ -6,6 +6,7 @@ import { describe, expect, test } from "vitest";
 
 import {
   aggregateFanOutGroupResult,
+  buildPiArgs,
   buildResultSummary,
   createSerialLineProcessor,
   evaluateWorkflowCondition,
@@ -90,6 +91,34 @@ describe("direct runner stdout processing", () => {
     await fs.utimes(latestSessionFile, new Date(2_000), new Date(2_000));
 
     expect(await resolveCompletedSessionFile(sessionDir, continuedSessionFile)).toBe(latestSessionFile);
+  });
+
+  test("continuation pi args preserve profile flags", () => {
+    const args = buildPiArgs({
+      sessionDir: "/tmp/session-dir",
+      prompt: "Continue review",
+      resolvedModel: "openai/gpt-5.4",
+      resolvedThinking: "xhigh",
+      profile: {
+        tools: ["read", "bash"],
+        inheritProjectContext: false,
+        inheritSkills: false,
+        systemPrompt: "Review carefully.",
+        systemPromptMode: "append",
+      },
+    }, undefined, "/tmp/session.jsonl");
+
+    expect(args).toEqual([
+      "--mode", "json",
+      "--session", "/tmp/session.jsonl",
+      "--model", "openai/gpt-5.4",
+      "--thinking", "xhigh",
+      "--tools", "read,bash",
+      "--no-context-files",
+      "--no-skills",
+      "--append-system-prompt", "Review carefully.",
+      "Continue review",
+    ]);
   });
 
   test("renders workflow prompts from prior step summaries, outputs, and structured fields", () => {

@@ -493,18 +493,7 @@ export function createSerialLineProcessor(processLine, onError) {
   };
 }
 
-function buildPiArgs(child, promptOverride, continueSessionFile) {
-  if (continueSessionFile) {
-    const args = ["--mode", "json", "--session", continueSessionFile];
-    if (child.resolvedModel) {
-      args.push("--model", child.resolvedModel);
-    }
-    const basePrompt = promptOverride ?? child.prompt;
-    args.push(basePrompt);
-    return args;
-  }
-
-  const args = ["--mode", "json", "--session-dir", child.sessionDir];
+function appendPiChildArgs(args, child) {
   if (child.resolvedModel) {
     args.push("--model", child.resolvedModel);
   }
@@ -523,6 +512,17 @@ function buildPiArgs(child, promptOverride, continueSessionFile) {
   if (child.profile.systemPrompt) {
     args.push(child.profile.systemPromptMode === "replace" ? "--system-prompt" : "--append-system-prompt", child.profile.systemPrompt);
   }
+}
+
+export function buildPiArgs(child, promptOverride, continueSessionFile) {
+  const args = ["--mode", "json"];
+  if (continueSessionFile) {
+    args.push("--session", continueSessionFile);
+  } else {
+    args.push("--session-dir", child.sessionDir);
+  }
+  appendPiChildArgs(args, child);
+
   const basePrompt = promptOverride ?? child.prompt;
   const structuredOutputInstruction = child.outputMode === "json"
     ? `\n\nReturn ONLY a valid JSON object in your final answer.${child.outputSchema ? ` Match this schema guidance exactly:\n${child.outputSchema}` : ""}`

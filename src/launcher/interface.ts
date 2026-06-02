@@ -58,12 +58,7 @@ export interface LaunchWorkflowRequest extends LaunchRequestBase {
   maxConcurrency?: number;
 }
 
-export interface ContinueLaunchRequest {
-  runId: string;
-  title: string;
-  taskSummary: string;
-  prompt: string;
-  agent: string;
+export interface ContinueLaunchRequest extends Omit<LaunchChildRequest, "cwd" | "sessionFile"> {
   asyncDir: string;
   statusPath: string;
   resultPath: string;
