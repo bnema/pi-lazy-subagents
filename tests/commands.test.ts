@@ -55,6 +55,7 @@ describe("lazy-subagents command parsing", () => {
     const help = buildLazySubagentsHelp();
 
     expect(help).toContain("/lazy-subagents list");
+    expect(help).toContain("/lazy-subagents continue");
     expect(help).toContain("lazy_subagents action=list");
     expect(help).toContain("inspect available sub agents before choosing one");
     expect(help).toContain("Slash command usage:");
@@ -95,6 +96,24 @@ describe("lazy-subagents command parsing", () => {
     expect(message).toContain("Launched run-1 (reviewer).");
     expect(message).toContain("Signals arrive automatically");
     expect(message).toContain("do not wait or poll right away");
+  });
+
+  test("parses continue command with target and prompt", () => {
+    expect(parseLazySubagentsCommand('continue my-agent "Keep going with the review"')).toEqual({
+      action: "continue",
+      target: "my-agent",
+      prompt: "Keep going with the review",
+    });
+
+    expect(parseLazySubagentsCommand('continue my-agent "Keep going" --title "Round 2"')).toEqual({
+      action: "continue",
+      target: "my-agent",
+      prompt: "Keep going",
+      title: "Round 2",
+    });
+
+    expect(parseLazySubagentsCommand("continue")).toEqual({ action: "help" });
+    expect(parseLazySubagentsCommand("continue my-agent")).toEqual({ action: "help" });
   });
 
   test("parses list, run, status, wait, result, pickup, pin, clear, and cancel commands", () => {

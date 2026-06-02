@@ -489,7 +489,17 @@ export function createSerialLineProcessor(processLine, onError) {
   };
 }
 
-function buildPiArgs(child, promptOverride) {
+function buildPiArgs(child, promptOverride, continueSessionFile) {
+  if (continueSessionFile) {
+    const args = ["--continue", continueSessionFile];
+    if (child.resolvedModel) {
+      args.push("--model", child.resolvedModel);
+    }
+    const basePrompt = promptOverride ?? child.prompt;
+    args.push(basePrompt);
+    return args;
+  }
+
   const args = ["--mode", "json", "--session-dir", child.sessionDir];
   if (child.resolvedModel) {
     args.push("--model", child.resolvedModel);
@@ -531,7 +541,8 @@ async function runChild(config, statusPath, status, child, index, promptOverride
   step.currentToolStartedAt = undefined;
   await updateStatus(statusPath, status);
 
-  const args = buildPiArgs(child, promptOverride);
+  const continueSessionFile = config.mode === "continue" ? config.continueSessionFile : undefined;
+  const args = buildPiArgs(child, promptOverride, continueSessionFile);
   const childProcess = spawn(config.piBin, args, {
     cwd: child.cwd,
     stdio: ["ignore", "pipe", "pipe"],
@@ -1116,14 +1127,22 @@ async function runWorkflow(config, status) {
 async function run(config) {
   await ensureDir(config.asyncDir);
   await ensureDir(config.resultsDir);
-  for (const child of config.children) {
-    await ensureDir(child.sessionDir);
+
+  // For continue mode, the session directory already exists and the controller
+  // has cleared stale artifacts. We pass continueSessionFile through to
+  // buildPiArgs so Pi resumes the existing session.
+  if (config.mode !== "continue") {
+    for (const child of config.children) {
+      await ensureDir(child.sessionDir);
+    }
   }
 
   const status = createInitialStatus(config);
   await writeJson(config.statusPath, status);
 
-  const results = config.mode === "parallel"
+  const results = config.mode === "continue"
+    ? [await runChild(config, config.statusPath, status, config.children[0], 0)]
+    : config.mode === "parallel"
     ? await Promise.all(
         config.children.map(async (child, index) => {
           try {

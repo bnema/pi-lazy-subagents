@@ -57,6 +57,21 @@ export interface LaunchWorkflowRequest extends LaunchRequestBase {
   maxConcurrency?: number;
 }
 
+export interface ContinueLaunchRequest {
+  runId: string;
+  title: string;
+  taskSummary: string;
+  prompt: string;
+  agent: string;
+  asyncDir: string;
+  statusPath: string;
+  resultPath: string;
+  eventsPath: string;
+  sessionFile: string;
+  artifactPath?: string;
+  cwd: string;
+}
+
 export interface LaunchResult {
   runId: string;
   asyncId: string;
@@ -87,6 +102,7 @@ export interface Launcher {
   launchChild(request: LaunchChildRequest, runtime: LauncherRuntimeContext): Promise<LaunchResult>;
   launchGroup(request: LaunchGroupRequest, runtime: LauncherRuntimeContext): Promise<LaunchResult>;
   launchWorkflow(request: LaunchWorkflowRequest, runtime: LauncherRuntimeContext): Promise<LaunchResult>;
+  continueChild?(request: ContinueLaunchRequest, runtime: LauncherRuntimeContext): Promise<LaunchResult>;
   readUpdate(launch: LaunchResult): Promise<NormalizedRunUpdate | undefined>;
   cancel?(launch: LaunchResult): Promise<boolean>;
 }

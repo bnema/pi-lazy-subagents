@@ -23,6 +23,7 @@ export type ParsedLazySubagentsCommand =
   | { action: "pin"; runId: string }
   | { action: "cancel"; runId: string }
   | { action: "clear"; scope: "completed" | "all"; runId?: string }
+  | { action: "continue"; target: string; prompt: string; title?: string }
   | { action: "run"; agent: string; prompt: string; title?: string };
 
 function splitCliArgs(input: string): string[] {
@@ -148,6 +149,31 @@ export function parseLazySubagentsCommand(input: string): ParsedLazySubagentsCom
     if (!target) return { action, scope: "completed" };
     if (target === "all") return { action, scope: "all" };
     return { action, scope: "completed", runId: target };
+  }
+
+  if (action === "continue") {
+    const target = tokens.shift();
+    if (!target) return { action: "help" };
+
+    let title: string | undefined;
+    const promptParts: string[] = [];
+
+    while (tokens.length > 0) {
+      const token = tokens.shift()!;
+      if (token === "--title") {
+        title = tokens.shift();
+        continue;
+      }
+      if (token.startsWith("--title=")) {
+        title = token.slice("--title=".length);
+        continue;
+      }
+      promptParts.push(token);
+    }
+
+    const prompt = promptParts.join(" ").trim();
+    if (!prompt) return { action: "help" };
+    return { action: "continue", target, prompt, title };
   }
 
   if (action === "run") {
@@ -279,6 +305,7 @@ export function buildLazySubagentsHelp(): string {
     "  /lazy-subagents list",
     "  /lazy-subagents run <agent> <prompt> [--title TITLE]",
     "  (parallel/workflow launches are available through lazy_subagents tool actions)",
+    "  /lazy-subagents continue <target> <prompt> [--title TITLE]",
     "  /lazy-subagents status [runId]",
     "  /lazy-subagents wait [runId] [--timeout-ms MS]",
     "  /lazy-subagents result <runId>",
@@ -362,6 +389,15 @@ export async function executeLazySubagentsCommand(
       return (await controller.cancelRun(parsed.runId, ctx))
         ? `Cancelled ${parsed.runId}.`
         : `Could not cancel ${parsed.runId}.`;
+    case "continue": {
+      const run = await controller.continueChild(
+        parsed.target,
+        parsed.prompt,
+        parsed.title ?? shortTitle(parsed.prompt),
+        ctx,
+      );
+      return formatLaunchAcknowledgement(`Continued ${run.id} (${run.agent}).`);
+    }
     case "clear": {
       const cleared = controller.clearRuns(parsed.scope, parsed.runId);
       return cleared > 0 ? `Cleared ${cleared} run(s).` : "Nothing to clear.";

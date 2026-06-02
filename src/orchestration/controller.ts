@@ -866,6 +866,138 @@ export class LazySubagentsController {
     }
   }
 
+  async continueChild(
+    target: string,
+    prompt: string,
+    title: string,
+    ctx: ExtensionContext,
+  ): Promise<RunRecord> {
+    this.captureContext(ctx);
+
+    const now = this.now();
+
+    // 1. Resolve target (run ID first, then name)
+    const runId = this.registry.resolveTarget(target);
+    if (!runId) {
+      throw new Error(`No run found for target: ${target}`);
+    }
+
+    const existing = this.registry.get(runId);
+    if (!existing) {
+      throw new Error(`Run not found: ${runId}`);
+    }
+
+    // 2. Validate the run
+    if (existing.kind !== "single") {
+      throw new Error(`Cannot continue ${existing.kind} runs. Only single runs can be continued.`);
+    }
+
+    if (existing.archived) {
+      throw new Error(`Cannot continue archived run: ${runId}`);
+    }
+
+    if (!isTerminalStatus(existing.status)) {
+      throw new Error(`Cannot continue active run: ${runId} (currently ${existing.status})`);
+    }
+
+    if (existing.status === "cancelled") {
+      throw new Error(`Cannot continue cancelled run: ${runId}`);
+    }
+
+    if (existing.status === "failed") {
+      throw new Error(`Cannot continue failed run: ${runId}`);
+    }
+
+    // For named runs with an explicit lease, reject if lease expired
+    if (existing.name && existing.leaseExpiry !== undefined && now > existing.leaseExpiry) {
+      throw new Error(`Cannot continue ${target}: lease has expired.`);
+    }
+
+    // Need a launchRef with asyncDir
+    if (!existing.launchRef?.asyncDir) {
+      throw new Error(`Run ${runId} has no async directory. Cannot continue.`);
+    }
+
+    // Need the launcher to support continue
+    if (!this.launcher.continueChild) {
+      throw new Error("The current launcher does not support run continuation.");
+    }
+
+    const asyncDir = existing.launchRef.asyncDir;
+    const statusPath = path.join(asyncDir, "status.json");
+    const resultPath = existing.launchRef.resultPath ?? path.join(asyncDir, "..", "..", "results", `${existing.launchRef.asyncId}.json`);
+    const eventsPath = path.join(asyncDir, "events.jsonl");
+
+    // Find the session file to continue from
+    const sessionFile = existing.sessionFile ?? existing.launchRef.sessionFile;
+    if (!sessionFile) {
+      throw new Error(`Run ${runId} has no saved session file to continue from.`);
+    }
+
+    // 3. Clear stale artifacts so readUpdate won't return the previous result
+    try { await fsp.unlink(statusPath); } catch { /* ok if missing */ }
+    try { await fsp.unlink(resultPath); } catch { /* ok if missing */ }
+    // Clear the output artifact file so the next poll sees fresh output
+    if (existing.artifactPath) {
+      try { await fsp.unlink(existing.artifactPath); } catch { /* ok if missing */ }
+    }
+
+    // 4. Reset the run and renew the lease
+    const newLeaseExpiry = existing.name
+      ? now + DEFAULT_NAMED_RUN_LEASE_MS
+      : undefined;
+
+    this.registry.updateRun(runId, {
+      status: "queued",
+      updatedAt: now,
+      completedAt: undefined,
+      resultPreview: undefined,
+      errorPreview: undefined,
+      attentionNeeded: false,
+      leaseExpiry: newLeaseExpiry,
+    });
+
+    // 5. Launch via launcher
+    try {
+      const cwd = existing.cwd ?? ctx.cwd;
+      const launch = await this.launcher.continueChild({
+        runId,
+        title,
+        taskSummary: title,
+        prompt,
+        agent: existing.agent,
+        asyncDir,
+        statusPath,
+        resultPath,
+        eventsPath,
+        sessionFile,
+        artifactPath: existing.artifactPath,
+        cwd,
+      }, runtimeContext(this.pi, ctx));
+
+      this.trackedLaunches.set(runId, launch);
+      const stored = this.registry.get(runId)!;
+      this.registry.recordEvent(runId, buildLaunchEvent(stored, now));
+      this.sendVisiblePayload(createLaunchMessagePayload(stored));
+      this.persistState();
+      this.renderUi(ctx);
+      this.refreshPoller();
+      this.queuePoll();
+      return stored;
+    } catch (error) {
+      // Revert the run back to its previous terminal state
+      this.registry.updateRun(runId, {
+        status: existing.status,
+        updatedAt: existing.updatedAt,
+        completedAt: existing.completedAt,
+        resultPreview: existing.resultPreview,
+        errorPreview: existing.errorPreview,
+        leaseExpiry: existing.leaseExpiry,
+      });
+      throw error;
+    }
+  }
+
   async waitForRunSignal(
     runId?: string,
     options: { timeoutMs?: number; signal?: AbortSignal; ctx?: ExtensionContext; onUpdate?: (update: WaitProgressUpdate) => void } = {},

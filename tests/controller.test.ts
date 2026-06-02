@@ -8,7 +8,7 @@ import { MESSAGE_TYPE_ATTENTION, MESSAGE_TYPE_COMPLETION, MESSAGE_TYPE_FAILURE, 
 import { LazySubagentsController, __testHooks as controllerTestHooks } from "../src/orchestration/controller.js";
 import { createPersistedState } from "../src/state/persistence.js";
 import { RunRegistry } from "../src/state/run-registry.js";
-import type { LaunchChildRequest, LaunchResult, Launcher, LauncherRuntimeContext, NormalizedRunUpdate } from "../src/launcher/interface.js";
+import type { ContinueLaunchRequest, LaunchChildRequest, LaunchResult, Launcher, LauncherRuntimeContext, NormalizedRunUpdate } from "../src/launcher/interface.js";
 import type { RunRecord } from "../src/types.js";
 
 function createRun(overrides: Partial<RunRecord> = {}): RunRecord {
@@ -48,7 +48,9 @@ class FakeLauncher implements Launcher {
   public readonly workflowLaunches: Array<{ runId: string; title: string; taskSummary: string; steps: Array<{ id: string; agent: string; prompt: string; taskSummary: string; dependsOn?: string[]; retries?: number; outputMode?: "text" | "json"; outputSchema?: string }>; maxConcurrency?: number }> = [];
   public readonly updates = new Map<string, NormalizedRunUpdate | undefined>();
   public readonly launchResults = new Map<string, Partial<LaunchResult>>();
+  public readonly continueLaunches: ContinueLaunchRequest[] = [];
   public launchGroupError: Error | undefined;
+  public continueError: Error | undefined;
   public readUpdateHook: ((launch: LaunchResult) => Promise<NormalizedRunUpdate | undefined>) | undefined;
 
   async launchChild(request: LaunchChildRequest, _runtime: LauncherRuntimeContext): Promise<LaunchResult> {
@@ -92,6 +94,21 @@ class FakeLauncher implements Launcher {
   async readUpdate(launch: LaunchResult): Promise<NormalizedRunUpdate | undefined> {
     if (this.readUpdateHook) return await this.readUpdateHook(launch);
     return this.updates.get(launch.runId);
+  }
+
+  async continueChild(request: ContinueLaunchRequest, _runtime: LauncherRuntimeContext): Promise<LaunchResult> {
+    if (this.continueError) throw this.continueError;
+    this.continueLaunches.push(request);
+    const override = this.launchResults.get(request.runId) ?? {};
+    return {
+      runId: request.runId,
+      asyncId: request.runId,
+      asyncDir: request.asyncDir,
+      resultPath: request.resultPath,
+      sessionFile: override.sessionFile,
+      artifactPath: override.artifactPath,
+      model: override.model,
+    };
   }
 
   async cancel(): Promise<boolean> {
@@ -1763,6 +1780,288 @@ describe("LazySubagentsController", () => {
 
     expect(controller.clearRuns()).toBe(1);
     expect(controller.getSnapshot().runs).toHaveLength(0);
+  });
+});
+
+describe("continueChild", () => {
+  test("rejects missing target", async () => {
+    const { api } = createPi();
+    const launcher = new FakeLauncher();
+    const controller = new LazySubagentsController(api as any, { launcher, createRunId: () => "run-1", now: () => 100 });
+    const { ctx } = createContext();
+
+    await controller.handleSessionStart(ctx);
+
+    await expect(controller.continueChild("nonexistent", "Continue prompt", "title", ctx))
+      .rejects.toThrow("No run found for target");
+  });
+
+  test("rejects group and workflow targets", async () => {
+    const { api } = createPi();
+    const launcher = new FakeLauncher();
+    const controller = new LazySubagentsController(api as any, { launcher, createRunId: () => "ignored", now: () => 100 });
+    const { ctx } = createContext();
+
+    // Manually insert a group run into the registry
+    const registry = new RunRegistry();
+    registry.upsert(createRun({ id: "grp-1", kind: "group", status: "completed", completedAt: 50, launchRef: { runId: "grp-1", asyncId: "grp-1", asyncDir: "/tmp/grp-1" } }));
+    const persisted = createPersistedState(registry.serialize(), 10);
+    await controller.handleSessionStart({ ...ctx, sessionManager: { ...ctx.sessionManager, getBranch: () => [{ type: "custom", customType: PERSISTED_STATE_ENTRY, data: persisted }] } });
+
+    await expect(controller.continueChild("grp-1", "p", "t", ctx))
+      .rejects.toThrow("Cannot continue group runs");
+  });
+
+  test("rejects active runs", async () => {
+    const { api } = createPi();
+    const launcher = new FakeLauncher();
+    const controller = new LazySubagentsController(api as any, { launcher, createRunId: () => "run-1", now: () => 100 });
+    const { ctx } = createContext();
+
+    await controller.handleSessionStart(ctx);
+    await controller.launchChild({ agent: "reviewer", title: "t", taskSummary: "t", prompt: "p" }, ctx);
+
+    // Run is queued, so continue should be rejected
+    await expect(controller.continueChild("run-1", "Continue", "title", ctx))
+      .rejects.toThrow("Cannot continue active run");
+  });
+
+  test("rejects archived runs", async () => {
+    const { api } = createPi();
+    const launcher = new FakeLauncher();
+    const controller = new LazySubagentsController(api as any, { launcher, createRunId: () => "ignored", now: () => 200 });
+    const { ctx } = createContext();
+
+    const registry = new RunRegistry();
+    const run = createRun({ id: "arc-1", status: "completed", completedAt: 50, archived: true, launchRef: { runId: "arc-1", asyncId: "arc-1", asyncDir: "/tmp/arc-1" } });
+    registry.upsert(run);
+
+    const persisted = createPersistedState(registry.serialize(), 10);
+    await controller.handleSessionStart({ ...ctx, sessionManager: { ...ctx.sessionManager, getBranch: () => [{ type: "custom", customType: PERSISTED_STATE_ENTRY, data: persisted }] } });
+
+    await expect(controller.continueChild("arc-1", "p", "t", ctx))
+      .rejects.toThrow("Cannot continue archived run");
+  });
+
+  test("rejects cancelled and failed runs", async () => {
+    const { api } = createPi();
+    const launcher = new FakeLauncher();
+    const controller = new LazySubagentsController(api as any, { launcher, createRunId: () => "ignored", now: () => 200 });
+    const { ctx } = createContext();
+
+    const registry = new RunRegistry();
+    registry.upsert(createRun({ id: "can-1", status: "cancelled", completedAt: 50, launchRef: { runId: "can-1", asyncId: "can-1", asyncDir: "/tmp/can-1" } }));
+    registry.upsert(createRun({ id: "fail-1", status: "failed", completedAt: 50, launchRef: { runId: "fail-1", asyncId: "fail-1", asyncDir: "/tmp/fail-1" } }));
+
+    const persisted = createPersistedState(registry.serialize(), 10);
+    await controller.handleSessionStart({ ...ctx, sessionManager: { ...ctx.sessionManager, getBranch: () => [{ type: "custom", customType: PERSISTED_STATE_ENTRY, data: persisted }] } });
+
+    await expect(controller.continueChild("can-1", "p", "t", ctx))
+      .rejects.toThrow("Cannot continue cancelled run");
+    await expect(controller.continueChild("fail-1", "p", "t", ctx))
+      .rejects.toThrow("Cannot continue failed run");
+  });
+
+  test("rejects named run with expired lease", async () => {
+    const { api } = createPi();
+    const launcher = new FakeLauncher();
+    const controller = new LazySubagentsController(api as any, { launcher, createRunId: () => "ignored", now: () => 5000 });
+    const { ctx } = createContext();
+
+    const registry = new RunRegistry();
+    registry.upsert(createRun({
+      id: "named-1",
+      name: "my-agent",
+      status: "completed",
+      completedAt: 100,
+      leaseExpiry: 1000,
+      launchRef: { runId: "named-1", asyncId: "named-1", asyncDir: "/tmp/named-1" },
+      sessionFile: "/tmp/named-1/session.jsonl",
+    }));
+
+    const persisted = createPersistedState(registry.serialize(), 100);
+    await controller.handleSessionStart({ ...ctx, sessionManager: { ...ctx.sessionManager, getBranch: () => [{ type: "custom", customType: PERSISTED_STATE_ENTRY, data: persisted }] } });
+
+    // Lease expired at 1000, now is 5000
+    await expect(controller.continueChild("my-agent", "p", "t", ctx))
+      .rejects.toThrow("lease has expired");
+  });
+
+  test("continues a completed single run by id", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-lazy-subagents-cont-"));
+    const asyncDir = path.join(tempDir, "async");
+    await fs.mkdir(asyncDir, { recursive: true });
+    const sessionFile = path.join(asyncDir, "session-0", "session.jsonl");
+    await fs.mkdir(path.dirname(sessionFile), { recursive: true });
+    await fs.writeFile(sessionFile, "{}", "utf8");
+
+    const { api } = createPi();
+    const launcher = new FakeLauncher();
+    const controller = new LazySubagentsController(api as any, { launcher, createRunId: () => "ignored", now: () => 200 });
+    const { ctx } = createContext();
+
+    const registry = new RunRegistry();
+    registry.upsert(createRun({
+      id: "run-cont-1",
+      status: "completed",
+      completedAt: 50,
+      sessionFile,
+      launchRef: { runId: "run-cont-1", asyncId: "run-cont-1", asyncDir },
+    }));
+
+    const persisted = createPersistedState(registry.serialize(), 100);
+    await controller.handleSessionStart({ ...ctx, sessionManager: { ...ctx.sessionManager, getBranch: () => [{ type: "custom", customType: PERSISTED_STATE_ENTRY, data: persisted }] } });
+
+    const run = await controller.continueChild("run-cont-1", "Keep going", "title", ctx);
+
+    expect(run.status).toBe("queued");
+    expect(run.completedAt).toBeUndefined();
+    expect(launcher.continueLaunches).toHaveLength(1);
+    expect(launcher.continueLaunches[0]?.prompt).toBe("Keep going");
+    expect(launcher.continueLaunches[0]?.sessionFile).toBe(sessionFile);
+  });
+
+  test("continues a named run by name", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-lazy-subagents-cont-"));
+    const asyncDir = path.join(tempDir, "async");
+    await fs.mkdir(asyncDir, { recursive: true });
+    const sessionFile = path.join(asyncDir, "session-0", "session.jsonl");
+    await fs.mkdir(path.dirname(sessionFile), { recursive: true });
+    await fs.writeFile(sessionFile, "{}", "utf8");
+
+    const { api } = createPi();
+    const launcher = new FakeLauncher();
+    const controller = new LazySubagentsController(api as any, { launcher, createRunId: () => "ignored", now: () => 200 });
+    const { ctx } = createContext();
+
+    const registry = new RunRegistry();
+    registry.upsert(createRun({
+      id: "run-cont-2",
+      name: "my-reviewer",
+      status: "completed",
+      completedAt: 50,
+      leaseExpiry: 10000,
+      sessionFile,
+      launchRef: { runId: "run-cont-2", asyncId: "run-cont-2", asyncDir },
+    }));
+
+    const persisted = createPersistedState(registry.serialize(), 100);
+    await controller.handleSessionStart({ ...ctx, sessionManager: { ...ctx.sessionManager, getBranch: () => [{ type: "custom", customType: PERSISTED_STATE_ENTRY, data: persisted }] } });
+
+    const run = await controller.continueChild("my-reviewer", "Keep going", "title", ctx);
+
+    expect(run.status).toBe("queued");
+    expect(launcher.continueLaunches).toHaveLength(1);
+    expect(launcher.continueLaunches[0]?.sessionFile).toBe(sessionFile);
+  });
+
+  test("renews lease on continue", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-lazy-subagents-cont-"));
+    const asyncDir = path.join(tempDir, "async");
+    await fs.mkdir(asyncDir, { recursive: true });
+    const sessionFile = path.join(asyncDir, "session-0", "session.jsonl");
+    await fs.mkdir(path.dirname(sessionFile), { recursive: true });
+    await fs.writeFile(sessionFile, "{}", "utf8");
+
+    const { api } = createPi();
+    const launcher = new FakeLauncher();
+    const now = 200;
+    const controller = new LazySubagentsController(api as any, { launcher, createRunId: () => "ignored", now: () => now });
+    const { ctx } = createContext();
+
+    const oldLeaseExpiry = 1000;
+    const registry = new RunRegistry();
+    registry.upsert(createRun({
+      id: "run-cont-lease",
+      name: "leased-agent",
+      status: "completed",
+      completedAt: 50,
+      leaseExpiry: oldLeaseExpiry,
+      sessionFile,
+      launchRef: { runId: "run-cont-lease", asyncId: "run-cont-lease", asyncDir },
+    }));
+
+    const persisted = createPersistedState(registry.serialize(), 100);
+    await controller.handleSessionStart({ ...ctx, sessionManager: { ...ctx.sessionManager, getBranch: () => [{ type: "custom", customType: PERSISTED_STATE_ENTRY, data: persisted }] } });
+
+    const run = await controller.continueChild("leased-agent", "Keep going", "title", ctx);
+
+    // New lease should be based on the now timestamp + DEFAULT_NAMED_RUN_LEASE_MS
+    expect(run.leaseExpiry).toBeGreaterThan(oldLeaseExpiry);
+    expect(run.leaseExpiry).toBe(now + 30 * 60_000);
+  });
+
+  test("emits launch message and persists state on continue", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-lazy-subagents-cont-"));
+    const asyncDir = path.join(tempDir, "async");
+    await fs.mkdir(asyncDir, { recursive: true });
+    const sessionFile = path.join(asyncDir, "session-0", "session.jsonl");
+    await fs.mkdir(path.dirname(sessionFile), { recursive: true });
+    await fs.writeFile(sessionFile, "{}", "utf8");
+
+    const { api, messages, entries } = createPi();
+    const launcher = new FakeLauncher();
+    const controller = new LazySubagentsController(api as any, { launcher, createRunId: () => "ignored", now: () => 200 });
+    const { ctx } = createContext();
+
+    const registry = new RunRegistry();
+    registry.upsert(createRun({
+      id: "run-cont-emit",
+      status: "completed",
+      completedAt: 50,
+      sessionFile,
+      launchRef: { runId: "run-cont-emit", asyncId: "run-cont-emit", asyncDir },
+    }));
+
+    const persisted = createPersistedState(registry.serialize(), 100);
+    await controller.handleSessionStart({ ...ctx, sessionManager: { ...ctx.sessionManager, getBranch: () => [{ type: "custom", customType: PERSISTED_STATE_ENTRY, data: persisted }] } });
+
+    // Clear messages from session start
+    const messageCountBefore = messages.length;
+    const entryCountBefore = entries.length;
+
+    await controller.continueChild("run-cont-emit", "Keep going", "title", ctx);
+
+    expect(messages.length).toBeGreaterThan(messageCountBefore);
+    expect(messages[messageCountBefore]?.message.customType).toBe(MESSAGE_TYPE_LAUNCH);
+    expect(entries.length).toBeGreaterThan(entryCountBefore);
+    expect(entries.some((entry) => entry.customType === PERSISTED_STATE_ENTRY)).toBe(true);
+  });
+
+  test("reverts run to previous state on launcher failure", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-lazy-subagents-cont-"));
+    const asyncDir = path.join(tempDir, "async");
+    await fs.mkdir(asyncDir, { recursive: true });
+    const sessionFile = path.join(asyncDir, "session-0", "session.jsonl");
+    await fs.mkdir(path.dirname(sessionFile), { recursive: true });
+    await fs.writeFile(sessionFile, "{}", "utf8");
+
+    const { api } = createPi();
+    const launcher = new FakeLauncher();
+    launcher.continueError = new Error("launcher boom");
+    const controller = new LazySubagentsController(api as any, { launcher, createRunId: () => "ignored", now: () => 200 });
+    const { ctx } = createContext();
+
+    const registry = new RunRegistry();
+    registry.upsert(createRun({
+      id: "run-cont-revert",
+      status: "completed",
+      completedAt: 50,
+      resultPreview: "Old result",
+      sessionFile,
+      launchRef: { runId: "run-cont-revert", asyncId: "run-cont-revert", asyncDir },
+    }));
+
+    const persisted = createPersistedState(registry.serialize(), 100);
+    await controller.handleSessionStart({ ...ctx, sessionManager: { ...ctx.sessionManager, getBranch: () => [{ type: "custom", customType: PERSISTED_STATE_ENTRY, data: persisted }] } });
+
+    await expect(controller.continueChild("run-cont-revert", "Keep going", "title", ctx))
+      .rejects.toThrow("launcher boom");
+
+    // Run should be back to completed state
+    const run = controller.getSnapshot().runs.find((r: RunRecord) => r.id === "run-cont-revert");
+    expect(run?.status).toBe("completed");
+    expect(run?.resultPreview).toBe("Old result");
   });
 });
 

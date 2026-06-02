@@ -41,6 +41,7 @@ export const ToolParamsSchema = Type.Object({
     Type.Literal("result"),
     Type.Literal("pickup"),
     Type.Literal("pin"),
+    Type.Literal("continue"),
     Type.Literal("clear"),
     Type.Literal("cancel"),
   ], {
@@ -54,6 +55,9 @@ export const ToolParamsSchema = Type.Object({
   })),
   title: Type.Optional(Type.String({
     description: "Optional short label shown in the widget, status, and message cards.",
+  })),
+  target: Type.Optional(Type.String({
+    description: "Run id or name to continue. Use action=continue with a new prompt to resume a completed named or single subagent in the same child session.",
   })),
   runId: Type.Optional(Type.String({
     description: "Existing run id for wait, status, result, pickup, clear, or cancel operations. Use this sparingly for later health checks or final-result retrieval, not tight polling loops.",
@@ -278,6 +282,14 @@ export default function lazySubagentsExtension(pi: ExtensionAPI): void {
             content: [{ type: "text", text: params.runId && await controller.cancelRun(params.runId, ctx) ? `Cancelled ${params.runId}.` : `Could not cancel ${params.runId ?? "(missing runId)"}.` }],
             details: { action: params.action, runId: params.runId },
           };
+        case "continue": {
+          if (!params.target || !params.prompt) {
+            return { content: [{ type: "text", text: "Provide target and prompt for action=continue." }], details: { action: params.action } };
+          }
+          const title = params.title ?? shortTitle(params.prompt);
+          const run = await controller.continueChild(params.target, params.prompt, title, ctx);
+          return { content: [{ type: "text", text: formatLaunchAcknowledgement(`Continued ${run.id} (${run.agent}).`) }], details: { action: params.action, runId: run.id } };
+        }
       }
     },
   });

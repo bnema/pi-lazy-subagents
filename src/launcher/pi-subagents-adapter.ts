@@ -9,6 +9,7 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 import { getAgentProfile, listAvailableAgentProfiles, type AgentProfile } from "./agent-profiles.js";
 import type {
+  ContinueLaunchRequest,
   LaunchChildRequest,
   LaunchGroupRequest,
   LaunchResult,
@@ -134,7 +135,7 @@ interface RunnerChildConfig {
 
 interface RunnerConfig {
   runId: string;
-  mode: "single" | "parallel" | "workflow";
+  mode: "single" | "parallel" | "workflow" | "continue";
   maxConcurrency?: number;
   piBin: string;
   asyncDir: string;
@@ -142,6 +143,7 @@ interface RunnerConfig {
   resultPath: string;
   statusPath: string;
   eventsPath: string;
+  continueSessionFile?: string;
   children: RunnerChildConfig[];
 }
 
@@ -622,6 +624,34 @@ export class PiSubagentsAdapter implements Launcher {
     await spawnDetachedRunner(configPath, cwd);
 
     return normalizeAsyncLaunchResult(config.runId, config.runId, config.asyncDir, this.resultsDir, summarizeResolvedModels(config.children));
+  }
+
+  async continueChild(request: ContinueLaunchRequest, _runtime: LauncherRuntimeContext): Promise<LaunchResult> {
+    // The controller clears artifacts before calling us. We just set up the
+    // runner config and spawn.
+    const children = await buildRunnerChildren([
+      {
+        agent: request.agent,
+        taskSummary: request.taskSummary,
+        prompt: request.prompt,
+        cwd: request.cwd,
+      },
+    ], request.cwd, request.asyncDir);
+
+    const config: RunnerConfig = {
+      runId: request.runId,
+      mode: "continue",
+      piBin: this.piBin,
+      asyncDir: request.asyncDir,
+      resultsDir: this.resultsDir,
+      resultPath: request.resultPath,
+      statusPath: request.statusPath,
+      eventsPath: request.eventsPath,
+      continueSessionFile: request.sessionFile,
+      children,
+    };
+
+    return await this.launch(config, request.cwd);
   }
 
   async launchChild(request: LaunchChildRequest, runtime: LauncherRuntimeContext): Promise<LaunchResult> {
