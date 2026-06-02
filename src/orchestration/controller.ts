@@ -1030,7 +1030,11 @@ export class LazySubagentsController {
     } catch (error) {
       // Restore backup files so prior results are not lost
       for (const src of backupPaths) {
-        try { await fsp.rename(`${src}.cont-bak`, src); } catch { /* ok */ }
+        try {
+          await fsp.rename(`${src}.cont-bak`, src);
+        } catch (restoreError) {
+          console.warn(`[pi-lazy-subagents] failed to restore continuation artifact ${src}:`, restoreError);
+        }
       }
 
       // Revert the run back to its previous terminal state

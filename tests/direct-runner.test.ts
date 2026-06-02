@@ -79,6 +79,19 @@ describe("direct runner stdout processing", () => {
     expect(await resolveCompletedSessionFile(sessionDir, continuedSessionFile)).toBe(continuedSessionFile);
   });
 
+  test("prefers the latest child session file over the provided continuation file", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-lazy-subagents-session-file-"));
+    const oldSessionFile = path.join(sessionDir, "old.jsonl");
+    const latestSessionFile = path.join(sessionDir, "latest.jsonl");
+    const continuedSessionFile = path.join(sessionDir, "continued.jsonl");
+    await fs.writeFile(oldSessionFile, "old", "utf8");
+    await fs.writeFile(latestSessionFile, "latest", "utf8");
+    await fs.utimes(oldSessionFile, new Date(1_000), new Date(1_000));
+    await fs.utimes(latestSessionFile, new Date(2_000), new Date(2_000));
+
+    expect(await resolveCompletedSessionFile(sessionDir, continuedSessionFile)).toBe(latestSessionFile);
+  });
+
   test("renders workflow prompts from prior step summaries, outputs, and structured fields", () => {
     const rendered = renderWorkflowPrompt(
       "Research summary: {{research.summary}}\n\nResearch output:\n{{research.output}}\n\nJSON:\n{{research.json}}\n\nTitle: {{research.structured.title}}",
