@@ -137,6 +137,15 @@ describe("RunRegistry", () => {
       expect(registry.resolveTarget("run-1")).toBe("run-1");
     });
 
+    test("claimName stores the normalized name form", () => {
+      const registry = new RunRegistry();
+      registry.upsert(createRun({ id: "run-1", status: "running" }));
+
+      expect(registry.claimName("run-1", " My-Agent ")).toBe(true);
+      expect(registry.getNameForRun("run-1")).toBe("my-agent");
+      expect(registry.resolveTarget("MY-AGENT")).toBe("run-1");
+    });
+
     test("claimName rejects invalid names", () => {
       const registry = new RunRegistry();
       registry.upsert(createRun({ id: "run-1", status: "running" }));
@@ -219,6 +228,25 @@ describe("RunRegistry", () => {
       expect(inserted.name).toBeUndefined();
       expect(registry.getNameForRun("run-1")).toBeUndefined();
       expect(registry.resolveTarget("run-1")).toBe("run-1");
+    });
+
+    test("upsert releases a previous name when replacing it", () => {
+      const registry = new RunRegistry();
+      registry.upsert(createRun({ id: "run-1", status: "running", name: "old-name" }));
+
+      const updated = registry.upsert(createRun({ id: "run-1", status: "running", name: "new-name" }));
+
+      expect(updated.name).toBe("new-name");
+      expect(registry.resolveTarget("old-name")).toBeUndefined();
+      expect(registry.resolveTarget("new-name")).toBe("run-1");
+    });
+
+    test("isNameAvailable cleans up stale name index entries", () => {
+      const registry = new RunRegistry();
+      (registry as any).nameIndex.set("stale-name", "missing-run");
+
+      expect(registry.isNameAvailable("stale-name")).toBe(true);
+      expect(registry.resolveTarget("stale-name")).toBeUndefined();
     });
 
     test("restore clears persisted names that cannot be claimed", () => {

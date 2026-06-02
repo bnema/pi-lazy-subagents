@@ -118,8 +118,8 @@ export class RunRegistry {
       this.runs.set(normalized.id, normalized);
     }
     for (const normalized of normalizedRuns) {
-      if (normalized.name && !normalized.archived && !this.tryClaimName(normalized.id, normalized.name)) {
-        normalized.name = undefined;
+      if (normalized.name && !normalized.archived) {
+        normalized.name = this.tryClaimName(normalized.id, normalized.name);
         this.runs.set(normalized.id, normalized);
       }
     }
@@ -146,9 +146,13 @@ export class RunRegistry {
 
   upsert(run: RunRecord): RunRecord {
     const normalized = normalizeRun(run, this.recentEventLimit);
+    const previous = this.runs.get(normalized.id);
+    if (previous?.name !== normalized.name) {
+      this.releaseName(normalized.id);
+    }
     this.runs.set(normalized.id, normalized);
-    if (normalized.name && !normalized.archived && !this.tryClaimName(normalized.id, normalized.name)) {
-      normalized.name = undefined;
+    if (normalized.name && !normalized.archived) {
+      normalized.name = this.tryClaimName(normalized.id, normalized.name);
       this.runs.set(normalized.id, normalized);
     }
     this.prune();
@@ -179,11 +183,13 @@ export class RunRegistry {
         if (normalized) {
           this.releaseName(runId);
           this.nameIndex.set(normalized, runId);
+          nextRun.name = normalized;
         } else {
           nextRun.name = existing.name;
         }
       } else {
         this.releaseName(runId);
+        nextRun.name = undefined;
       }
     }
 
@@ -270,8 +276,7 @@ export class RunRegistry {
     this.releaseName(runId);
 
     this.nameIndex.set(normalized, runId);
-    // Store original name for display; index uses normalized form for lookup.
-    this.runs.set(runId, { ...run, name });
+    this.runs.set(runId, { ...run, name: normalized });
     return true;
   }
 
@@ -291,7 +296,11 @@ export class RunRegistry {
     const owner = this.nameIndex.get(normalized);
     if (!owner) return true;
     const ownerRun = this.runs.get(owner);
-    return Boolean(ownerRun?.archived);
+    if (!ownerRun) {
+      this.nameIndex.delete(normalized);
+      return true;
+    }
+    return Boolean(ownerRun.archived);
   }
 
   getNameForRun(runId: string): string | undefined {
@@ -397,11 +406,11 @@ export class RunRegistry {
     return normalized;
   }
 
-  private tryClaimName(runId: string, name: string): boolean {
+  private tryClaimName(runId: string, name: string): string | undefined {
     const normalized = this.claimableName(runId, name);
-    if (!normalized) return false;
+    if (!normalized) return undefined;
     this.nameIndex.set(normalized, runId);
-    return true;
+    return normalized;
   }
 
   private clearRunMetadata(runId: string): void {

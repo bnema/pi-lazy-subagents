@@ -132,7 +132,8 @@ lazy_subagents action=workflow maxConcurrency=2 steps=[{id:"triage",agent:"scout
 - `pickup` injects a completed result into chat.
 - `pin` keeps background progress visible without repeated status checks. Explicit pins add a durable progress card to chat; wait-time auto-pins use the tool row as the live surface.
 - completed successes auto-hide after a grace window; failed, paused, and pinned runs stay until resolved or cleared.
-- Named runs stay visible after completion for a bounded lease (default 30 min). Use `action=continue target=<name|runId>` to send follow-up tasks before the lease expires; targets resolve by run id first, then by name.
+- Names are only supported for `action=run` single runs; group and workflow runs cannot be continued by name.
+- Named single runs stay visible after completion for a bounded lease (default 30 min). Use `action=continue target=<name|runId>` to send follow-up tasks before the lease expires; targets resolve by run id first, then by name.
 - Both named and unnamed completed runs can be continued by their run ID while they remain available. Named runs remain continuable by name or run ID until their lease expires.
 - When the lease expires, successful named runs leave the normal status/widget surfaces and can no longer be continued by name or run ID.
 - Continuation reuses the existing child session so the agent has full context from prior turns.

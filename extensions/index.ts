@@ -54,7 +54,7 @@ export const ToolParamsSchema = Type.Object({
     description: "Task for the child session. For action=run, describe the delegated work clearly and concisely, then let the child report completion or attention back asynchronously.",
   })),
   name: Type.Optional(Type.String({
-    description: `Stable name for this run, kept visible after completion for follow-up via action=continue. Must match /${RUN_NAME_PATTERN.source}/. Use for long-lived review/rework agents.`,
+    description: `Stable name for action=run single runs, kept visible after completion for follow-up via action=continue. Group and workflow runs cannot be continued by name. Must match /${RUN_NAME_PATTERN.source}/. Use for long-lived review/rework agents.`,
     pattern: RUN_NAME_PATTERN.source,
   })),
   title: Type.Optional(Type.String({
@@ -217,13 +217,15 @@ export default function lazySubagentsExtension(pi: ExtensionAPI): void {
           if (!params.children || params.children.length === 0) {
             return { content: [{ type: "text", text: "Provide children[] for action=parallel." }], details: { action: params.action } };
           }
+          if (params.name) {
+            return { content: [{ type: "text", text: "name is only supported for action=run single runs; group runs cannot be continued by name." }], details: { action: params.action, name: params.name } };
+          }
 
           const title = params.title ?? `Parallel run (${params.children.length})`;
           const run = await controller.launchGroup(
             {
               title,
               taskSummary: title,
-              name: params.name,
               children: params.children.map((child) => ({
                 ...child,
                 taskSummary: child.taskSummary ?? shortTitle(child.prompt),
@@ -238,13 +240,15 @@ export default function lazySubagentsExtension(pi: ExtensionAPI): void {
           if (!params.steps || params.steps.length === 0) {
             return { content: [{ type: "text", text: "Provide steps[] for action=workflow." }], details: { action: params.action } };
           }
+          if (params.name) {
+            return { content: [{ type: "text", text: "name is only supported for action=run single runs; workflow runs cannot be continued by name." }], details: { action: params.action, name: params.name } };
+          }
 
           const title = params.title ?? `Workflow run (${params.steps.length} steps)`;
           const run = await controller.launchWorkflow(
             {
               title,
               taskSummary: title,
-              name: params.name,
               maxConcurrency: params.maxConcurrency,
               steps: params.steps.map((step) => ({
                 ...step,

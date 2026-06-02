@@ -106,6 +106,28 @@ describe("extension entrypoint", () => {
     expect(guidance).toContain("action=continue target=<name|runId>");
   });
 
+  test("tool rejects names on group and workflow runs", async () => {
+    const { api, tools } = createPi();
+    lazySubagentsExtension(api as any);
+
+    const tool = tools.find((entry) => entry.name === TOOL_NAME);
+    const ctx = { cwd: process.cwd(), hasUI: false };
+
+    const parallelResult = await tool.execute("tool-1", {
+      action: "parallel",
+      name: "review-group",
+      children: [{ agent: "reviewer", prompt: "Review it" }],
+    }, new AbortController().signal, () => undefined, ctx);
+    expect(parallelResult.content[0].text).toContain("name is only supported for action=run");
+
+    const workflowResult = await tool.execute("tool-2", {
+      action: "workflow",
+      name: "review-workflow",
+      steps: [{ id: "review", agent: "reviewer", prompt: "Review it" }],
+    }, new AbortController().signal, () => undefined, ctx);
+    expect(workflowResult.content[0].text).toContain("workflow runs cannot be continued by name");
+  });
+
   test("tool renderer shows wait progress details in the active tool row", () => {
     const { api, tools } = createPi();
     lazySubagentsExtension(api as any);
