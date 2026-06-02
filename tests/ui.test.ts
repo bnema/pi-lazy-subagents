@@ -512,6 +512,7 @@ describe("visibility helpers", () => {
     // Here we just verify the footer renders with all runs.
     expect(status).toContain("lazy");
     expect(status).toContain("1 live");
+    expect(status).toContain("3 inbox");
   });
 
   test("widget builds without archived and expired named runs via filtered snapshot", () => {

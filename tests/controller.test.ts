@@ -1932,6 +1932,38 @@ describe("continueChild", () => {
       .rejects.toThrow("Cannot continue active run");
   });
 
+  test("continues paused single runs", async () => {
+    const tempDir = await createTempDir(path.join(os.tmpdir(), "pi-lazy-subagents-cont-"));
+    const asyncDir = path.join(tempDir, "async");
+    await fs.mkdir(asyncDir, { recursive: true });
+    const sessionFile = path.join(asyncDir, "session-0", "session.jsonl");
+    await fs.mkdir(path.dirname(sessionFile), { recursive: true });
+    await fs.writeFile(sessionFile, "{}", "utf8");
+
+    const { api } = createPi();
+    const launcher = new FakeLauncher();
+    const controller = new LazySubagentsController(api as any, { launcher, createRunId: () => "ignored", now: () => 200 });
+    const { ctx } = createContext();
+
+    const registry = new RunRegistry();
+    registry.upsert(createRun({
+      id: "paused-1",
+      status: "paused",
+      completedAt: 50,
+      sessionFile,
+      launchRef: { runId: "paused-1", asyncId: "paused-1", asyncDir },
+    }));
+
+    const persisted = createPersistedState(registry.serialize(), 100);
+    await controller.handleSessionStart({ ...ctx, sessionManager: { ...ctx.sessionManager, getBranch: () => [{ type: "custom", customType: PERSISTED_STATE_ENTRY, data: persisted }] } });
+
+    const run = await controller.continueChild("paused-1", "Keep going", "title", ctx);
+
+    expect(run.status).toBe("queued");
+    expect(launcher.continueLaunches).toHaveLength(1);
+    expect(launcher.continueLaunches[0]?.sessionFile).toBe(sessionFile);
+  });
+
   test("rejects archived runs", async () => {
     const { api } = createPi();
     const launcher = new FakeLauncher();

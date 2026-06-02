@@ -180,6 +180,11 @@ export class RunRegistry {
       recentEvents: patch.recentEvents ? normalizeRun({ ...existing, recentEvents: patch.recentEvents }, this.recentEventLimit).recentEvents : existing.recentEvents,
     };
 
+    if (patch.archived && !existing.archived) {
+      this.releaseName(runId);
+      nextRun.name = undefined;
+    }
+
     if (patch.name !== undefined && patch.name !== existing.name) {
       if (nextRun.name && !nextRun.archived) {
         const normalized = this.claimableName(runId, nextRun.name);
@@ -316,7 +321,7 @@ export class RunRegistry {
     const run = this.runs.get(runId);
     if (!run) return false;
     this.releaseName(runId);
-    this.runs.set(runId, { ...run, archived: true });
+    this.runs.set(runId, { ...run, archived: true, name: undefined });
     return true;
   }
 

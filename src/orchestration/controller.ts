@@ -931,6 +931,8 @@ export class LazySubagentsController {
       throw new Error(`Cannot continue archived run: ${runId}`);
     }
 
+    // isTerminalStatus intentionally allows paused runs: a paused single run is
+    // idle/suspended and may be continued by runId in the same session lineage.
     if (!isTerminalStatus(existing.status)) {
       throw new Error(`Cannot continue active run: ${runId} (currently ${existing.status})`);
     }

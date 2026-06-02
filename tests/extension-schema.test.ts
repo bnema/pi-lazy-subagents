@@ -1,10 +1,16 @@
 import { describe, expect, test } from "vitest";
 
 import { ToolParamsSchema } from "../extensions/index.js";
+import { MAX_RUN_NAME_LENGTH, RUN_NAME_PATTERN } from "../src/defaults.js";
 
 describe("lazy_subagents tool schema", () => {
   test("completionPolicy is not exposed because subagents always report back", () => {
     expect(ToolParamsSchema.properties).not.toHaveProperty("completionPolicy");
+  });
+
+  test("run name pattern stays synchronized with the max length", () => {
+    expect(MAX_RUN_NAME_LENGTH).toBe(64);
+    expect(RUN_NAME_PATTERN.source).toBe("^[a-z0-9][a-z0-9_-]{0,63}$");
   });
 
   test("name parameter is optional and validates pattern for named run addressing", () => {

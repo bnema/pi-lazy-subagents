@@ -297,10 +297,22 @@ describe("RunRegistry", () => {
 
       expect(registry.archiveRun("run-1")).toBe(true);
       expect(registry.isArchived("run-1")).toBe(true);
+      expect(registry.getNameForRun("run-1")).toBeUndefined();
       expect(registry.resolveTarget("to-archive")).toBeUndefined();
       // Still findable by ID.
       expect(registry.resolveTarget("run-1")).toBe("run-1");
       expect(registry.get("run-1")?.archived).toBe(true);
+    });
+
+    test("updateRun releases the name when archiving", () => {
+      const registry = new RunRegistry();
+      registry.upsert(createRun({ id: "run-1", status: "completed", completedAt: 1, name: "to-archive" }));
+
+      const archived = registry.updateRun("run-1", { archived: true });
+
+      expect(archived.name).toBeUndefined();
+      expect(registry.isArchived("run-1")).toBe(true);
+      expect(registry.resolveTarget("to-archive")).toBeUndefined();
     });
 
     test("archiveRun returns false for unknown run", () => {

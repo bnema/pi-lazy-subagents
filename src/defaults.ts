@@ -24,6 +24,6 @@ export const DEFAULT_WAIT_TIMEOUT_MS = 10 * 60_000;
 export const MAX_WAIT_TIMEOUT_MS = 30 * 60_000;
 export const DEFAULT_NAMED_RUN_LEASE_MS = 30 * 60_000;
 export const MAX_RUN_NAME_LENGTH = 64;
-// RUN_NAME_PATTERN is linear-time safe: MAX_RUN_NAME_LENGTH is constant and the pattern has no nested or ambiguous quantifiers.
-// The second quantifier is MAX_RUN_NAME_LENGTH - 1 because the first character is mandatory.
-export const RUN_NAME_PATTERN = new RegExp(`^[a-z0-9][a-z0-9_-]{0,${MAX_RUN_NAME_LENGTH - 1}}$`);
+// RUN_NAME_PATTERN is linear-time safe: bounded, non-overlapping quantifiers only.
+// Quantifier upper bound is MAX_RUN_NAME_LENGTH - 1 (= 63) because the first character is mandatory.
+export const RUN_NAME_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/;
