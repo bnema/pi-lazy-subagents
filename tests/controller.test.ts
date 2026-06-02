@@ -265,6 +265,47 @@ describe("LazySubagentsController", () => {
     expect(renderRequests).toHaveLength(1);
   });
 
+  test("acknowledged named runs refresh out of the UI when their lease expires", async () => {
+    vi.useFakeTimers();
+    let clock = 1_000;
+    const registry = new RunRegistry();
+    registry.upsert(createRun({
+      id: "named-run",
+      name: "reviewer",
+      title: "Reusable reviewer",
+      taskSummary: "Reusable reviewer",
+      status: "completed",
+      updatedAt: 900,
+      completedAt: 900,
+      leaseExpiry: 1_100,
+    }));
+    registry.acknowledgeRun("named-run");
+
+    const { api } = createPi();
+    const controller = new LazySubagentsController(api as any, {
+      launcher: new FakeLauncher(),
+      now: () => clock,
+      pollIntervalMs: 50,
+    });
+    const { ctx, widgets } = createContext({
+      branchEntries: [{ type: "custom", customType: PERSISTED_STATE_ENTRY, data: createPersistedState(registry.serialize(), clock) }],
+    });
+
+    try {
+      await controller.handleSessionStart(ctx);
+      expect(widgets.at(-1)?.[1]?.join("\n")).toContain("Reusable reviewer");
+
+      clock = 1_200;
+      await vi.advanceTimersByTimeAsync(60);
+      await Promise.resolve();
+
+      expect(widgets.at(-1)).toEqual([WIDGET_KEY, undefined]);
+    } finally {
+      await controller.handleSessionShutdown(ctx);
+      vi.useRealTimers();
+    }
+  });
+
   test("re-sends UI when restored session tree state changes", async () => {
     const firstRegistry = new RunRegistry();
     firstRegistry.upsert(createRun({

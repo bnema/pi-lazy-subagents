@@ -1551,13 +1551,14 @@ export class LazySubagentsController {
 
   /**
    * Keep the poller alive while any named completed/skipped run is still
-   * within its lease window, so the UI refreshes at lease expiry.
+   * within its lease window, so the UI refreshes at lease expiry. Acknowledged
+   * named runs still need this because cleanup preserves them until the lease
+   * ends.
    */
   private hasPendingNamedLeaseWindow(now = this.now()): boolean {
     return this.registry.snapshot().runs.some((run) => (
       (run.status === "completed" || run.status === "skipped")
       && !this.registry.isPinned(run.id)
-      && !this.registry.isAcknowledged(run.id)
       && run.name
       && run.leaseExpiry !== undefined
       && now <= run.leaseExpiry
