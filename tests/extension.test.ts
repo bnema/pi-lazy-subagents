@@ -167,15 +167,22 @@ describe("extension entrypoint", () => {
       fg: (color: string, text: string) => `<${color}:${text}>`,
       bold: (text: string) => `*${text}*`,
     };
-    const lines = ["oldest-progress", ...Array.from({ length: 10 }, (_, index) => `middle-${index}`), "newest-progress"];
+    const lines = [
+      " Review auth diff",
+      "reviewer · running",
+      ...Array.from({ length: 10 }, (_, index) => `detail-${index}`),
+      "detail-newest",
+    ];
 
     const rendered = tool.renderResult({
       content: [{ type: "text", text: "fallback" }],
       details: { kind: "wait-progress", lines },
     }, { expanded: false }, theme).render(160).join("\n");
 
-    expect(rendered).not.toContain("oldest-progress");
-    expect(rendered).toContain("newest-progress");
+    expect(rendered).toContain("Review auth diff");
+    expect(rendered).toContain("reviewer · running");
+    expect(rendered).not.toContain("detail-0");
+    expect(rendered).toContain("detail-newest");
 
     const malformed = tool.renderResult({
       content: [{ type: "text", text: "fallback" }],

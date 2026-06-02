@@ -297,8 +297,10 @@ describe("LazySubagentsController", () => {
     registry.acknowledgeRun("named-run");
 
     const { api } = createPi();
+    const launcher = new FakeLauncher();
     const controller = new LazySubagentsController(api as any, {
-      launcher: new FakeLauncher(),
+      launcher,
+      createRunId: () => "new-run",
       now: () => clock,
       pollIntervalMs: 50,
     });
@@ -315,6 +317,17 @@ describe("LazySubagentsController", () => {
       await Promise.resolve();
 
       expect(widgets.at(-1)).toEqual([WIDGET_KEY, undefined]);
+
+      const relaunched = await controller.launchChild({
+        agent: "reviewer",
+        title: "Reusable reviewer",
+        taskSummary: "Reusable reviewer",
+        prompt: "Keep reviewing",
+        name: "reviewer",
+      }, ctx);
+      expect(relaunched.id).toBe("new-run");
+      expect(relaunched.name).toBe("reviewer");
+      expect(launcher.launches.at(-1)?.cwd).toBe("/repo");
     } finally {
       vi.useRealTimers();
       await controller.handleSessionShutdown(ctx);
@@ -2048,7 +2061,7 @@ describe("continueChild", () => {
       .rejects.toThrow("Cannot continue failed run");
   });
 
-  test("rejects named run with expired lease", async () => {
+  test("drops named runs after lease expiry so they cannot be continued", async () => {
     const { api } = createPi();
     const launcher = new FakeLauncher();
     const controller = new LazySubagentsController(api as any, { launcher, createRunId: () => "ignored", now: () => 5000 });
@@ -2068,9 +2081,11 @@ describe("continueChild", () => {
     const persisted = createPersistedState(registry.serialize(), 100);
     await controller.handleSessionStart({ ...ctx, sessionManager: { ...ctx.sessionManager, getBranch: () => [{ type: "custom", customType: PERSISTED_STATE_ENTRY, data: persisted }] } });
 
-    // Lease expired at 1000, now is 5000
+    // Lease expired at 1000, now is 5000.
     await expect(controller.continueChild("my-agent", "p", "t", ctx))
-      .rejects.toThrow("lease has expired");
+      .rejects.toThrow("No run found for target: my-agent");
+    await expect(controller.continueChild("named-1", "p", "t", ctx))
+      .rejects.toThrow("No run found for target: named-1");
   });
 
   test("continues a completed single run by id", async () => {
@@ -2223,6 +2238,55 @@ describe("continueChild", () => {
     expect(messages[messageCountBefore]?.message.customType).toBe(MESSAGE_TYPE_LAUNCH);
     expect(entries.length).toBeGreaterThan(entryCountBefore);
     expect(entries.some((entry) => entry.customType === PERSISTED_STATE_ENTRY)).toBe(true);
+  });
+
+  test("logs but does not roll back a continued run when post-launch UI rendering fails", async () => {
+    const tempDir = await createTempDir(path.join(os.tmpdir(), "pi-lazy-subagents-cont-"));
+    const asyncDir = path.join(tempDir, "async");
+    await fs.mkdir(asyncDir, { recursive: true });
+    const sessionFile = path.join(asyncDir, "session-0", "session.jsonl");
+    await fs.mkdir(path.dirname(sessionFile), { recursive: true });
+    await fs.writeFile(sessionFile, "{}", "utf8");
+
+    const { api } = createPi();
+    const launcher = new FakeLauncher();
+    const controller = new LazySubagentsController(api as any, { launcher, createRunId: () => "ignored", now: () => 200 });
+    const { ctx } = createContext();
+
+    const registry = new RunRegistry();
+    registry.upsert(createRun({
+      id: "run-cont-ui-fail",
+      status: "completed",
+      completedAt: 50,
+      sessionFile,
+      launchRef: { runId: "run-cont-ui-fail", asyncId: "run-cont-ui-fail", asyncDir },
+    }));
+
+    const persisted = createPersistedState(registry.serialize(), 100);
+    await controller.handleSessionStart({ ...ctx, sessionManager: { ...ctx.sessionManager, getBranch: () => [{ type: "custom", customType: PERSISTED_STATE_ENTRY, data: persisted }] } });
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    let shouldThrow = true;
+    ctx.ui.setStatus = () => {
+      if (!shouldThrow) return;
+      shouldThrow = false;
+      throw new Error("ui boom");
+    };
+
+    try {
+      const run = await controller.continueChild("run-cont-ui-fail", "Keep going", "title", ctx);
+
+      expect(run.status).toBe("queued");
+      expect(warnSpy).toHaveBeenCalledWith("[pi-lazy-subagents] failed to emit continuation launch UI state:", expect.any(Error));
+    } finally {
+      warnSpy.mockRestore();
+    }
+
+    const run = controller.getSnapshot().runs.find((r: RunRecord) => r.id === "run-cont-ui-fail");
+    expect(run?.status).toBe("queued");
+    expect(run?.title).toBe("title");
+    expect(run?.sessionFile).toBe(sessionFile);
+    expect(run?.launchRef?.sessionFile).toBe(sessionFile);
   });
 
   test("reverts run to previous state on launcher failure", async () => {

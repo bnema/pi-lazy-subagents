@@ -113,7 +113,12 @@ function renderLazySubagentsToolResult(result: { content?: Array<{ type?: string
   if (isWaitProgressDetails(result.details)) {
     const lines = options.expanded
       ? result.details.lines
-      : result.details.lines.slice(Math.max(0, result.details.lines.length - 11));
+      : result.details.lines.length <= 11
+        ? result.details.lines
+        : [
+            ...result.details.lines.slice(0, 2),
+            ...result.details.lines.slice(Math.max(2, result.details.lines.length - 9)),
+          ];
     const text = lines.map((line, index) => {
       if (index === 0) return theme.fg("toolTitle", theme.bold(line));
       if (index === 1) return theme.fg("muted", line);

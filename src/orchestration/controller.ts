@@ -605,6 +605,7 @@ export class LazySubagentsController {
     if (!run) return false;
 
     this.registry.acknowledgeRun(runId);
+    this.cleanupExpiredNamedRunLeases();
     this.cleanupAcknowledgedCompletedRuns();
     this.persistState();
     this.renderUi();
@@ -1031,9 +1032,10 @@ export class LazySubagentsController {
     });
 
     // 5. Launch via launcher
+    const cwd = existing.cwd ?? ctx.cwd;
+    let launch: LaunchResult;
     try {
-      const cwd = existing.cwd ?? ctx.cwd;
-      const launch = await this.launcher.continueChild({
+      launch = await this.launcher.continueChild({
         runId,
         title,
         taskSummary: title,
@@ -1047,39 +1049,9 @@ export class LazySubagentsController {
         artifactPath: existing.artifactPath,
         cwd,
       }, runtimeContext(this.pi, ctx));
-
-      const nextLaunch: LaunchResult = {
-        ...launch,
-        sessionFile: launch.sessionFile ?? sessionFile,
-        artifactPath: launch.artifactPath ?? existing.artifactPath,
-      };
-      this.trackedLaunches.set(runId, nextLaunch);
-      const stored = this.registry.updateRun(runId, {
-        title,
-        taskSummary: title,
-        updatedAt: now,
-        sessionFile: nextLaunch.sessionFile,
-        artifactPath: nextLaunch.artifactPath,
-        launchRef: nextLaunch,
-        leaseExpiry: newLeaseExpiry,
-      });
-      this.registry.recordEvent(runId, buildLaunchEvent(stored, now));
-      this.sendVisiblePayload(createLaunchMessagePayload(stored));
-      this.persistState();
-      this.renderUi(ctx);
-      this.refreshPoller();
-      this.queuePoll();
-
-      // Clean up backup files now that the new launch has succeeded
-      for (const src of backupPaths) {
-        try { await fsp.unlink(`${src}.cont-bak`); } catch { /* ok */ }
-      }
-
-      return stored;
     } catch (error) {
       // Restore backup files so prior results are not lost.
       await restoreBackups();
-      this.trackedLaunches.delete(runId);
 
       // Revert the run back to its previous terminal state and metadata.
       this.registry.updateRun(runId, {
@@ -1100,6 +1072,39 @@ export class LazySubagentsController {
       });
       throw error;
     }
+
+    const nextLaunch: LaunchResult = {
+      ...launch,
+      sessionFile: launch.sessionFile ?? sessionFile,
+      artifactPath: launch.artifactPath ?? existing.artifactPath,
+    };
+    this.trackedLaunches.set(runId, nextLaunch);
+    const stored = this.registry.updateRun(runId, {
+      title,
+      taskSummary: title,
+      updatedAt: now,
+      sessionFile: nextLaunch.sessionFile,
+      artifactPath: nextLaunch.artifactPath,
+      launchRef: nextLaunch,
+      leaseExpiry: newLeaseExpiry,
+    });
+    this.registry.recordEvent(runId, buildLaunchEvent(stored, now));
+    try {
+      this.sendVisiblePayload(createLaunchMessagePayload(stored));
+      this.persistState();
+      this.renderUi(ctx);
+    } catch (error) {
+      console.warn("[pi-lazy-subagents] failed to emit continuation launch UI state:", error);
+    }
+    this.refreshPoller();
+    this.queuePoll();
+
+    // Clean up backup files now that the new launch has succeeded
+    for (const src of backupPaths) {
+      try { await fsp.unlink(`${src}.cont-bak`); } catch { /* ok */ }
+    }
+
+    return stored;
   }
 
   async waitForRunSignal(
@@ -1348,8 +1353,9 @@ export class LazySubagentsController {
           }
         }
         this.scanRunHealth();
+        const releasedExpiredNames = this.cleanupExpiredNamedRunLeases();
         const removedAcknowledgedRuns = this.cleanupAcknowledgedCompletedRuns();
-        if (removedAcknowledgedRuns) this.persistState();
+        if (releasedExpiredNames || removedAcknowledgedRuns) this.persistState();
         this.renderUi();
       } finally {
         this.refreshPoller();
@@ -1628,6 +1634,24 @@ export class LazySubagentsController {
     });
   }
 
+  private cleanupExpiredNamedRunLeases(now = this.now()): boolean {
+    const removed = this.registry.clearRuns((run) => {
+      const leaseExpiry = computeLeaseExpiry(run);
+      return Boolean(run.name)
+        && (run.status === "completed" || run.status === "skipped")
+        && leaseExpiry !== undefined
+        && now > leaseExpiry;
+    });
+
+    for (const runId of removed) {
+      this.trackedLaunches.delete(runId);
+      this.progressLines.delete(runId);
+      this.progressStats.delete(runId);
+    }
+
+    return removed.length > 0;
+  }
+
   /**
    * Remove acknowledged completed/skipped runs after their TTL.
    * Named runs are preserved until their lease expires, even if acknowledged.
@@ -1658,8 +1682,9 @@ export class LazySubagentsController {
     this.registry = new RunRegistry({}, persisted);
     this.progressLines.clear();
     this.progressStats.clear();
+    const releasedExpiredNames = this.cleanupExpiredNamedRunLeases();
     const removedAcknowledgedRuns = this.cleanupAcknowledgedCompletedRuns();
-    if (removedAcknowledgedRuns) this.persistState();
+    if (releasedExpiredNames || removedAcknowledgedRuns) this.persistState();
     this.syncTrackedLaunchesFromSnapshot();
 
     for (const run of this.registry.snapshot().runs) {

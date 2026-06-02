@@ -103,6 +103,30 @@ describe("lazy-subagents command parsing", () => {
     expect(message).toContain("do not wait or poll right away");
   });
 
+  test("continue command acknowledgement reports success without blocking", async () => {
+    const controller = {
+      continueChild: async () => ({ id: "run-1", agent: "reviewer", status: "continued" }),
+    };
+
+    const message = await executeLazySubagentsCommand('continue run-1 "Keep going"', controller as any, {} as any);
+
+    expect(message).toContain("Continued run-1 (reviewer).");
+    expect(message).toContain("Signals arrive automatically");
+    expect(message).toContain("do not wait or poll right away");
+  });
+
+  test("continue command formats controller errors for the user", async () => {
+    const controller = {
+      continueChild: async () => {
+        throw new Error("lease has expired");
+      },
+    };
+
+    const message = await executeLazySubagentsCommand('continue my-agent "Keep going"', controller as any, {} as any);
+
+    expect(message).toBe("Could not continue my-agent: lease has expired");
+  });
+
   test("parses run command with --name flag", () => {
     expect(parseLazySubagentsCommand('run reviewer "Review the auth diff" --name diff-reviewer')).toEqual({
       action: "run",
@@ -136,6 +160,8 @@ describe("lazy-subagents command parsing", () => {
 
     expect(parseLazySubagentsCommand("continue")).toEqual({ action: "help" });
     expect(parseLazySubagentsCommand("continue my-agent")).toEqual({ action: "help" });
+    expect(parseLazySubagentsCommand('continue my-agent "prompt" --title')).toEqual({ action: "help" });
+    expect(parseLazySubagentsCommand('continue my-agent "prompt" --title=')).toEqual({ action: "help" });
     expect(parseLazySubagentsCommand('continue my-agent "prompt" --name another-name')).toEqual({ action: "help" });
   });
 
