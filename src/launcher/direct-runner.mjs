@@ -549,6 +549,9 @@ async function runChild(config, statusPath, status, child, index, promptOverride
   await updateStatus(statusPath, status);
 
   const continueSessionFile = config.mode === "continue" ? config.continueSessionFile : undefined;
+  if (config.mode === "continue" && !continueSessionFile) {
+    throw new Error("Continue mode requires a session file.");
+  }
   const args = buildPiArgs(child, promptOverride, continueSessionFile);
   const childProcess = spawn(config.piBin, args, {
     cwd: child.cwd,

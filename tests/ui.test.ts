@@ -405,7 +405,7 @@ describe("visibility helpers", () => {
     })).toBe(true);
   });
 
-  test("named completed run hides after lease expiry and grace window", () => {
+  test("named completed run hides immediately after lease expiry", () => {
     const namedCompleted = createRun({
       id: "named-2",
       status: "completed",
@@ -428,15 +428,15 @@ describe("visibility helpers", () => {
       now: 130_000,
     })).toBe(false);
 
-    // At time 100_500 (just after lease, unacknowledged, within grace window)
+    // At time 100_500 (just after lease expiry), named runs are no longer visible or resumable.
     expect(__testHooks.shouldKeepRunVisibleInUi(namedCompleted, {
       isPinned: false,
       isAcknowledged: false,
       now: 100_500,
-    })).toBe(true);
+    })).toBe(false);
   });
 
-  test("archived runs are never visible unless pinned", () => {
+  test("archived terminal runs are never visible", () => {
     const archived = createRun({
       id: "archived-1",
       status: "completed",
@@ -452,12 +452,12 @@ describe("visibility helpers", () => {
       now: 60_000,
     })).toBe(false);
 
-    // Pinned trumps archive — pinned runs stay visible
+    // Archive wins over pinned terminal visibility.
     expect(__testHooks.shouldKeepRunVisibleInUi(archived, {
       isPinned: true,
       isAcknowledged: false,
       now: 60_000,
-    })).toBe(true);
+    })).toBe(false);
   });
 
   test("active runs are always visible regardless of name or lease", () => {

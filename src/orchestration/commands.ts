@@ -81,6 +81,12 @@ function shortTitle(text: string): string {
 
 export const WAIT_FOR_SIGNAL_GUIDANCE = "Return to the user or continue other work. Signals arrive automatically; do not wait or poll right away.";
 
+function takeFlagValue(tokens: string[]): string | undefined {
+  const value = tokens[0];
+  if (!value || value.startsWith("--")) return undefined;
+  return tokens.shift();
+}
+
 function normalizeWaitTimeoutMs(value: unknown): number | undefined {
   if (typeof value !== "string") return undefined;
   const parsed = Number(value);
@@ -126,11 +132,17 @@ export function parseLazySubagentsCommand(input: string): ParsedLazySubagentsCom
     while (tokens.length > 0) {
       const token = tokens.shift()!;
       if (token === "--timeout-ms") {
-        timeoutMs = normalizeWaitTimeoutMs(tokens.shift());
+        const value = takeFlagValue(tokens);
+        if (!value) return { action: "help" };
+        timeoutMs = normalizeWaitTimeoutMs(value);
+        if (timeoutMs === undefined) return { action: "help" };
         continue;
       }
       if (token.startsWith("--timeout-ms=")) {
-        timeoutMs = normalizeWaitTimeoutMs(token.slice("--timeout-ms=".length));
+        const value = token.slice("--timeout-ms=".length);
+        if (!value) return { action: "help" };
+        timeoutMs = normalizeWaitTimeoutMs(value);
+        if (timeoutMs === undefined) return { action: "help" };
         continue;
       }
       runId ??= token;
@@ -161,11 +173,13 @@ export function parseLazySubagentsCommand(input: string): ParsedLazySubagentsCom
     while (tokens.length > 0) {
       const token = tokens.shift()!;
       if (token === "--title") {
-        title = tokens.shift();
+        title = takeFlagValue(tokens);
+        if (!title) return { action: "help" };
         continue;
       }
       if (token.startsWith("--title=")) {
         title = token.slice("--title=".length);
+        if (!title) return { action: "help" };
         continue;
       }
       if (token === "--name" || token.startsWith("--name=")) {
@@ -190,26 +204,31 @@ export function parseLazySubagentsCommand(input: string): ParsedLazySubagentsCom
     while (tokens.length > 0) {
       const token = tokens.shift()!;
       if (token === "--policy") {
-        tokens.shift();
+        if (!takeFlagValue(tokens)) return { action: "help" };
         continue;
       }
       if (token.startsWith("--policy=")) {
+        if (!token.slice("--policy=".length)) return { action: "help" };
         continue;
       }
       if (token === "--title") {
-        title = tokens.shift();
+        title = takeFlagValue(tokens);
+        if (!title) return { action: "help" };
         continue;
       }
       if (token.startsWith("--title=")) {
         title = token.slice("--title=".length);
+        if (!title) return { action: "help" };
         continue;
       }
       if (token === "--name") {
-        name = tokens.shift();
+        name = takeFlagValue(tokens);
+        if (!name) return { action: "help" };
         continue;
       }
       if (token.startsWith("--name=")) {
         name = token.slice("--name=".length);
+        if (!name) return { action: "help" };
         continue;
       }
       promptParts.push(token);
@@ -346,7 +365,7 @@ export function buildLazySubagentsHelp(): string {
     "  - Unnamed completed runs auto-hide after a short grace window. No manual clear needed.",
     "  - Names are only supported for action=run single runs; group and workflow runs cannot be continued by name.",
     "  - Named completed single runs stay visible and followup-able for a bounded lease (default 30 min).",
-    "  - After the lease expires, named successes behave like unnamed runs and auto-hide after the grace window.",
+    "  - When the lease expires, named successes are hidden and can no longer be resumed.",
     "  - Failed, attention-needed, and pinned runs always stay visible until resolved or cleared.",
     "  - Use action=continue target=<name> prompt=<new prompt> to send a follow-up task to a completed named agent.",
     "    The agent resumes in its existing session directory and runs another turn.",

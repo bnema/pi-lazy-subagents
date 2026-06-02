@@ -99,15 +99,21 @@ function shortTitle(text: string): string {
 }
 
 function isWaitProgressDetails(value: unknown): value is { kind: "wait-progress"; lines: string[] } {
+  const lines = typeof value === "object" && value !== null
+    ? (value as { lines?: unknown }).lines
+    : undefined;
   return typeof value === "object"
     && value !== null
     && (value as { kind?: unknown }).kind === "wait-progress"
-    && Array.isArray((value as { lines?: unknown }).lines);
+    && Array.isArray(lines)
+    && lines.every((line) => typeof line === "string");
 }
 
 function renderLazySubagentsToolResult(result: { content?: Array<{ type?: string; text?: string }>; details?: unknown }, options: { expanded?: boolean }, theme: { fg(color: string, text: string): string; bold(text: string): string }) {
   if (isWaitProgressDetails(result.details)) {
-    const lines = options.expanded ? result.details.lines : result.details.lines.slice(0, 11);
+    const lines = options.expanded
+      ? result.details.lines
+      : result.details.lines.slice(Math.max(0, result.details.lines.length - 11));
     const text = lines.map((line, index) => {
       if (index === 0) return theme.fg("toolTitle", theme.bold(line));
       if (index === 1) return theme.fg("muted", line);

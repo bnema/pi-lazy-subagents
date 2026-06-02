@@ -288,12 +288,15 @@ export class RunRegistry {
     return true;
   }
 
-  /** Release a run's name from the index. */
+  /** Release a run's name from the index and stored record. */
   releaseName(runId: string): void {
     const run = this.runs.get(runId);
     const normalized = run?.name ? validateRunName(run.name) : null;
     if (normalized && this.nameIndex.get(normalized) === runId) {
       this.nameIndex.delete(normalized);
+    }
+    if (run?.name !== undefined) {
+      this.runs.set(runId, { ...run, name: undefined });
     }
   }
 

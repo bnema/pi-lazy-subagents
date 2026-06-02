@@ -158,6 +158,33 @@ describe("extension entrypoint", () => {
     expect(rendered).toContain("tool start");
   });
 
+  test("tool renderer keeps recent compact progress lines and ignores malformed progress details", () => {
+    const { api, tools } = createPi();
+    lazySubagentsExtension(api as any);
+
+    const tool = tools.find((entry) => entry.name === TOOL_NAME);
+    const theme = {
+      fg: (color: string, text: string) => `<${color}:${text}>`,
+      bold: (text: string) => `*${text}*`,
+    };
+    const lines = ["oldest-progress", ...Array.from({ length: 10 }, (_, index) => `middle-${index}`), "newest-progress"];
+
+    const rendered = tool.renderResult({
+      content: [{ type: "text", text: "fallback" }],
+      details: { kind: "wait-progress", lines },
+    }, { expanded: false }, theme).render(160).join("\n");
+
+    expect(rendered).not.toContain("oldest-progress");
+    expect(rendered).toContain("newest-progress");
+
+    const malformed = tool.renderResult({
+      content: [{ type: "text", text: "fallback" }],
+      details: { kind: "wait-progress", lines: [42] },
+    }, { expanded: false }, theme).render(160).join("\n");
+
+    expect(malformed).toContain("fallback");
+  });
+
   test("clears footer and widget state on shutdown", async () => {
     const { api, events } = createPi();
     lazySubagentsExtension(api as any);

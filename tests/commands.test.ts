@@ -139,9 +139,14 @@ describe("lazy-subagents command parsing", () => {
     expect(parseLazySubagentsCommand('continue my-agent "prompt" --name another-name')).toEqual({ action: "help" });
   });
 
-  test("rejects malformed run names in slash commands", () => {
+  test("rejects malformed or missing flag values in slash commands", () => {
     expect(parseLazySubagentsCommand('run reviewer "Review" --name BadName')).toEqual({ action: "help" });
     expect(parseLazySubagentsCommand('run reviewer "Review" --name -bad')).toEqual({ action: "help" });
+    expect(parseLazySubagentsCommand('run reviewer "Review" --name')).toEqual({ action: "help" });
+    expect(parseLazySubagentsCommand('run reviewer "Review" --name=')).toEqual({ action: "help" });
+    expect(parseLazySubagentsCommand('run reviewer "Review" --title --name diff-reviewer')).toEqual({ action: "help" });
+    expect(parseLazySubagentsCommand("wait run-1 --timeout-ms")).toEqual({ action: "help" });
+    expect(parseLazySubagentsCommand("wait run-1 --timeout-ms=0")).toEqual({ action: "help" });
     expect(parseLazySubagentsCommand(`run reviewer "Review" --name ${"a".repeat(65)}`)).toEqual({ action: "help" });
   });
 

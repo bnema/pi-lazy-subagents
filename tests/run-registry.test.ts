@@ -273,6 +273,17 @@ describe("RunRegistry", () => {
       expect(registry.resolveTarget("shared")).toBe("run-1");
     });
 
+    test("releaseName clears the stored run name", () => {
+      const registry = new RunRegistry();
+      registry.upsert(createRun({ id: "run-1", status: "running", name: "claimed-name" }));
+
+      registry.releaseName("run-1");
+
+      expect(registry.getNameForRun("run-1")).toBeUndefined();
+      expect(registry.resolveTarget("claimed-name")).toBeUndefined();
+      expect(registry.isNameAvailable("claimed-name")).toBe(true);
+    });
+
     test("isNameAvailable returns true for unclaimed valid names", () => {
       const registry = new RunRegistry();
       registry.upsert(createRun({ id: "run-1", status: "running" }));

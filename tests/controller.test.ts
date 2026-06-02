@@ -408,6 +408,23 @@ describe("LazySubagentsController", () => {
     expect(controller.getSnapshot().runs[0]?.name).toBe("my-reviewer");
   });
 
+  test("launchChild stores the resolved cwd used for continuation", async () => {
+    const { api } = createPi();
+    const launcher = new FakeLauncher();
+    const controller = new LazySubagentsController(api as any, { launcher, createRunId: () => "run-1", now: () => 100 });
+    const { ctx } = createContext();
+
+    const run = await controller.launchChild({
+      agent: "reviewer",
+      title: "Review",
+      taskSummary: "Review",
+      prompt: "Review it",
+    }, ctx);
+
+    expect(run.cwd).toBe("/repo");
+    expect(launcher.launches[0]?.cwd).toBe("/repo");
+  });
+
   test("launchChild reserves names while launcher startup is pending", async () => {
     const { api } = createPi();
     const launcher = new FakeLauncher();
@@ -606,6 +623,27 @@ describe("LazySubagentsController", () => {
     expect(wakeMessages[0]?.message.content).toContain("[scout]\nScout found auth coupling");
     expect(wakeMessages[0]?.message.content).toContain("[review]\nReviewer found race risk");
     expect(wakeMessages[0]?.message.content).toContain("[verify]\nVerifier found missing test");
+  });
+
+  test("rejects names for group launches at the controller boundary", async () => {
+    const { api } = createPi();
+    const launcher = new FakeLauncher();
+    const launchGroupSpy = vi.spyOn(launcher, "launchGroup");
+    const controller = new LazySubagentsController(api as any, { launcher, createRunId: () => "group-1", now: () => 100 });
+    const { ctx } = createContext();
+
+    await controller.handleSessionStart(ctx);
+
+    await expect(controller.launchGroup(
+      {
+        name: "group-name",
+        title: "Parallel auth review",
+        taskSummary: "Parallel auth review",
+        children: [{ agent: "scout", prompt: "Inspect auth", taskSummary: "Inspect auth" }],
+      },
+      ctx,
+    )).rejects.toThrow("Run names are only supported for single runs");
+    expect(launchGroupSpy).not.toHaveBeenCalled();
   });
 
   test("routes group completion parent reports even when child artifact paths are missing", async () => {
@@ -1568,6 +1606,16 @@ describe("LazySubagentsController", () => {
 
     await expect(controller.launchWorkflow(
       {
+        name: "workflow-name",
+        title: "Named workflow",
+        taskSummary: "Named workflow",
+        steps: [{ id: "research", agent: "scout", prompt: "Inspect", taskSummary: "Inspect" }],
+      },
+      ctx,
+    )).rejects.toThrow("Run names are only supported for single runs");
+
+    await expect(controller.launchWorkflow(
+      {
         title: "Invalid workflow",
         taskSummary: "Invalid workflow",
         maxConcurrency: 1.5,
@@ -2030,8 +2078,10 @@ describe("continueChild", () => {
     const asyncDir = path.join(tempDir, "async");
     await fs.mkdir(asyncDir, { recursive: true });
     const sessionFile = path.join(asyncDir, "session-0", "session.jsonl");
+    const artifactPath = path.join(asyncDir, "artifact.md");
     await fs.mkdir(path.dirname(sessionFile), { recursive: true });
     await fs.writeFile(sessionFile, "{}", "utf8");
+    await fs.writeFile(artifactPath, "Previous artifact", "utf8");
 
     const { api } = createPi();
     const launcher = new FakeLauncher();
@@ -2045,6 +2095,7 @@ describe("continueChild", () => {
       completedAt: 50,
       toolCount: 12,
       sessionFile,
+      artifactPath,
       launchRef: { runId: "run-cont-1", asyncId: "run-cont-1", asyncDir },
     }));
 
@@ -2058,6 +2109,10 @@ describe("continueChild", () => {
     expect(run.taskSummary).toBe("title");
     expect(run.completedAt).toBeUndefined();
     expect(run.toolCount).toBeUndefined();
+    expect(run.sessionFile).toBe(sessionFile);
+    expect(run.artifactPath).toBe(artifactPath);
+    expect(run.launchRef?.sessionFile).toBe(sessionFile);
+    expect(run.launchRef?.artifactPath).toBe(artifactPath);
     expect(launcher.continueLaunches).toHaveLength(1);
     expect(launcher.continueLaunches[0]?.prompt).toBe("Keep going");
     expect(launcher.continueLaunches[0]?.sessionFile).toBe(sessionFile);
@@ -2175,8 +2230,10 @@ describe("continueChild", () => {
     const asyncDir = path.join(tempDir, "async");
     await fs.mkdir(asyncDir, { recursive: true });
     const sessionFile = path.join(asyncDir, "session-0", "session.jsonl");
+    const artifactPath = path.join(asyncDir, "artifact.md");
     await fs.mkdir(path.dirname(sessionFile), { recursive: true });
     await fs.writeFile(sessionFile, "{}", "utf8");
+    await fs.writeFile(artifactPath, "Previous artifact", "utf8");
 
     const { api } = createPi();
     const launcher = new FakeLauncher();
@@ -2187,11 +2244,14 @@ describe("continueChild", () => {
     const registry = new RunRegistry();
     registry.upsert(createRun({
       id: "run-cont-revert",
+      title: "Old title",
+      taskSummary: "Old task",
       status: "completed",
       completedAt: 50,
       resultPreview: "Old result",
       sessionFile,
-      launchRef: { runId: "run-cont-revert", asyncId: "run-cont-revert", asyncDir },
+      artifactPath,
+      launchRef: { runId: "run-cont-revert", asyncId: "run-cont-revert", asyncDir, sessionFile, artifactPath },
     }));
 
     const persisted = createPersistedState(registry.serialize(), 100);
@@ -2202,8 +2262,14 @@ describe("continueChild", () => {
 
     // Run should be back to completed state
     const run = controller.getSnapshot().runs.find((r: RunRecord) => r.id === "run-cont-revert");
+    expect(run?.title).toBe("Old title");
+    expect(run?.taskSummary).toBe("Old task");
     expect(run?.status).toBe("completed");
     expect(run?.resultPreview).toBe("Old result");
+    expect(run?.sessionFile).toBe(sessionFile);
+    expect(run?.artifactPath).toBe(artifactPath);
+    expect(run?.launchRef?.sessionFile).toBe(sessionFile);
+    expect(run?.launchRef?.artifactPath).toBe(artifactPath);
   });
 });
 
@@ -2237,11 +2303,14 @@ describe("visibility helpers (shouldKeepRunVisibleInUi)", () => {
     )).toBe(true);
   });
 
-  test("archived runs are never visible", () => {
-    expect(shouldKeepRunVisibleInUi(
+  test("archived terminal runs are never visible", () => {
+    for (const run of [
       createRun({ id: "r1", status: "completed", completedAt: 500, archived: true }),
-      { ...defaultOpts, now: 600 },
-    )).toBe(false);
+      createRun({ id: "r2", status: "completed", completedAt: 500, archived: true, attentionNeeded: true }),
+      createRun({ id: "r3", status: "failed", completedAt: 500, archived: true }),
+    ]) {
+      expect(shouldKeepRunVisibleInUi(run, { ...defaultOpts, isPinned: true, now: 600 })).toBe(false);
+    }
   });
 
   test("unnamed completed runs are hidden when acknowledged", () => {
@@ -2277,7 +2346,7 @@ describe("visibility helpers (shouldKeepRunVisibleInUi)", () => {
     expect(shouldKeepRunVisibleInUi(run, { isPinned: false, isAcknowledged: false, now: 1500 })).toBe(true);
   });
 
-  test("named completed runs past lease expiry follow grace window when unacknowledged", () => {
+  test("named completed runs are hidden immediately after lease expiry", () => {
     const run = createRun({
       id: "r1",
       status: "completed",
@@ -2285,10 +2354,19 @@ describe("visibility helpers (shouldKeepRunVisibleInUi)", () => {
       name: "my-agent",
       leaseExpiry: 1000,
     });
-    // Past lease but within grace period.
-    expect(shouldKeepRunVisibleInUi(run, { isPinned: false, isAcknowledged: false, now: 1029 })).toBe(true);
-    // Past lease and past grace period.
-    expect(shouldKeepRunVisibleInUi(run, { isPinned: false, isAcknowledged: false, now: 500 + 30_001 })).toBe(false);
+    expect(shouldKeepRunVisibleInUi(run, { isPinned: false, isAcknowledged: false, now: 1029 })).toBe(false);
+  });
+
+  test("named completed runs derive lease expiry from completedAt when missing", () => {
+    const run = createRun({
+      id: "r1",
+      status: "completed",
+      completedAt: 500,
+      name: "my-agent",
+      leaseExpiry: undefined,
+    });
+    expect(shouldKeepRunVisibleInUi(run, { isPinned: false, isAcknowledged: true, now: 500 + DEFAULT_NAMED_RUN_LEASE_MS })).toBe(true);
+    expect(shouldKeepRunVisibleInUi(run, { isPinned: false, isAcknowledged: true, now: 501 + DEFAULT_NAMED_RUN_LEASE_MS })).toBe(false);
   });
 
   test("named completed runs past lease expiry are hidden when acknowledged", () => {

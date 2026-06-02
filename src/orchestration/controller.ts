@@ -531,18 +531,16 @@ function shouldKeepRunVisibleInUi(
   options: { isPinned: boolean; isAcknowledged: boolean; now: number },
 ): boolean {
   if (!isTerminalStatus(run.status)) return true;
+  if (run.archived) return false;
   if (options.isPinned) return true;
   if (run.attentionNeeded) return true;
   if (run.status === "failed" || run.status === "paused") return true;
-  if (run.archived) return false;
 
-  // Named completed runs stay visible until lease expiry, even if acknowledged.
+  // Named completed runs stay visible until their effective lease expiry, even if acknowledged.
   if (run.name && (run.status === "completed" || run.status === "skipped")) {
-    if (run.leaseExpiry !== undefined && options.now <= run.leaseExpiry) return true;
-    // After lease expiry, visible only during the grace window (unless ack'd).
-    if (options.isAcknowledged) return false;
-    if (run.completedAt === undefined) return true;
-    return options.now - run.completedAt <= DEFAULT_SUCCESS_VISIBILITY_GRACE_MS;
+    const leaseExpiry = computeLeaseExpiry(run);
+    if (leaseExpiry !== undefined) return options.now <= leaseExpiry;
+    return run.completedAt === undefined;
   }
 
   if (run.status !== "completed" && run.status !== "skipped") return false;
@@ -652,6 +650,7 @@ export class LazySubagentsController {
     this.captureContext(ctx);
     const nameReservation = this.reserveLaunchName(request.name);
     const normalizedName = nameReservation.normalizedName;
+    const cwd = request.cwd ?? ctx.cwd;
 
     const runId = this.createRunId();
     const timestamp = this.now();
@@ -664,6 +663,7 @@ export class LazySubagentsController {
           runId,
           title: request.title,
           taskSummary: request.taskSummary,
+          cwd,
         },
         runtimeContext(this.pi, ctx),
       );
@@ -682,7 +682,7 @@ export class LazySubagentsController {
         artifactPath: launch.artifactPath,
         model: launch.model,
         name: normalizedName,
-        cwd: request.cwd,
+        cwd,
         leaseExpiry: normalizedName ? timestamp + DEFAULT_NAMED_RUN_LEASE_MS : undefined,
         attentionNeeded: false,
         launchRef: launch,
@@ -734,6 +734,9 @@ export class LazySubagentsController {
 
   async launchGroup(request: ControllerLaunchGroupRequest, ctx: ExtensionContext): Promise<RunRecord> {
     this.captureContext(ctx);
+    if (request.name) {
+      throw new Error("Run names are only supported for single runs.");
+    }
     const nameReservation = this.reserveLaunchName(request.name);
     const normalizedName = nameReservation.normalizedName;
 
@@ -819,6 +822,9 @@ export class LazySubagentsController {
   async launchWorkflow(request: ControllerLaunchWorkflowRequest, ctx: ExtensionContext): Promise<RunRecord> {
     this.captureContext(ctx);
     assertValidWorkflowRequest(request);
+    if (request.name) {
+      throw new Error("Run names are only supported for single runs.");
+    }
     const nameReservation = this.reserveLaunchName(request.name);
     const normalizedName = nameReservation.normalizedName;
 
@@ -975,6 +981,15 @@ export class LazySubagentsController {
     // 3. Backup stale artifacts so readUpdate won't return the previous result.
     //    On launcher failure we restore these backups to avoid data loss.
     const backupPaths: string[] = [];
+    const restoreBackups = async (): Promise<void> => {
+      for (const src of backupPaths) {
+        try {
+          await fsp.rename(`${src}.cont-bak`, src);
+        } catch (restoreError) {
+          console.warn(`[pi-lazy-subagents] failed to restore continuation artifact ${src}:`, restoreError);
+        }
+      }
+    };
     const backupFile = async (src: string): Promise<void> => {
       const dst = `${src}.cont-bak`;
       try {
@@ -982,16 +997,20 @@ export class LazySubagentsController {
         backupPaths.push(src);
       } catch (error) {
         const code = typeof error === "object" && error !== null && "code" in error ? (error as { code?: string }).code : undefined;
-        if (code !== "ENOENT") {
-          console.warn(`[pi-lazy-subagents] failed to backup continuation artifact ${src}:`, error);
-        }
+        if (code === "ENOENT") return;
+        throw new Error(`Failed to backup continuation artifact ${src}: ${error instanceof Error ? error.message : String(error)}`);
       }
     };
-    await backupFile(statusPath);
-    await backupFile(resultPath);
-    await backupFile(eventsPath);
-    if (existing.artifactPath) {
-      await backupFile(existing.artifactPath);
+    try {
+      await backupFile(statusPath);
+      await backupFile(resultPath);
+      await backupFile(eventsPath);
+      if (existing.artifactPath) {
+        await backupFile(existing.artifactPath);
+      }
+    } catch (error) {
+      await restoreBackups();
+      throw error;
     }
 
     // 4. Reset the run and renew the lease
@@ -1029,14 +1048,19 @@ export class LazySubagentsController {
         cwd,
       }, runtimeContext(this.pi, ctx));
 
-      this.trackedLaunches.set(runId, launch);
+      const nextLaunch: LaunchResult = {
+        ...launch,
+        sessionFile: launch.sessionFile ?? sessionFile,
+        artifactPath: launch.artifactPath ?? existing.artifactPath,
+      };
+      this.trackedLaunches.set(runId, nextLaunch);
       const stored = this.registry.updateRun(runId, {
         title,
         taskSummary: title,
         updatedAt: now,
-        sessionFile: launch.sessionFile,
-        artifactPath: launch.artifactPath,
-        launchRef: launch,
+        sessionFile: nextLaunch.sessionFile,
+        artifactPath: nextLaunch.artifactPath,
+        launchRef: nextLaunch,
         leaseExpiry: newLeaseExpiry,
       });
       this.registry.recordEvent(runId, buildLaunchEvent(stored, now));
@@ -1053,17 +1077,14 @@ export class LazySubagentsController {
 
       return stored;
     } catch (error) {
-      // Restore backup files so prior results are not lost
-      for (const src of backupPaths) {
-        try {
-          await fsp.rename(`${src}.cont-bak`, src);
-        } catch (restoreError) {
-          console.warn(`[pi-lazy-subagents] failed to restore continuation artifact ${src}:`, restoreError);
-        }
-      }
+      // Restore backup files so prior results are not lost.
+      await restoreBackups();
+      this.trackedLaunches.delete(runId);
 
-      // Revert the run back to its previous terminal state
+      // Revert the run back to its previous terminal state and metadata.
       this.registry.updateRun(runId, {
+        title: existing.title,
+        taskSummary: existing.taskSummary,
         status: existing.status,
         updatedAt: existing.updatedAt,
         completedAt: existing.completedAt,
@@ -1072,6 +1093,9 @@ export class LazySubagentsController {
         currentTool: existing.currentTool,
         toolCount: existing.toolCount,
         attentionNeeded: existing.attentionNeeded,
+        sessionFile: existing.sessionFile,
+        artifactPath: existing.artifactPath,
+        launchRef: existing.launchRef,
         leaseExpiry: existing.leaseExpiry,
       });
       throw error;
@@ -1594,13 +1618,14 @@ export class LazySubagentsController {
    * ends.
    */
   private hasPendingNamedLeaseWindow(now = this.now()): boolean {
-    return this.registry.snapshot().runs.some((run) => (
-      (run.status === "completed" || run.status === "skipped")
-      && !this.registry.isPinned(run.id)
-      && run.name
-      && run.leaseExpiry !== undefined
-      && now <= run.leaseExpiry
-    ));
+    return this.registry.snapshot().runs.some((run) => {
+      const leaseExpiry = computeLeaseExpiry(run);
+      return (run.status === "completed" || run.status === "skipped")
+        && !this.registry.isPinned(run.id)
+        && Boolean(run.name)
+        && leaseExpiry !== undefined
+        && now <= leaseExpiry;
+    });
   }
 
   /**
@@ -1608,14 +1633,15 @@ export class LazySubagentsController {
    * Named runs are preserved until their lease expires, even if acknowledged.
    */
   private cleanupAcknowledgedCompletedRuns(now = this.now()): boolean {
-    const removed = this.registry.clearRuns((run) => (
-      (run.status === "completed" || run.status === "skipped")
-      && !this.registry.isPinned(run.id)
-      && this.registry.isAcknowledged(run.id)
-      && run.completedAt !== undefined
-      && now - run.completedAt > DEFAULT_ACKNOWLEDGED_SUCCESS_TTL_MS
-      && !(run.name && run.leaseExpiry !== undefined && now <= run.leaseExpiry)
-    ));
+    const removed = this.registry.clearRuns((run) => {
+      const leaseExpiry = computeLeaseExpiry(run);
+      return (run.status === "completed" || run.status === "skipped")
+        && !this.registry.isPinned(run.id)
+        && this.registry.isAcknowledged(run.id)
+        && run.completedAt !== undefined
+        && now - run.completedAt > DEFAULT_ACKNOWLEDGED_SUCCESS_TTL_MS
+        && !(run.name && leaseExpiry !== undefined && now <= leaseExpiry);
+    });
 
     for (const runId of removed) {
       this.trackedLaunches.delete(runId);
