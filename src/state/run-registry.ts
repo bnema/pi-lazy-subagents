@@ -261,7 +261,7 @@ export class RunRegistry {
    */
   claimName(runId: string, name: string): boolean {
     const run = this.runs.get(runId);
-    if (!run) return false;
+    if (!run || run.archived) return false;
 
     const normalized = this.claimableName(runId, name);
     if (!normalized) return false;

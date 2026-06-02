@@ -576,6 +576,7 @@ export class LazySubagentsController {
   private readonly progressLines = new Map<string, string[]>();
   private readonly progressStats = new Map<string, { turnCount: number; lastTurnTokens?: number }>();
   private readonly surfacedPinnedMessages = new Set<string>();
+  private readonly reservedLaunchNames = new Set<string>();
   private renderedStatus: string | undefined;
   private renderedWidgetSignature: string | undefined;
   private currentCtx: ExtensionContext | undefined;
@@ -634,21 +635,23 @@ export class LazySubagentsController {
     this.currentCtx = undefined;
   }
 
-  private validateLaunchName(name: string | undefined): string | undefined {
-    if (!name) return undefined;
-    const normalized = validateRunName(name);
-    if (!normalized) {
+  private reserveLaunchName(name: string | undefined): { normalizedName?: string; release: () => void } {
+    if (!name) return { release: () => undefined };
+    const normalizedName = validateRunName(name);
+    if (!normalizedName) {
       throw new Error(`Invalid run name "${name}". Names must be 1-64 characters, lowercase alphanumeric, hyphens, or underscores, starting with alphanumeric.`);
     }
-    if (!this.registry.isNameAvailable(normalized)) {
+    if (this.reservedLaunchNames.has(normalizedName) || !this.registry.isNameAvailable(normalizedName)) {
       throw new Error(`Run name "${name}" is already in use by another non-archived run.`);
     }
-    return normalized;
+    this.reservedLaunchNames.add(normalizedName);
+    return { normalizedName, release: () => this.reservedLaunchNames.delete(normalizedName) };
   }
 
   async launchChild(request: ControllerLaunchChildRequest, ctx: ExtensionContext): Promise<RunRecord> {
     this.captureContext(ctx);
-    const normalizedName = this.validateLaunchName(request.name);
+    const nameReservation = this.reserveLaunchName(request.name);
+    const normalizedName = nameReservation.normalizedName;
 
     const runId = this.createRunId();
     const timestamp = this.now();
@@ -724,12 +727,15 @@ export class LazySubagentsController {
       this.persistState();
       this.renderUi(ctx);
       return stored;
+    } finally {
+      nameReservation.release();
     }
   }
 
   async launchGroup(request: ControllerLaunchGroupRequest, ctx: ExtensionContext): Promise<RunRecord> {
     this.captureContext(ctx);
-    const normalizedName = this.validateLaunchName(request.name);
+    const nameReservation = this.reserveLaunchName(request.name);
+    const normalizedName = nameReservation.normalizedName;
 
     const runId = this.createRunId();
     const timestamp = this.now();
@@ -805,12 +811,15 @@ export class LazySubagentsController {
       this.persistState();
       this.renderUi(ctx);
       return stored;
+    } finally {
+      nameReservation.release();
     }
   }
 
   async launchWorkflow(request: ControllerLaunchWorkflowRequest, ctx: ExtensionContext): Promise<RunRecord> {
     this.captureContext(ctx);
-    const normalizedName = this.validateLaunchName(request.name);
+    const nameReservation = this.reserveLaunchName(request.name);
+    const normalizedName = nameReservation.normalizedName;
     assertValidWorkflowRequest(request);
 
     const runId = this.createRunId();
@@ -887,6 +896,8 @@ export class LazySubagentsController {
       this.persistState();
       this.renderUi(ctx);
       return stored;
+    } finally {
+      nameReservation.release();
     }
   }
 
@@ -1017,7 +1028,15 @@ export class LazySubagentsController {
       }, runtimeContext(this.pi, ctx));
 
       this.trackedLaunches.set(runId, launch);
-      const stored = this.registry.get(runId)!;
+      const stored = this.registry.updateRun(runId, {
+        title,
+        taskSummary: title,
+        updatedAt: now,
+        sessionFile: launch.sessionFile,
+        artifactPath: launch.artifactPath,
+        launchRef: launch,
+        leaseExpiry: newLeaseExpiry,
+      });
       this.registry.recordEvent(runId, buildLaunchEvent(stored, now));
       this.sendVisiblePayload(createLaunchMessagePayload(stored));
       this.persistState();

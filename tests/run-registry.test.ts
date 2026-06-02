@@ -169,6 +169,14 @@ describe("RunRegistry", () => {
       expect(registry.resolveTarget("reusable")).toBe("run-2");
     });
 
+    test("claimName rejects archived runs", () => {
+      const registry = new RunRegistry();
+      registry.upsert(createRun({ id: "run-1", status: "completed", completedAt: 1, archived: true }));
+
+      expect(registry.claimName("run-1", "archived-name")).toBe(false);
+      expect(registry.resolveTarget("archived-name")).toBeUndefined();
+    });
+
     test("names must not collide with existing run IDs", () => {
       const registry = new RunRegistry();
       registry.upsert(createRun({ id: "run-1", status: "running" }));

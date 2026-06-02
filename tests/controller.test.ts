@@ -63,10 +63,12 @@ class FakeLauncher implements Launcher {
   public readonly continueLaunches: ContinueLaunchRequest[] = [];
   public launchGroupError: Error | undefined;
   public continueError: Error | undefined;
+  public launchChildHook: ((request: LaunchChildRequest) => Promise<void>) | undefined;
   public readUpdateHook: ((launch: LaunchResult) => Promise<NormalizedRunUpdate | undefined>) | undefined;
 
   async launchChild(request: LaunchChildRequest, _runtime: LauncherRuntimeContext): Promise<LaunchResult> {
     this.launches.push(request);
+    await this.launchChildHook?.(request);
     const override = this.launchResults.get(request.runId) ?? {};
     return {
       runId: request.runId,
@@ -403,6 +405,36 @@ describe("LazySubagentsController", () => {
 
     expect(run.name).toBe("my-reviewer");
     expect(controller.getSnapshot().runs[0]?.name).toBe("my-reviewer");
+  });
+
+  test("launchChild reserves names while launcher startup is pending", async () => {
+    const { api } = createPi();
+    const launcher = new FakeLauncher();
+    let releaseLaunch: (() => void) | undefined;
+    launcher.launchChildHook = async () => new Promise<void>((resolve) => { releaseLaunch = resolve; });
+    let nextId = 0;
+    const controller = new LazySubagentsController(api as any, { launcher, createRunId: () => `run-${++nextId}`, now: () => 100 });
+    const { ctx } = createContext();
+
+    const firstLaunch = controller.launchChild({
+      agent: "reviewer",
+      title: "First",
+      taskSummary: "First",
+      prompt: "Review it",
+      name: "shared-name",
+    }, ctx);
+    await Promise.resolve();
+
+    await expect(controller.launchChild({
+      agent: "reviewer",
+      title: "Second",
+      taskSummary: "Second",
+      prompt: "Review it too",
+      name: "shared-name",
+    }, ctx)).rejects.toThrow("already in use");
+
+    releaseLaunch?.();
+    await firstLaunch;
   });
 
   test("defers completion surfacing while the main session context is unavailable", async () => {
@@ -1987,6 +2019,8 @@ describe("continueChild", () => {
     const run = await controller.continueChild("run-cont-1", "Keep going", "title", ctx);
 
     expect(run.status).toBe("queued");
+    expect(run.title).toBe("title");
+    expect(run.taskSummary).toBe("title");
     expect(run.completedAt).toBeUndefined();
     expect(run.toolCount).toBeUndefined();
     expect(launcher.continueLaunches).toHaveLength(1);
