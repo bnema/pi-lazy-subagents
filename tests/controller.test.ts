@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { DEFAULT_NAMED_RUN_LEASE_MS, MESSAGE_TYPE_ATTENTION, MESSAGE_TYPE_COMPLETION, MESSAGE_TYPE_FAILURE, MESSAGE_TYPE_LAUNCH, MESSAGE_TYPE_PIN, PERSISTED_STATE_ENTRY, STATUS_KEY, WIDGET_KEY } from "../src/defaults.js";
 import { LazySubagentsController, __testHooks as controllerTestHooks } from "../src/orchestration/controller.js";
@@ -10,6 +10,18 @@ import { createPersistedState } from "../src/state/persistence.js";
 import { RunRegistry } from "../src/state/run-registry.js";
 import type { ContinueLaunchRequest, LaunchChildRequest, LaunchResult, Launcher, LauncherRuntimeContext, NormalizedRunUpdate } from "../src/launcher/interface.js";
 import type { RunRecord } from "../src/types.js";
+
+const trackedTempDirs: string[] = [];
+
+async function createTempDir(prefix: string): Promise<string> {
+  const tempDir = await fs.mkdtemp(prefix);
+  trackedTempDirs.push(tempDir);
+  return tempDir;
+}
+
+afterEach(async () => {
+  await Promise.all(trackedTempDirs.splice(0).map((tempDir) => fs.rm(tempDir, { recursive: true, force: true })));
+});
 
 function createRun(overrides: Partial<RunRecord> = {}): RunRecord {
   const now = overrides.startedAt ?? 1;
@@ -373,6 +385,24 @@ describe("LazySubagentsController", () => {
     expect(wakeMessages[0]?.message.content).toContain("[DONE] Review finished offline");
     expect(wakeMessages[0]?.message.content).toContain("Lazy subagent update");
     expect(wakeMessages[0]?.options).toEqual({ triggerTurn: true, deliverAs: "steer" });
+  });
+
+  test("launchChild stores normalized run names", async () => {
+    const { api } = createPi();
+    const launcher = new FakeLauncher();
+    const controller = new LazySubagentsController(api as any, { launcher, createRunId: () => "run-1", now: () => 100 });
+    const { ctx } = createContext();
+
+    const run = await controller.launchChild({
+      agent: "reviewer",
+      title: "Named review",
+      taskSummary: "Named review",
+      prompt: "Review it",
+      name: " My-Reviewer ",
+    }, ctx);
+
+    expect(run.name).toBe("my-reviewer");
+    expect(controller.getSnapshot().runs[0]?.name).toBe("my-reviewer");
   });
 
   test("defers completion surfacing while the main session context is unavailable", async () => {
@@ -1929,7 +1959,7 @@ describe("continueChild", () => {
   });
 
   test("continues a completed single run by id", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-lazy-subagents-cont-"));
+    const tempDir = await createTempDir(path.join(os.tmpdir(), "pi-lazy-subagents-cont-"));
     const asyncDir = path.join(tempDir, "async");
     await fs.mkdir(asyncDir, { recursive: true });
     const sessionFile = path.join(asyncDir, "session-0", "session.jsonl");
@@ -1946,6 +1976,7 @@ describe("continueChild", () => {
       id: "run-cont-1",
       status: "completed",
       completedAt: 50,
+      toolCount: 12,
       sessionFile,
       launchRef: { runId: "run-cont-1", asyncId: "run-cont-1", asyncDir },
     }));
@@ -1957,13 +1988,14 @@ describe("continueChild", () => {
 
     expect(run.status).toBe("queued");
     expect(run.completedAt).toBeUndefined();
+    expect(run.toolCount).toBeUndefined();
     expect(launcher.continueLaunches).toHaveLength(1);
     expect(launcher.continueLaunches[0]?.prompt).toBe("Keep going");
     expect(launcher.continueLaunches[0]?.sessionFile).toBe(sessionFile);
   });
 
   test("continues a named run by name", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-lazy-subagents-cont-"));
+    const tempDir = await createTempDir(path.join(os.tmpdir(), "pi-lazy-subagents-cont-"));
     const asyncDir = path.join(tempDir, "async");
     await fs.mkdir(asyncDir, { recursive: true });
     const sessionFile = path.join(asyncDir, "session-0", "session.jsonl");
@@ -1997,7 +2029,7 @@ describe("continueChild", () => {
   });
 
   test("renews lease on continue", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-lazy-subagents-cont-"));
+    const tempDir = await createTempDir(path.join(os.tmpdir(), "pi-lazy-subagents-cont-"));
     const asyncDir = path.join(tempDir, "async");
     await fs.mkdir(asyncDir, { recursive: true });
     const sessionFile = path.join(asyncDir, "session-0", "session.jsonl");
@@ -2033,7 +2065,7 @@ describe("continueChild", () => {
   });
 
   test("emits launch message and persists state on continue", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-lazy-subagents-cont-"));
+    const tempDir = await createTempDir(path.join(os.tmpdir(), "pi-lazy-subagents-cont-"));
     const asyncDir = path.join(tempDir, "async");
     await fs.mkdir(asyncDir, { recursive: true });
     const sessionFile = path.join(asyncDir, "session-0", "session.jsonl");
@@ -2070,7 +2102,7 @@ describe("continueChild", () => {
   });
 
   test("reverts run to previous state on launcher failure", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-lazy-subagents-cont-"));
+    const tempDir = await createTempDir(path.join(os.tmpdir(), "pi-lazy-subagents-cont-"));
     const asyncDir = path.join(tempDir, "async");
     await fs.mkdir(asyncDir, { recursive: true });
     const sessionFile = path.join(asyncDir, "session-0", "session.jsonl");

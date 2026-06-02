@@ -19,8 +19,24 @@ export function createSerialLineProcessor(
   onError?: (error: unknown, context?: { line?: string }) => void,
 ): SerialLineProcessor;
 
+export interface DirectRunnerChildForArgs {
+  sessionDir: string;
+  prompt: string;
+  resolvedModel?: string;
+  resolvedThinking?: string;
+  outputMode?: "text" | "json";
+  outputSchema?: string;
+  profile: {
+    tools?: string[];
+    inheritProjectContext?: boolean;
+    inheritSkills?: boolean;
+    systemPrompt?: string;
+    systemPromptMode?: "replace" | "append";
+  };
+}
+
 export function resolveCompletedSessionFile(sessionDir: string, continueSessionFile?: string): Promise<string | undefined>;
-export function buildPiArgs(child: any, promptOverride?: string, continueSessionFile?: string): string[];
+export function buildPiArgs(child: DirectRunnerChildForArgs, promptOverride?: string, continueSessionFile?: string): string[];
 
 export type WorkflowPromptResult = {
   summary?: string;

@@ -92,8 +92,10 @@ describe("direct runner stdout processing", () => {
       const continuedSessionFile = path.join(sessionDir, "continued.jsonl");
       await fs.writeFile(oldSessionFile, "old", "utf8");
       await fs.writeFile(latestSessionFile, "latest", "utf8");
+      await fs.writeFile(continuedSessionFile, "continued", "utf8");
       await fs.utimes(oldSessionFile, new Date(1_000), new Date(1_000));
       await fs.utimes(latestSessionFile, new Date(2_000), new Date(2_000));
+      await fs.utimes(continuedSessionFile, new Date(3_000), new Date(3_000));
 
       expect(await resolveCompletedSessionFile(sessionDir, continuedSessionFile)).toBe(latestSessionFile);
     } finally {

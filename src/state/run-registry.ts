@@ -174,14 +174,16 @@ export class RunRegistry {
     };
 
     if (patch.name !== undefined && patch.name !== existing.name) {
-      this.releaseName(runId);
       if (nextRun.name && !nextRun.archived) {
         const normalized = this.claimableName(runId, nextRun.name);
         if (normalized) {
+          this.releaseName(runId);
           this.nameIndex.set(normalized, runId);
         } else {
-          nextRun.name = undefined;
+          nextRun.name = existing.name;
         }
+      } else {
+        this.releaseName(runId);
       }
     }
 

@@ -634,8 +634,8 @@ export class LazySubagentsController {
     this.currentCtx = undefined;
   }
 
-  private validateLaunchName(name: string | undefined): void {
-    if (!name) return;
+  private validateLaunchName(name: string | undefined): string | undefined {
+    if (!name) return undefined;
     const normalized = validateRunName(name);
     if (!normalized) {
       throw new Error(`Invalid run name "${name}". Names must be 1-64 characters, lowercase alphanumeric, hyphens, or underscores, starting with alphanumeric.`);
@@ -643,11 +643,12 @@ export class LazySubagentsController {
     if (!this.registry.isNameAvailable(normalized)) {
       throw new Error(`Run name "${name}" is already in use by another non-archived run.`);
     }
+    return normalized;
   }
 
   async launchChild(request: ControllerLaunchChildRequest, ctx: ExtensionContext): Promise<RunRecord> {
     this.captureContext(ctx);
-    this.validateLaunchName(request.name);
+    const normalizedName = this.validateLaunchName(request.name);
 
     const runId = this.createRunId();
     const timestamp = this.now();
@@ -677,9 +678,9 @@ export class LazySubagentsController {
         sessionFile: launch.sessionFile,
         artifactPath: launch.artifactPath,
         model: launch.model,
-        name: request.name,
+        name: normalizedName,
         cwd: request.cwd,
-        leaseExpiry: request.name ? timestamp + DEFAULT_NAMED_RUN_LEASE_MS : undefined,
+        leaseExpiry: normalizedName ? timestamp + DEFAULT_NAMED_RUN_LEASE_MS : undefined,
         attentionNeeded: false,
         launchRef: launch,
         recentEvents: [],
@@ -728,7 +729,7 @@ export class LazySubagentsController {
 
   async launchGroup(request: ControllerLaunchGroupRequest, ctx: ExtensionContext): Promise<RunRecord> {
     this.captureContext(ctx);
-    this.validateLaunchName(request.name);
+    const normalizedName = this.validateLaunchName(request.name);
 
     const runId = this.createRunId();
     const timestamp = this.now();
@@ -758,9 +759,9 @@ export class LazySubagentsController {
         sessionFile: launch.sessionFile,
         artifactPath: launch.artifactPath,
         model: launch.model,
-        name: request.name,
+        name: normalizedName,
         cwd: request.cwd,
-        leaseExpiry: request.name ? timestamp + DEFAULT_NAMED_RUN_LEASE_MS : undefined,
+        leaseExpiry: normalizedName ? timestamp + DEFAULT_NAMED_RUN_LEASE_MS : undefined,
         attentionNeeded: false,
         launchRef: launch,
         recentEvents: [],
@@ -809,7 +810,7 @@ export class LazySubagentsController {
 
   async launchWorkflow(request: ControllerLaunchWorkflowRequest, ctx: ExtensionContext): Promise<RunRecord> {
     this.captureContext(ctx);
-    this.validateLaunchName(request.name);
+    const normalizedName = this.validateLaunchName(request.name);
     assertValidWorkflowRequest(request);
 
     const runId = this.createRunId();
@@ -840,9 +841,9 @@ export class LazySubagentsController {
         sessionFile: launch.sessionFile,
         artifactPath: launch.artifactPath,
         model: launch.model,
-        name: request.name,
+        name: normalizedName,
         cwd: request.cwd,
-        leaseExpiry: request.name ? timestamp + DEFAULT_NAMED_RUN_LEASE_MS : undefined,
+        leaseExpiry: normalizedName ? timestamp + DEFAULT_NAMED_RUN_LEASE_MS : undefined,
         attentionNeeded: false,
         launchRef: launch,
         recentEvents: [],
@@ -992,6 +993,7 @@ export class LazySubagentsController {
       resultPreview: undefined,
       errorPreview: undefined,
       currentTool: undefined,
+      toolCount: undefined,
       attentionNeeded: false,
       leaseExpiry: newLeaseExpiry,
     });

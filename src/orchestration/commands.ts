@@ -422,7 +422,7 @@ export async function executeLazySubagentsCommand(
         );
         return formatLaunchAcknowledgement(`Continued ${run.id} (${run.agent}).`);
       } catch (error) {
-        return formatLaunchAcknowledgement(`Could not continue ${parsed.target}: ${error instanceof Error ? error.message : String(error)}`);
+        return `Could not continue ${parsed.target}: ${error instanceof Error ? error.message : String(error)}`;
       }
     }
     case "clear": {
