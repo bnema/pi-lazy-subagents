@@ -413,13 +413,17 @@ export async function executeLazySubagentsCommand(
         ? `Cancelled ${parsed.runId}.`
         : `Could not cancel ${parsed.runId}.`;
     case "continue": {
-      const run = await controller.continueChild(
-        parsed.target,
-        parsed.prompt,
-        parsed.title ?? shortTitle(parsed.prompt),
-        ctx,
-      );
-      return formatLaunchAcknowledgement(`Continued ${run.id} (${run.agent}).`);
+      try {
+        const run = await controller.continueChild(
+          parsed.target,
+          parsed.prompt,
+          parsed.title ?? shortTitle(parsed.prompt),
+          ctx,
+        );
+        return formatLaunchAcknowledgement(`Continued ${run.id} (${run.agent}).`);
+      } catch (error) {
+        return formatLaunchAcknowledgement(`Could not continue ${parsed.target}: ${error instanceof Error ? error.message : String(error)}`);
+      }
     }
     case "clear": {
       const cleared = controller.clearRuns(parsed.scope, parsed.runId);

@@ -301,8 +301,8 @@ describe("LazySubagentsController", () => {
 
       expect(widgets.at(-1)).toEqual([WIDGET_KEY, undefined]);
     } finally {
-      await controller.handleSessionShutdown(ctx);
       vi.useRealTimers();
+      await controller.handleSessionShutdown(ctx);
     }
   });
 

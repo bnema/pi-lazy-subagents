@@ -296,8 +296,12 @@ export default function lazySubagentsExtension(pi: ExtensionAPI): void {
             return { content: [{ type: "text", text: "Provide target and prompt for action=continue." }], details: { action: params.action } };
           }
           const title = params.title ?? shortTitle(params.prompt);
-          const run = await controller.continueChild(params.target, params.prompt, title, ctx);
-          return { content: [{ type: "text", text: formatLaunchAcknowledgement(`Continued ${run.id} (${run.agent}).`) }], details: { action: params.action, runId: run.id, agent: run.agent } };
+          try {
+            const run = await controller.continueChild(params.target, params.prompt, title, ctx);
+            return { content: [{ type: "text", text: formatLaunchAcknowledgement(`Continued ${run.id} (${run.agent}).`) }], details: { action: params.action, runId: run.id, agent: run.agent } };
+          } catch (error) {
+            return { content: [{ type: "text", text: `Could not continue ${params.target}: ${error instanceof Error ? error.message : String(error)}` }], details: { action: params.action, target: params.target } };
+          }
         }
       }
     },

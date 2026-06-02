@@ -268,6 +268,7 @@ export class RunRegistry {
     this.releaseName(runId);
 
     this.nameIndex.set(normalized, runId);
+    // Store original name for display; index uses normalized form for lookup.
     this.runs.set(runId, { ...run, name });
     return true;
   }
