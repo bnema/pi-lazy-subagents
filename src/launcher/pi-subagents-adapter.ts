@@ -627,8 +627,8 @@ export class PiSubagentsAdapter implements Launcher {
   }
 
   async continueChild(request: ContinueLaunchRequest, _runtime: LauncherRuntimeContext): Promise<LaunchResult> {
-    // The controller clears artifacts before calling us. We just set up the
-    // runner config and spawn.
+    // The controller renames stale artifacts to .cont-bak before calling us.
+    // We just set up the runner config and spawn.
     const children = await buildRunnerChildren([
       {
         agent: request.agent,

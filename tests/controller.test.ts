@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { describe, expect, test, vi } from "vitest";
 
-import { MESSAGE_TYPE_ATTENTION, MESSAGE_TYPE_COMPLETION, MESSAGE_TYPE_FAILURE, MESSAGE_TYPE_LAUNCH, MESSAGE_TYPE_PIN, PERSISTED_STATE_ENTRY, STATUS_KEY, WIDGET_KEY } from "../src/defaults.js";
+import { DEFAULT_NAMED_RUN_LEASE_MS, MESSAGE_TYPE_ATTENTION, MESSAGE_TYPE_COMPLETION, MESSAGE_TYPE_FAILURE, MESSAGE_TYPE_LAUNCH, MESSAGE_TYPE_PIN, PERSISTED_STATE_ENTRY, STATUS_KEY, WIDGET_KEY } from "../src/defaults.js";
 import { LazySubagentsController, __testHooks as controllerTestHooks } from "../src/orchestration/controller.js";
 import { createPersistedState } from "../src/state/persistence.js";
 import { RunRegistry } from "../src/state/run-registry.js";
@@ -2029,7 +2029,7 @@ describe("continueChild", () => {
 
     // New lease should be based on the now timestamp + DEFAULT_NAMED_RUN_LEASE_MS
     expect(run.leaseExpiry).toBeGreaterThan(oldLeaseExpiry);
-    expect(run.leaseExpiry).toBe(now + 30 * 60_000);
+    expect(run.leaseExpiry).toBe(now + DEFAULT_NAMED_RUN_LEASE_MS);
   });
 
   test("emits launch message and persists state on continue", async () => {

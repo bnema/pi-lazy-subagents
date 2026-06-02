@@ -19,6 +19,8 @@ export function createSerialLineProcessor(
   onError?: (error: unknown, context?: { line?: string }) => void,
 ): SerialLineProcessor;
 
+export function resolveCompletedSessionFile(sessionDir: string, continueSessionFile?: string): Promise<string | undefined>;
+
 export type WorkflowPromptResult = {
   summary?: string;
   output?: string;

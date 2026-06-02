@@ -103,7 +103,7 @@ describe("extension entrypoint", () => {
     const guidance = tool?.promptGuidelines.join("\n") ?? "";
     expect(guidance).toContain("action=run name=<name>");
     expect(guidance).toContain("follow-up via action=continue");
-    expect(guidance).toContain("action=continue target=<name");
+    expect(guidance).toContain("action=continue target=<name|runId>");
   });
 
   test("tool renderer shows wait progress details in the active tool row", () => {

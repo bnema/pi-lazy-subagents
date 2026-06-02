@@ -1,3 +1,7 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+
 import { describe, expect, test } from "vitest";
 
 import {
@@ -11,6 +15,7 @@ import {
   parseStructuredStepOutput,
   renderWorkflowPrompt,
   renderWorkflowTemplate,
+  resolveCompletedSessionFile,
   runWorkflowStepWithRetries,
   shouldPersistEvent,
   shouldWriteStatusForUsageTotal,
@@ -65,6 +70,13 @@ describe("direct runner stdout processing", () => {
     expect(shouldWriteStatusForUsageTotal(undefined, 0)).toBe(false);
     expect(shouldWriteStatusForUsageTotal(31_316, 31_316)).toBe(false);
     expect(shouldWriteStatusForUsageTotal(31_316, 31_317)).toBe(true);
+  });
+
+  test("falls back to the continued session file when no newer child session file is discovered", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-lazy-subagents-session-file-"));
+    const continuedSessionFile = path.join(sessionDir, "continued.jsonl");
+
+    expect(await resolveCompletedSessionFile(sessionDir, continuedSessionFile)).toBe(continuedSessionFile);
   });
 
   test("renders workflow prompts from prior step summaries, outputs, and structured fields", () => {

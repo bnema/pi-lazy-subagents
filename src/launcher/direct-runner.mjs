@@ -38,6 +38,10 @@ async function findLatestSessionFile(sessionDir) {
   }
 }
 
+export async function resolveCompletedSessionFile(sessionDir, continueSessionFile) {
+  return await findLatestSessionFile(sessionDir) ?? continueSessionFile;
+}
+
 function extractAssistantText(message) {
   if (!message || message.role !== "assistant" || !Array.isArray(message.content)) return "";
   return message.content
@@ -644,7 +648,7 @@ async function runChild(config, statusPath, status, child, index, promptOverride
   stdoutBuffer = "";
   await stdoutProcessor.flush(trailingStdout);
 
-  sessionFile = await findLatestSessionFile(child.sessionDir);
+  sessionFile = await resolveCompletedSessionFile(child.sessionDir, continueSessionFile);
   step.sessionFile = sessionFile;
   step.endedAt = now();
   step.durationMs = step.startedAt ? Math.max(0, step.endedAt - step.startedAt) : undefined;

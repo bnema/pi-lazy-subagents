@@ -965,7 +965,12 @@ export class LazySubagentsController {
       try {
         await fsp.rename(src, dst);
         backupPaths.push(src);
-      } catch { /* ok if missing */ }
+      } catch (error) {
+        const code = typeof error === "object" && error !== null && "code" in error ? (error as { code?: string }).code : undefined;
+        if (code !== "ENOENT") {
+          console.warn(`[pi-lazy-subagents] failed to backup continuation artifact ${src}:`, error);
+        }
+      }
     };
     await backupFile(statusPath);
     await backupFile(resultPath);

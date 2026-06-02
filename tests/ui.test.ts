@@ -489,9 +489,9 @@ describe("visibility helpers", () => {
     }
   });
 
-  test("footer status filters out archived and expired named runs via getLiveUiSnapshot", () => {
-    // Create a diverse snapshot with archived, expired, and visible runs
-    // and verify the footer status builder doesn't include the hidden ones.
+  test("footer status renders a raw snapshot with archived and expired runs present", () => {
+    // createSnapshot does not apply controller visibility filtering; this test
+    // only verifies the footer renderer handles a mixed raw snapshot.
     const running = createRun({ id: "run-1", status: "running", startedAt: 30_000, updatedAt: 59_000 });
     (running as any).currentTool = "bash";
     const archived = createRun({ id: "arch-1", status: "completed", name: "old", archived: true, completedAt: 50_000 });

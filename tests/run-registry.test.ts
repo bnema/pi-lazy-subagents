@@ -178,7 +178,7 @@ describe("RunRegistry", () => {
       expect(registry.isNameAvailable("run-1")).toBe(false);
     });
 
-    test("releaseName frees the name so another run can claim it after deletion", () => {
+    test("deleteRun frees the name so another run can claim it after deletion", () => {
       const registry = new RunRegistry();
       registry.upsert(createRun({ id: "run-1", status: "completed", completedAt: 1 }));
       registry.claimName("run-1", "freed");
@@ -189,6 +189,18 @@ describe("RunRegistry", () => {
 
       registry.upsert(createRun({ id: "run-2", status: "running" }));
       expect(registry.claimName("run-2", "freed")).toBe(true);
+    });
+
+    test("updateRun clears an invalid renamed value instead of leaving it unclaimed", () => {
+      const registry = new RunRegistry();
+      registry.upsert(createRun({ id: "run-1", status: "running", name: "valid-name" }));
+
+      const updated = registry.updateRun("run-1", { name: "invalid name" });
+
+      expect(updated.name).toBeUndefined();
+      expect(registry.getNameForRun("run-1")).toBeUndefined();
+      expect(registry.resolveTarget("valid-name")).toBeUndefined();
+      expect(registry.resolveTarget("invalid name")).toBeUndefined();
     });
 
     test("isNameAvailable returns true for unclaimed valid names", () => {

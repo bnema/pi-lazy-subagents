@@ -172,7 +172,12 @@ export class RunRegistry {
     if (patch.name !== undefined && patch.name !== existing.name) {
       this.releaseName(runId);
       if (nextRun.name && !nextRun.archived) {
-        this.tryClaimName(runId, nextRun.name);
+        const normalized = this.claimableName(runId, nextRun.name);
+        if (normalized) {
+          this.nameIndex.set(normalized, runId);
+        } else {
+          nextRun.name = undefined;
+        }
       }
     }
 
@@ -252,17 +257,8 @@ export class RunRegistry {
     const run = this.runs.get(runId);
     if (!run) return false;
 
-    const normalized = validateRunName(name);
+    const normalized = this.claimableName(runId, name);
     if (!normalized) return false;
-
-    // Names must not collide with existing run IDs.
-    if (this.runs.has(normalized)) return false;
-
-    const existingOwner = this.nameIndex.get(normalized);
-    if (existingOwner !== undefined && existingOwner !== runId) {
-      const existingRun = this.runs.get(existingOwner);
-      if (existingRun && !existingRun.archived) return false;
-    }
 
     // Release any previous name held by this run.
     this.releaseName(runId);
@@ -274,11 +270,10 @@ export class RunRegistry {
 
   /** Release a run's name from the index. */
   releaseName(runId: string): void {
-    for (const [name, owner] of this.nameIndex.entries()) {
-      if (owner === runId) {
-        this.nameIndex.delete(name);
-        return;
-      }
+    const run = this.runs.get(runId);
+    const normalized = run?.name ? validateRunName(run.name) : null;
+    if (normalized && this.nameIndex.get(normalized) === runId) {
+      this.nameIndex.delete(normalized);
     }
   }
 
@@ -311,9 +306,9 @@ export class RunRegistry {
   }
 
   deleteRun(runId: string): boolean {
-    const deleted = this.runs.delete(runId);
-    if (!deleted) return false;
+    if (!this.runs.has(runId)) return false;
     this.clearRunMetadata(runId);
+    this.runs.delete(runId);
     return true;
   }
 
@@ -321,8 +316,8 @@ export class RunRegistry {
     const removed: string[] = [];
     for (const [runId, run] of this.runs.entries()) {
       if (!predicate(run)) continue;
-      this.runs.delete(runId);
       this.clearRunMetadata(runId);
+      this.runs.delete(runId);
       removed.push(runId);
     }
     return removed;
@@ -334,8 +329,8 @@ export class RunRegistry {
 
     for (const [runId, run] of this.runs.entries()) {
       if (isTerminalStatus(run.status) && !keepTerminalIds.has(runId) && !this.pinnedRunIds.has(runId)) {
-        this.runs.delete(runId);
         this.clearRunMetadata(runId);
+        this.runs.delete(runId);
       }
     }
   }
@@ -379,19 +374,25 @@ export class RunRegistry {
     this.surfacedCompletionKeysByRun.set(runId, fingerprints);
   }
 
-  private tryClaimName(runId: string, name: string): void {
+  private claimableName(runId: string, name: string): string | undefined {
     const normalized = validateRunName(name);
-    if (!normalized) return;
+    if (!normalized) return undefined;
 
     // Names must not collide with existing run IDs.
-    if (this.runs.has(normalized) && normalized !== runId) return;
+    if (this.runs.has(normalized)) return undefined;
 
     const existingOwner = this.nameIndex.get(normalized);
     if (existingOwner !== undefined && existingOwner !== runId) {
       const existingRun = this.runs.get(existingOwner);
-      if (existingRun && !existingRun.archived) return;
+      if (existingRun && !existingRun.archived) return undefined;
     }
 
+    return normalized;
+  }
+
+  private tryClaimName(runId: string, name: string): void {
+    const normalized = this.claimableName(runId, name);
+    if (!normalized) return;
     this.nameIndex.set(normalized, runId);
   }
 
