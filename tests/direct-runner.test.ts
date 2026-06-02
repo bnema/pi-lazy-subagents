@@ -75,22 +75,30 @@ describe("direct runner stdout processing", () => {
 
   test("falls back to the continued session file when no newer child session file is discovered", async () => {
     const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-lazy-subagents-session-file-"));
-    const continuedSessionFile = path.join(sessionDir, "continued.jsonl");
+    try {
+      const continuedSessionFile = path.join(sessionDir, "continued.jsonl");
 
-    expect(await resolveCompletedSessionFile(sessionDir, continuedSessionFile)).toBe(continuedSessionFile);
+      expect(await resolveCompletedSessionFile(sessionDir, continuedSessionFile)).toBe(continuedSessionFile);
+    } finally {
+      await fs.rm(sessionDir, { recursive: true, force: true });
+    }
   });
 
   test("prefers the latest child session file over the provided continuation file", async () => {
     const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-lazy-subagents-session-file-"));
-    const oldSessionFile = path.join(sessionDir, "old.jsonl");
-    const latestSessionFile = path.join(sessionDir, "latest.jsonl");
-    const continuedSessionFile = path.join(sessionDir, "continued.jsonl");
-    await fs.writeFile(oldSessionFile, "old", "utf8");
-    await fs.writeFile(latestSessionFile, "latest", "utf8");
-    await fs.utimes(oldSessionFile, new Date(1_000), new Date(1_000));
-    await fs.utimes(latestSessionFile, new Date(2_000), new Date(2_000));
+    try {
+      const oldSessionFile = path.join(sessionDir, "old.jsonl");
+      const latestSessionFile = path.join(sessionDir, "latest.jsonl");
+      const continuedSessionFile = path.join(sessionDir, "continued.jsonl");
+      await fs.writeFile(oldSessionFile, "old", "utf8");
+      await fs.writeFile(latestSessionFile, "latest", "utf8");
+      await fs.utimes(oldSessionFile, new Date(1_000), new Date(1_000));
+      await fs.utimes(latestSessionFile, new Date(2_000), new Date(2_000));
 
-    expect(await resolveCompletedSessionFile(sessionDir, continuedSessionFile)).toBe(latestSessionFile);
+      expect(await resolveCompletedSessionFile(sessionDir, continuedSessionFile)).toBe(latestSessionFile);
+    } finally {
+      await fs.rm(sessionDir, { recursive: true, force: true });
+    }
   });
 
   test("continuation pi args preserve profile flags", () => {

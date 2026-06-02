@@ -931,8 +931,9 @@ export class LazySubagentsController {
       throw new Error(`Cannot continue failed run: ${runId}`);
     }
 
-    // For named runs with an explicit lease, reject if lease expired
-    if (existing.name && existing.leaseExpiry !== undefined && now > existing.leaseExpiry) {
+    // For named runs, reject if the persisted or derived lease has expired.
+    const effectiveLeaseExpiry = computeLeaseExpiry(existing);
+    if (existing.name && effectiveLeaseExpiry !== undefined && now > effectiveLeaseExpiry) {
       throw new Error(`Cannot continue ${target}: lease has expired.`);
     }
 

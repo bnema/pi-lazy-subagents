@@ -203,6 +203,32 @@ describe("RunRegistry", () => {
       expect(registry.resolveTarget("invalid name")).toBeUndefined();
     });
 
+    test("upsert clears an unclaimable name instead of leaving a phantom value", () => {
+      const registry = new RunRegistry();
+
+      const inserted = registry.upsert(createRun({ id: "run-1", status: "running", name: "run-1" }));
+
+      expect(inserted.name).toBeUndefined();
+      expect(registry.getNameForRun("run-1")).toBeUndefined();
+      expect(registry.resolveTarget("run-1")).toBe("run-1");
+    });
+
+    test("restore clears persisted names that cannot be claimed", () => {
+      const registry = new RunRegistry({}, {
+        runs: [
+          createRun({ id: "run-1", status: "running", name: "shared" }),
+          createRun({ id: "run-2", status: "running", name: "shared" }),
+        ],
+        surfacedCompletionKeys: [],
+        acknowledgedRunIds: [],
+        pinnedRunIds: [],
+      });
+
+      expect(registry.getNameForRun("run-1")).toBe("shared");
+      expect(registry.getNameForRun("run-2")).toBeUndefined();
+      expect(registry.resolveTarget("shared")).toBe("run-1");
+    });
+
     test("isNameAvailable returns true for unclaimed valid names", () => {
       const registry = new RunRegistry();
       registry.upsert(createRun({ id: "run-1", status: "running" }));

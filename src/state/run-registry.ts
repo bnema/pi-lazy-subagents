@@ -113,11 +113,14 @@ export class RunRegistry {
 
     if (!initialState) return;
 
-    for (const run of initialState.runs) {
-      const normalized = normalizeRun(run, this.recentEventLimit);
+    const normalizedRuns = initialState.runs.map((run) => normalizeRun(run, this.recentEventLimit));
+    for (const normalized of normalizedRuns) {
       this.runs.set(normalized.id, normalized);
-      if (normalized.name && !normalized.archived) {
-        this.tryClaimName(normalized.id, normalized.name);
+    }
+    for (const normalized of normalizedRuns) {
+      if (normalized.name && !normalized.archived && !this.tryClaimName(normalized.id, normalized.name)) {
+        normalized.name = undefined;
+        this.runs.set(normalized.id, normalized);
       }
     }
 
@@ -144,8 +147,9 @@ export class RunRegistry {
   upsert(run: RunRecord): RunRecord {
     const normalized = normalizeRun(run, this.recentEventLimit);
     this.runs.set(normalized.id, normalized);
-    if (normalized.name && !normalized.archived) {
-      this.tryClaimName(normalized.id, normalized.name);
+    if (normalized.name && !normalized.archived && !this.tryClaimName(normalized.id, normalized.name)) {
+      normalized.name = undefined;
+      this.runs.set(normalized.id, normalized);
     }
     this.prune();
     return cloneRun(normalized);
@@ -390,10 +394,11 @@ export class RunRegistry {
     return normalized;
   }
 
-  private tryClaimName(runId: string, name: string): void {
+  private tryClaimName(runId: string, name: string): boolean {
     const normalized = this.claimableName(runId, name);
-    if (!normalized) return;
+    if (!normalized) return false;
     this.nameIndex.set(normalized, runId);
+    return true;
   }
 
   private clearRunMetadata(runId: string): void {
