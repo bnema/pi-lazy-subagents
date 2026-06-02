@@ -21,8 +21,13 @@ function createRun(overrides: Partial<RunRecord> = {}): RunRecord {
     resultPreview: overrides.resultPreview,
     errorPreview: overrides.errorPreview,
     attentionNeeded: overrides.attentionNeeded ?? false,
+    name: overrides.name,
+    cwd: overrides.cwd,
+    leaseExpiry: overrides.leaseExpiry,
+    archived: overrides.archived,
     groupId: overrides.groupId,
     children: overrides.children,
+    launchRef: overrides.launchRef,
     recentEvents: overrides.recentEvents ?? [],
   };
 }
@@ -116,5 +121,116 @@ describe("RunRegistry", () => {
 
     expect(registry.deleteRun("pinned-complete")).toBe(true);
     expect(registry.hasSurfacedCompletion("pinned-complete:completed:1")).toBe(false);
+  });
+
+  describe("name-based addressing", () => {
+    test("claimName registers a valid unique name and resolveTarget finds it", () => {
+      const registry = new RunRegistry();
+      registry.upsert(createRun({ id: "run-1", status: "running" }));
+
+      expect(registry.claimName("run-1", "my-agent")).toBe(true);
+      expect(registry.getNameForRun("run-1")).toBe("my-agent");
+      expect(registry.resolveTarget("my-agent")).toBe("run-1");
+      // Case-insensitive resolution.
+      expect(registry.resolveTarget("MY-AGENT")).toBe("run-1");
+      // Direct id lookup still works.
+      expect(registry.resolveTarget("run-1")).toBe("run-1");
+    });
+
+    test("claimName rejects invalid names", () => {
+      const registry = new RunRegistry();
+      registry.upsert(createRun({ id: "run-1", status: "running" }));
+
+      expect(registry.claimName("run-1", "")).toBe(false);
+      expect(registry.claimName("run-1", "  ")).toBe(false);
+      expect(registry.claimName("run-1", "my agent")).toBe(false);
+      expect(registry.claimName("run-1", "-leading-hyphen")).toBe(false);
+    });
+
+    test("claimName rejects names already claimed by another non-archived run", () => {
+      const registry = new RunRegistry();
+      registry.upsert(createRun({ id: "run-1", status: "running" }));
+      registry.upsert(createRun({ id: "run-2", status: "running" }));
+
+      expect(registry.claimName("run-1", "shared-name")).toBe(true);
+      expect(registry.claimName("run-2", "shared-name")).toBe(false);
+      expect(registry.resolveTarget("shared-name")).toBe("run-1");
+    });
+
+    test("claimName succeeds when previous owner is archived", () => {
+      const registry = new RunRegistry();
+      registry.upsert(createRun({ id: "run-1", status: "completed", completedAt: 1 }));
+      registry.upsert(createRun({ id: "run-2", status: "running" }));
+
+      registry.claimName("run-1", "reusable");
+      registry.archiveRun("run-1");
+
+      expect(registry.claimName("run-2", "reusable")).toBe(true);
+      expect(registry.resolveTarget("reusable")).toBe("run-2");
+    });
+
+    test("names must not collide with existing run IDs", () => {
+      const registry = new RunRegistry();
+      registry.upsert(createRun({ id: "run-1", status: "running" }));
+
+      // "run-1" is an existing run ID, so it can't be used as a name.
+      expect(registry.claimName("run-1", "run-1")).toBe(false);
+      expect(registry.isNameAvailable("run-1")).toBe(false);
+    });
+
+    test("releaseName frees the name so another run can claim it after deletion", () => {
+      const registry = new RunRegistry();
+      registry.upsert(createRun({ id: "run-1", status: "completed", completedAt: 1 }));
+      registry.claimName("run-1", "freed");
+
+      registry.deleteRun("run-1");
+      // After deletion, the name is released.
+      expect(registry.resolveTarget("freed")).toBeUndefined();
+
+      registry.upsert(createRun({ id: "run-2", status: "running" }));
+      expect(registry.claimName("run-2", "freed")).toBe(true);
+    });
+
+    test("isNameAvailable returns true for unclaimed valid names", () => {
+      const registry = new RunRegistry();
+      registry.upsert(createRun({ id: "run-1", status: "running" }));
+
+      expect(registry.isNameAvailable("fresh-name")).toBe(true);
+      registry.claimName("run-1", "fresh-name");
+      expect(registry.isNameAvailable("fresh-name")).toBe(false);
+    });
+
+    test("resolveTarget returns undefined for unknown name", () => {
+      const registry = new RunRegistry();
+      expect(registry.resolveTarget("no-such-name")).toBeUndefined();
+      expect(registry.resolveTarget("no-such-id")).toBeUndefined();
+    });
+  });
+
+  describe("archive and lifecycle", () => {
+    test("archiveRun marks run as archived and releases its name", () => {
+      const registry = new RunRegistry();
+      registry.upsert(createRun({ id: "run-1", status: "completed", completedAt: 1 }));
+      registry.claimName("run-1", "to-archive");
+
+      expect(registry.archiveRun("run-1")).toBe(true);
+      expect(registry.isArchived("run-1")).toBe(true);
+      expect(registry.resolveTarget("to-archive")).toBeUndefined();
+      // Still findable by ID.
+      expect(registry.resolveTarget("run-1")).toBe("run-1");
+      expect(registry.get("run-1")?.archived).toBe(true);
+    });
+
+    test("archiveRun returns false for unknown run", () => {
+      const registry = new RunRegistry();
+      expect(registry.archiveRun("no-such-run")).toBe(false);
+    });
+
+    test("isArchived returns false for unarchived and missing runs", () => {
+      const registry = new RunRegistry();
+      registry.upsert(createRun({ id: "run-1", status: "running" }));
+      expect(registry.isArchived("run-1")).toBe(false);
+      expect(registry.isArchived("no-such-run")).toBe(false);
+    });
   });
 });

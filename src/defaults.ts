@@ -22,3 +22,6 @@ export const DEFAULT_SUCCESS_VISIBILITY_GRACE_MS = 30_000;
 export const DEFAULT_ACKNOWLEDGED_SUCCESS_TTL_MS = 5 * 60_000;
 export const DEFAULT_WAIT_TIMEOUT_MS = 10 * 60_000;
 export const MAX_WAIT_TIMEOUT_MS = 30 * 60_000;
+export const DEFAULT_NAMED_RUN_LEASE_MS = 30 * 60_000;
+export const MAX_RUN_NAME_LENGTH = 64;
+export const RUN_NAME_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/;

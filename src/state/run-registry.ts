@@ -2,6 +2,8 @@ import {
   DEFAULT_COMPLETED_RETENTION_LIMIT,
   DEFAULT_RECENT_EVENT_LIMIT,
   DEFAULT_RECENT_RUN_LIMIT,
+  MAX_RUN_NAME_LENGTH,
+  RUN_NAME_PATTERN,
 } from "../defaults.js";
 import type { RunCounts, RunEvent, RunRecord, RunRegistrySnapshot, RunStatus } from "../types.js";
 
@@ -86,11 +88,19 @@ function inferRunIdFromFingerprint(fingerprint: string): string | undefined {
   return fingerprint.slice(0, separatorIndex);
 }
 
+function validateRunName(name: string): string | null {
+  const trimmed = name.trim().toLowerCase();
+  if (!trimmed || trimmed.length > MAX_RUN_NAME_LENGTH) return null;
+  if (!RUN_NAME_PATTERN.test(trimmed)) return null;
+  return trimmed;
+}
+
 export class RunRegistry {
   private readonly recentEventLimit: number;
   private readonly recentRunLimit: number;
   private readonly completedRetentionLimit: number;
   private readonly runs = new Map<string, RunRecord>();
+  private readonly nameIndex = new Map<string, string>();
   private readonly surfacedCompletionKeys = new Set<string>();
   private readonly surfacedCompletionKeysByRun = new Map<string, Set<string>>();
   private readonly acknowledgedRunIds = new Set<string>();
@@ -106,6 +116,9 @@ export class RunRegistry {
     for (const run of initialState.runs) {
       const normalized = normalizeRun(run, this.recentEventLimit);
       this.runs.set(normalized.id, normalized);
+      if (normalized.name && !normalized.archived) {
+        this.tryClaimName(normalized.id, normalized.name);
+      }
     }
 
     for (const fingerprint of initialState.surfacedCompletionKeys) {
@@ -131,6 +144,9 @@ export class RunRegistry {
   upsert(run: RunRecord): RunRecord {
     const normalized = normalizeRun(run, this.recentEventLimit);
     this.runs.set(normalized.id, normalized);
+    if (normalized.name && !normalized.archived) {
+      this.tryClaimName(normalized.id, normalized.name);
+    }
     this.prune();
     return cloneRun(normalized);
   }
@@ -152,6 +168,13 @@ export class RunRegistry {
       id: existing.id,
       recentEvents: patch.recentEvents ? normalizeRun({ ...existing, recentEvents: patch.recentEvents }, this.recentEventLimit).recentEvents : existing.recentEvents,
     };
+
+    if (patch.name !== undefined && patch.name !== existing.name) {
+      this.releaseName(runId);
+      if (nextRun.name && !nextRun.archived) {
+        this.tryClaimName(runId, nextRun.name);
+      }
+    }
 
     this.runs.set(runId, nextRun);
     this.prune();
@@ -207,6 +230,84 @@ export class RunRegistry {
 
   isPinned(runId: string): boolean {
     return this.pinnedRunIds.has(runId);
+  }
+
+  // --- Name-based addressing ---
+
+  /**
+   * Resolve a target string to a run ID. Tries exact run ID match first,
+   * then falls back to name lookup (case-insensitive).
+   */
+  resolveTarget(target: string): string | undefined {
+    if (this.runs.has(target)) return target;
+    const normalized = target.trim().toLowerCase();
+    return this.nameIndex.get(normalized);
+  }
+
+  /**
+   * Claim a name for a run. Returns false if the name is invalid or already
+   * claimed by a different non-archived run.
+   */
+  claimName(runId: string, name: string): boolean {
+    const run = this.runs.get(runId);
+    if (!run) return false;
+
+    const normalized = validateRunName(name);
+    if (!normalized) return false;
+
+    // Names must not collide with existing run IDs.
+    if (this.runs.has(normalized)) return false;
+
+    const existingOwner = this.nameIndex.get(normalized);
+    if (existingOwner !== undefined && existingOwner !== runId) {
+      const existingRun = this.runs.get(existingOwner);
+      if (existingRun && !existingRun.archived) return false;
+    }
+
+    // Release any previous name held by this run.
+    this.releaseName(runId);
+
+    this.nameIndex.set(normalized, runId);
+    run.name = name;
+    return true;
+  }
+
+  /** Release a run's name from the index. */
+  releaseName(runId: string): void {
+    for (const [name, owner] of this.nameIndex.entries()) {
+      if (owner === runId) {
+        this.nameIndex.delete(name);
+        return;
+      }
+    }
+  }
+
+  isNameAvailable(name: string): boolean {
+    const normalized = validateRunName(name);
+    if (!normalized) return false;
+    if (this.runs.has(normalized)) return false;
+    const owner = this.nameIndex.get(normalized);
+    if (!owner) return true;
+    const ownerRun = this.runs.get(owner);
+    return Boolean(ownerRun?.archived);
+  }
+
+  getNameForRun(runId: string): string | undefined {
+    return this.runs.get(runId)?.name;
+  }
+
+  // --- Archive / retire ---
+
+  archiveRun(runId: string): boolean {
+    const run = this.runs.get(runId);
+    if (!run) return false;
+    this.releaseName(runId);
+    this.runs.set(runId, { ...run, archived: true });
+    return true;
+  }
+
+  isArchived(runId: string): boolean {
+    return Boolean(this.runs.get(runId)?.archived);
   }
 
   deleteRun(runId: string): boolean {
@@ -278,7 +379,24 @@ export class RunRegistry {
     this.surfacedCompletionKeysByRun.set(runId, fingerprints);
   }
 
+  private tryClaimName(runId: string, name: string): void {
+    const normalized = validateRunName(name);
+    if (!normalized) return;
+
+    // Names must not collide with existing run IDs.
+    if (this.runs.has(normalized) && normalized !== runId) return;
+
+    const existingOwner = this.nameIndex.get(normalized);
+    if (existingOwner !== undefined && existingOwner !== runId) {
+      const existingRun = this.runs.get(existingOwner);
+      if (existingRun && !existingRun.archived) return;
+    }
+
+    this.nameIndex.set(normalized, runId);
+  }
+
   private clearRunMetadata(runId: string): void {
+    this.releaseName(runId);
     this.acknowledgedRunIds.delete(runId);
     this.pinnedRunIds.delete(runId);
     const fingerprints = this.surfacedCompletionKeysByRun.get(runId);

@@ -5,7 +5,7 @@ import path from "node:path";
 import { describe, expect, test, vi } from "vitest";
 
 import { MESSAGE_TYPE_ATTENTION, MESSAGE_TYPE_COMPLETION, MESSAGE_TYPE_FAILURE, MESSAGE_TYPE_LAUNCH, MESSAGE_TYPE_PIN, PERSISTED_STATE_ENTRY, STATUS_KEY, WIDGET_KEY } from "../src/defaults.js";
-import { LazySubagentsController } from "../src/orchestration/controller.js";
+import { LazySubagentsController, __testHooks as controllerTestHooks } from "../src/orchestration/controller.js";
 import { createPersistedState } from "../src/state/persistence.js";
 import { RunRegistry } from "../src/state/run-registry.js";
 import type { LaunchChildRequest, LaunchResult, Launcher, LauncherRuntimeContext, NormalizedRunUpdate } from "../src/launcher/interface.js";
@@ -32,6 +32,10 @@ function createRun(overrides: Partial<RunRecord> = {}): RunRecord {
     toolCount: overrides.toolCount,
     model: overrides.model,
     attentionNeeded: overrides.attentionNeeded ?? false,
+    name: overrides.name,
+    cwd: overrides.cwd,
+    leaseExpiry: overrides.leaseExpiry,
+    archived: overrides.archived,
     groupId: overrides.groupId,
     children: overrides.children,
     launchRef: overrides.launchRef,
@@ -1761,3 +1765,120 @@ describe("LazySubagentsController", () => {
     expect(controller.getSnapshot().runs).toHaveLength(0);
   });
 });
+
+describe("visibility helpers (shouldKeepRunVisibleInUi)", () => {
+  const { shouldKeepRunVisibleInUi } = __testHooks;
+
+  const defaultOpts = { isPinned: false, isAcknowledged: false, now: 1000 };
+
+  test("non-terminal runs are always visible", () => {
+    expect(shouldKeepRunVisibleInUi(createRun({ id: "r1", status: "running" }), defaultOpts)).toBe(true);
+    expect(shouldKeepRunVisibleInUi(createRun({ id: "r2", status: "queued" }), defaultOpts)).toBe(true);
+    expect(shouldKeepRunVisibleInUi(createRun({ id: "r3", status: "blocked" }), defaultOpts)).toBe(true);
+    expect(shouldKeepRunVisibleInUi(createRun({ id: "r4", status: "paused" }), defaultOpts)).toBe(true);
+  });
+
+  test("pinned runs are always visible", () => {
+    expect(shouldKeepRunVisibleInUi(
+      createRun({ id: "r1", status: "completed", completedAt: 500 }),
+      { isPinned: true, isAcknowledged: true, now: 100_000 },
+    )).toBe(true);
+  });
+
+  test("failed and paused runs are visible even when acknowledged", () => {
+    expect(shouldKeepRunVisibleInUi(
+      createRun({ id: "r1", status: "failed", completedAt: 500 }),
+      { ...defaultOpts, isAcknowledged: true },
+    )).toBe(true);
+    expect(shouldKeepRunVisibleInUi(
+      createRun({ id: "r2", status: "paused", completedAt: 500 }),
+      { ...defaultOpts, isAcknowledged: true },
+    )).toBe(true);
+  });
+
+  test("archived runs are never visible", () => {
+    expect(shouldKeepRunVisibleInUi(
+      createRun({ id: "r1", status: "completed", completedAt: 500, archived: true }),
+      { ...defaultOpts, now: 600 },
+    )).toBe(false);
+  });
+
+  test("unnamed completed runs are hidden when acknowledged", () => {
+    expect(shouldKeepRunVisibleInUi(
+      createRun({ id: "r1", status: "completed", completedAt: 500 }),
+      { ...defaultOpts, isAcknowledged: true, now: 600 },
+    )).toBe(false);
+  });
+
+  test("unnamed completed runs are visible during grace period", () => {
+    expect(shouldKeepRunVisibleInUi(
+      createRun({ id: "r1", status: "completed", completedAt: 1000 }),
+      { ...defaultOpts, now: 1001 },
+    )).toBe(true);
+    // Just past the 30s grace window.
+    expect(shouldKeepRunVisibleInUi(
+      createRun({ id: "r2", status: "completed", completedAt: 1000 }),
+      { ...defaultOpts, now: 1000 + 30_001 },
+    )).toBe(false);
+  });
+
+  test("named completed runs are visible within lease expiry, even when acknowledged", () => {
+    const run = createRun({
+      id: "r1",
+      status: "completed",
+      completedAt: 500,
+      name: "my-agent",
+      leaseExpiry: 2000,
+    });
+    // Visible while lease is active — acknowledged doesn't hide it.
+    expect(shouldKeepRunVisibleInUi(run, { isPinned: false, isAcknowledged: true, now: 1500 })).toBe(true);
+    // Visible while lease is active — unacknowledged.
+    expect(shouldKeepRunVisibleInUi(run, { isPinned: false, isAcknowledged: false, now: 1500 })).toBe(true);
+  });
+
+  test("named completed runs past lease expiry follow grace window when unacknowledged", () => {
+    const run = createRun({
+      id: "r1",
+      status: "completed",
+      completedAt: 500,
+      name: "my-agent",
+      leaseExpiry: 1000,
+    });
+    // Past lease but within grace period.
+    expect(shouldKeepRunVisibleInUi(run, { isPinned: false, isAcknowledged: false, now: 1029 })).toBe(true);
+    // Past lease and past grace period.
+    expect(shouldKeepRunVisibleInUi(run, { isPinned: false, isAcknowledged: false, now: 500 + 30_001 })).toBe(false);
+  });
+
+  test("named completed runs past lease expiry are hidden when acknowledged", () => {
+    const run = createRun({
+      id: "r1",
+      status: "completed",
+      completedAt: 500,
+      name: "my-agent",
+      leaseExpiry: 1000,
+    });
+    expect(shouldKeepRunVisibleInUi(run, { isPinned: false, isAcknowledged: true, now: 1500 })).toBe(false);
+  });
+
+  test("attention-needed terminal runs are always visible", () => {
+    expect(shouldKeepRunVisibleInUi(
+      createRun({ id: "r1", status: "completed", completedAt: 500, attentionNeeded: true }),
+      { ...defaultOpts, isAcknowledged: true, now: 100_000 },
+    )).toBe(true);
+  });
+
+  test("named skipped runs behave same as completed for visibility", () => {
+    const run = createRun({
+      id: "r1",
+      status: "skipped",
+      completedAt: 500,
+      name: "my-agent",
+      leaseExpiry: 2000,
+    });
+    expect(shouldKeepRunVisibleInUi(run, { isPinned: false, isAcknowledged: true, now: 1500 })).toBe(true);
+    expect(shouldKeepRunVisibleInUi(run, { isPinned: false, isAcknowledged: true, now: 3000 })).toBe(false);
+  });
+});
+
+const __testHooks = controllerTestHooks;

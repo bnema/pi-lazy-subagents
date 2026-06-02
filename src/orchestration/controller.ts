@@ -7,6 +7,7 @@ import {
   DEFAULT_COMPLETION_POLICY,
   DEFAULT_POLL_INTERVAL_MS,
   DEFAULT_ACKNOWLEDGED_SUCCESS_TTL_MS,
+  DEFAULT_NAMED_RUN_LEASE_MS,
   DEFAULT_STALE_RUN_MS,
   DEFAULT_SUCCESS_VISIBILITY_GRACE_MS,
   DEFAULT_WAIT_TIMEOUT_MS,
@@ -531,11 +532,37 @@ function shouldKeepRunVisibleInUi(
 ): boolean {
   if (!isTerminalStatus(run.status)) return true;
   if (options.isPinned) return true;
+  if (run.attentionNeeded) return true;
   if (run.status === "failed" || run.status === "paused") return true;
+  if (run.archived) return false;
+
+  // Named completed runs stay visible until lease expiry, even if acknowledged.
+  if (run.name && (run.status === "completed" || run.status === "skipped")) {
+    if (run.leaseExpiry !== undefined && options.now <= run.leaseExpiry) return true;
+    // After lease expiry, visible only during the grace window (unless ack'd).
+    if (options.isAcknowledged) return false;
+    if (run.completedAt === undefined) return true;
+    return options.now - run.completedAt <= DEFAULT_SUCCESS_VISIBILITY_GRACE_MS;
+  }
+
   if (run.status !== "completed" && run.status !== "skipped") return false;
   if (options.isAcknowledged) return false;
   if (run.completedAt === undefined) return true;
   return options.now - run.completedAt <= DEFAULT_SUCCESS_VISIBILITY_GRACE_MS;
+}
+
+/**
+ * Compute lease expiry for a named completed run.
+ * Returns the existing leaseExpiry if set, otherwise computes a fresh
+ * one from completedAt + leaseMs.
+ */
+function computeLeaseExpiry(
+  run: RunRecord,
+  leaseMs: number = DEFAULT_NAMED_RUN_LEASE_MS,
+): number | undefined {
+  if (!run.name) return undefined;
+  if (run.completedAt === undefined) return undefined;
+  return run.leaseExpiry ?? run.completedAt + leaseMs;
 }
 
 export class LazySubagentsController {
@@ -1525,3 +1552,8 @@ export class LazySubagentsController {
     }, options);
   }
 }
+
+export const __testHooks = {
+  shouldKeepRunVisibleInUi,
+  computeLeaseExpiry,
+};

@@ -65,6 +65,10 @@ export interface RunRecord {
   totalTokens?: number;
   model?: string;
   attentionNeeded: boolean;
+  name?: string;
+  cwd?: string;
+  leaseExpiry?: number;
+  archived?: boolean;
   groupId?: string;
   children?: string[];
   launchRef?: RunLaunchRef;

@@ -23,8 +23,13 @@ function createRun(overrides: Partial<RunRecord> = {}): RunRecord {
     resultPreview: overrides.resultPreview,
     errorPreview: overrides.errorPreview,
     attentionNeeded: overrides.attentionNeeded ?? false,
+    name: overrides.name,
+    cwd: overrides.cwd,
+    leaseExpiry: overrides.leaseExpiry,
+    archived: overrides.archived,
     groupId: overrides.groupId,
     children: overrides.children,
+    launchRef: overrides.launchRef,
     recentEvents: overrides.recentEvents ?? [],
   };
 }
@@ -66,5 +71,80 @@ describe("persistence", () => {
   test("falls back to an empty persisted state for invalid input", () => {
     expect(restorePersistedState({ version: 999 })).toEqual(createEmptyPersistedState());
     expect(restorePersistedState(null)).toEqual(createEmptyPersistedState());
+  });
+
+  test("round-trips name, cwd, leaseExpiry, and archived fields", () => {
+    const registry = new RunRegistry();
+    registry.upsert(createRun({
+      id: "run-1",
+      status: "completed",
+      updatedAt: 10,
+      completedAt: 10,
+      name: "my-agent",
+      cwd: "/home/user/project",
+      leaseExpiry: 1_000_000,
+    }));
+    registry.upsert(createRun({
+      id: "run-2",
+      status: "completed",
+      updatedAt: 20,
+      completedAt: 20,
+      name: "archived-one",
+      cwd: "/tmp",
+      leaseExpiry: 2_000_000,
+      archived: true,
+    }));
+    registry.acknowledgeRun("run-1");
+
+    const persisted = createPersistedState(registry.serialize(), 123);
+    const restored = restorePersistedState(persisted);
+    const restoredRegistry = new RunRegistry({}, restored);
+
+    const r1 = restoredRegistry.get("run-1")!;
+    expect(r1.name).toBe("my-agent");
+    expect(r1.cwd).toBe("/home/user/project");
+    expect(r1.leaseExpiry).toBe(1_000_000);
+    expect(r1.archived).toBeUndefined();
+    expect(restoredRegistry.isAcknowledged("run-1")).toBe(true);
+    // Named non-archived runs are resolvable by name.
+    expect(restoredRegistry.resolveTarget("my-agent")).toBe("run-1");
+    // Archived run name should not be indexed.
+    expect(restoredRegistry.resolveTarget("archived-one")).toBeUndefined();
+
+    const r2 = restoredRegistry.get("run-2")!;
+    expect(r2.name).toBe("archived-one");
+    expect(r2.cwd).toBe("/tmp");
+    expect(r2.leaseExpiry).toBe(2_000_000);
+    expect(r2.archived).toBe(true);
+    // Archived run still findable by ID.
+    expect(restoredRegistry.resolveTarget("run-2")).toBe("run-2");
+  });
+
+  test("round-trips runs with cwd and child session launchRef", () => {
+    const registry = new RunRegistry();
+    registry.upsert(createRun({
+      id: "run-1",
+      status: "completed",
+      updatedAt: 5,
+      completedAt: 5,
+      cwd: "/home/user/project",
+      launchRef: {
+        runId: "run-1",
+        asyncId: "async-1",
+        asyncDir: "/tmp/lazy-subagents/run-1",
+        sessionFile: "/tmp/lazy-subagents/run-1/session.jsonl",
+        resultPath: "/tmp/lazy-subagents/run-1/result.json",
+      },
+    }));
+
+    const persisted = createPersistedState(registry.serialize(), 456);
+    const restored = restorePersistedState(persisted);
+    const restoredRegistry = new RunRegistry({}, restored);
+
+    const run = restoredRegistry.get("run-1")!;
+    expect(run.cwd).toBe("/home/user/project");
+    expect(run.launchRef?.asyncId).toBe("async-1");
+    expect(run.launchRef?.asyncDir).toBe("/tmp/lazy-subagents/run-1");
+    expect(run.launchRef?.sessionFile).toBe("/tmp/lazy-subagents/run-1/session.jsonl");
   });
 });
