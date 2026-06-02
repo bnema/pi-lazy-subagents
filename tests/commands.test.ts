@@ -69,6 +69,11 @@ describe("lazy-subagents command parsing", () => {
     expect(help).toContain("Use result after completion");
     expect(help).toContain("workflow is for dependent pipelines");
     expect(help).toContain("wait blocks");
+    expect(help).toContain("Run lifecycle:");
+    expect(help).toContain("auto-hide");
+    expect(help).toContain("followup-able");
+    expect(help).toContain("bounded lease");
+    expect(help).toContain("Continuation is only supported for single runs");
   });
 
   test("list output prints available sub agents", () => {
@@ -96,6 +101,23 @@ describe("lazy-subagents command parsing", () => {
     expect(message).toContain("Launched run-1 (reviewer).");
     expect(message).toContain("Signals arrive automatically");
     expect(message).toContain("do not wait or poll right away");
+  });
+
+  test("parses run command with --name flag", () => {
+    expect(parseLazySubagentsCommand('run reviewer "Review the auth diff" --name diff-reviewer')).toEqual({
+      action: "run",
+      agent: "reviewer",
+      prompt: "Review the auth diff",
+      name: "diff-reviewer",
+    });
+
+    expect(parseLazySubagentsCommand('run reviewer "Review" --name=my-agent --title "Round 1"')).toEqual({
+      action: "run",
+      agent: "reviewer",
+      prompt: "Review",
+      title: "Round 1",
+      name: "my-agent",
+    });
   });
 
   test("parses continue command with target and prompt", () => {

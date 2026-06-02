@@ -14,6 +14,7 @@ export interface LaunchRequestBase {
   title: string;
   taskSummary: string;
   cwd?: string;
+  name?: string;
 }
 
 export interface LaunchChildRequest extends LaunchRequestBase {

@@ -41,7 +41,8 @@ pi --no-extensions -e /absolute/path/to/pi-lazy-subagents/extensions/index.ts
 ```text
 /lazy-subagents help
 /lazy-subagents list
-/lazy-subagents run <agent> <prompt> [--title TITLE]
+/lazy-subagents run <agent> <prompt> [--title TITLE] [--name NAME]
+/lazy-subagents continue <target> <prompt> [--title TITLE]
 /lazy-subagents status [runId]
 /lazy-subagents wait [runId] [--timeout-ms MS]
 /lazy-subagents result <runId>
@@ -55,6 +56,8 @@ Examples:
 
 ```text
 /lazy-subagents list
+/lazy-subagents run reviewer "Review the auth diff" --name diff-reviewer
+/lazy-subagents continue diff-reviewer "I applied your fixes; validate"
 /lazy-subagents run scout "Inspect the package layout"
 /lazy-subagents status
 /lazy-subagents wait [runId]
@@ -73,6 +76,7 @@ Supported actions:
 - `run`
 - `parallel`
 - `workflow`
+- `continue`
 - `status`
 - `wait`
 - `result`
@@ -102,6 +106,13 @@ Example parallel launch:
 lazy_subagents action=parallel children=[{agent:"reviewer",prompt:"Review the diff for correctness"},{agent:"scout",prompt:"Find related docs and prior art"},{agent:"worker",prompt:"Prototype the isolated parser change"}]
 ```
 
+Example named run with follow-up:
+
+```text
+lazy_subagents action=run agent=reviewer prompt="Review the auth diff for safety" name=diff-reviewer
+lazy_subagents action=continue target=diff-reviewer prompt="I applied your fixes; validate them"
+```
+
 Example workflow launch:
 
 ```text
@@ -121,6 +132,9 @@ lazy_subagents action=workflow maxConcurrency=2 steps=[{id:"triage",agent:"scout
 - `pickup` injects a completed result into chat.
 - `pin` keeps background progress visible without repeated status checks. Explicit pins add a durable progress card to chat; wait-time auto-pins use the tool row as the live surface.
 - completed successes auto-hide after a grace window; failed, paused, and pinned runs stay until resolved or cleared.
+- Named runs stay visible after completion for a bounded lease (default 30 min). Use `action=continue target=<name>` to send follow-up tasks before the lease expires.
+- Continuation reuses the existing child session so the agent has full context from prior turns.
+- Continuation is only supported for single named runs, not group or workflow runs.
 
 ## Manual smoke test
 

@@ -53,6 +53,10 @@ export const ToolParamsSchema = Type.Object({
   prompt: Type.Optional(Type.String({
     description: "Task for the child session. For action=run, describe the delegated work clearly and concisely, then let the child report completion or attention back asynchronously.",
   })),
+  name: Type.Optional(Type.String({
+    description: "Stable name for this run, kept visible after completion for follow-up via action=continue. Must match /^[a-z0-9][a-z0-9_-]{0,63}$/. Use for long-lived review/rework agents.",
+    pattern: "^[a-z0-9][a-z0-9_-]{0,63}$",
+  })),
   title: Type.Optional(Type.String({
     description: "Optional short label shown in the widget, status, and message cards.",
   })),
@@ -159,6 +163,7 @@ export default function lazySubagentsExtension(pi: ExtensionAPI): void {
     promptSnippet: "Launch child work asynchronously. Do not wait or poll unless explicitly needed.",
     promptGuidelines: [
       "Use action=list to choose an agent; action=run defaults to delegate.",
+      "Use action=run name=<name> for review or rework agents that should stay visible after completion for follow-up via action=continue.",
       "Use action=run for one child and action=parallel for independent children.",
       "Use action=workflow for dependent pipelines that should stay off the main session context and pass step results directly in the background.",
       "Workflow steps support retries=<n>, outputMode=json, outputSchema, when conditions, and fanOutFrom groups with downstream fan-in aggregation.",
@@ -171,6 +176,7 @@ export default function lazySubagentsExtension(pi: ExtensionAPI): void {
       "Use action=wait only for explicit blocking requests or non-interactive scripts.",
       "Use action=status only for human-requested health checks, suspected stalls, or after about 60s with no signal. Do not poll.",
       "Use action=result after terminal completion, pickup to inject the result, pin for durable live progress, and clear/cancel to manage runs.",
+      "Use action=continue target=<name|runId> prompt=<new prompt> to resume a completed named subagent for another review round. The run reuses its existing session.",
     ],
     parameters: ToolParamsSchema,
     renderCall(args, theme) {
@@ -200,6 +206,7 @@ export default function lazySubagentsExtension(pi: ExtensionAPI): void {
               prompt: params.prompt,
               title,
               taskSummary: title,
+              name: params.name,
             },
             ctx,
           );
@@ -216,6 +223,7 @@ export default function lazySubagentsExtension(pi: ExtensionAPI): void {
             {
               title,
               taskSummary: title,
+              name: params.name,
               children: params.children.map((child) => ({
                 ...child,
                 taskSummary: child.taskSummary ?? shortTitle(child.prompt),
@@ -236,6 +244,7 @@ export default function lazySubagentsExtension(pi: ExtensionAPI): void {
             {
               title,
               taskSummary: title,
+              name: params.name,
               maxConcurrency: params.maxConcurrency,
               steps: params.steps.map((step) => ({
                 ...step,

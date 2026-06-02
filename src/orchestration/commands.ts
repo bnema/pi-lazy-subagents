@@ -24,7 +24,7 @@ export type ParsedLazySubagentsCommand =
   | { action: "cancel"; runId: string }
   | { action: "clear"; scope: "completed" | "all"; runId?: string }
   | { action: "continue"; target: string; prompt: string; title?: string }
-  | { action: "run"; agent: string; prompt: string; title?: string };
+  | { action: "run"; agent: string; prompt: string; title?: string; name?: string };
 
 function splitCliArgs(input: string): string[] {
   const args: string[] = [];
@@ -181,6 +181,7 @@ export function parseLazySubagentsCommand(input: string): ParsedLazySubagentsCom
     if (!agent) return { action: "help" };
 
     let title: string | undefined;
+    let name: string | undefined;
     const promptParts: string[] = [];
 
     while (tokens.length > 0) {
@@ -200,12 +201,20 @@ export function parseLazySubagentsCommand(input: string): ParsedLazySubagentsCom
         title = token.slice("--title=".length);
         continue;
       }
+      if (token === "--name") {
+        name = tokens.shift();
+        continue;
+      }
+      if (token.startsWith("--name=")) {
+        name = token.slice("--name=".length);
+        continue;
+      }
       promptParts.push(token);
     }
 
     const prompt = promptParts.join(" ").trim();
     if (!prompt) return { action: "help" };
-    return { action, agent, prompt, title };
+    return { action, agent, prompt, title, name };
   }
 
   return { action: "help" };
@@ -303,7 +312,7 @@ export function buildLazySubagentsHelp(): string {
     "Slash command usage:",
     "  /lazy-subagents help",
     "  /lazy-subagents list",
-    "  /lazy-subagents run <agent> <prompt> [--title TITLE]",
+    "  /lazy-subagents run <agent> <prompt> [--title TITLE] [--name NAME]",
     "  (parallel/workflow launches are available through lazy_subagents tool actions)",
     "  /lazy-subagents continue <target> <prompt> [--title TITLE]",
     "  /lazy-subagents status [runId]",
@@ -317,9 +326,10 @@ export function buildLazySubagentsHelp(): string {
     "Tool usage:",
     "  lazy_subagents action=help",
     "  lazy_subagents action=list",
-    "  lazy_subagents action=run agent=<agent> prompt=<prompt> [title=<title>]",
-    "  lazy_subagents action=parallel children=[{agent,prompt,taskSummary?,cwd?}, ...] [title=<title>]",
-    "  lazy_subagents action=workflow steps=[{id,agent,prompt,taskSummary?,dependsOn?,retries?,outputMode?,outputSchema?,when?,fanOutFrom?,cwd?}, ...] [maxConcurrency=<n>] [title=<title>]",
+    "  lazy_subagents action=run agent=<agent> prompt=<prompt> [title=<title>] [name=<name>]",
+    "  lazy_subagents action=parallel children=[{agent,prompt,taskSummary?,cwd?}, ...] [title=<title>] [name=<name>]",
+    "  lazy_subagents action=workflow steps=[{id,agent,prompt,taskSummary?,dependsOn?,retries?,outputMode?,outputSchema?,when?,fanOutFrom?,cwd?}, ...] [maxConcurrency=<n>] [title=<title>] [name=<name>]",
+    "  lazy_subagents action=continue target=<name|runId> prompt=<new prompt> [title=<title>]",
     "  lazy_subagents action=status [runId=<runId>]",
     `  lazy_subagents action=wait [runId=<runId>] [timeoutMs=${DEFAULT_WAIT_TIMEOUT_MS}]`,
     "  lazy_subagents action=result runId=<runId>",
@@ -327,6 +337,15 @@ export function buildLazySubagentsHelp(): string {
     "  lazy_subagents action=pin runId=<runId>",
     "  lazy_subagents action=cancel runId=<runId>",
     "  lazy_subagents action=clear [scope=completed|all] [runId=<runId>]",
+    "",
+    "Run lifecycle:",
+    "  - Unnamed completed runs auto-hide after a short grace window. No manual clear needed.",
+    "  - Named completed runs stay visible and followup-able for a bounded lease (default 30 min).",
+    "  - After the lease expires, named successes behave like unnamed runs and auto-hide after the grace window.",
+    "  - Failed, attention-needed, and pinned runs always stay visible until resolved or cleared.",
+    "  - Use action=continue target=<name> prompt=<new prompt> to send a follow-up task to a completed named agent.",
+    "    The agent resumes in its existing session directory and runs another turn.",
+    "  - Continuation is only supported for single runs, not group or workflow runs.",
     "",
     "Use /lazy-subagents list or lazy_subagents action=list to inspect available sub agents before choosing one.",
     "Use lazy_subagents action=parallel with children=[...] for two or more independent tasks that should run at the same time.",
@@ -340,8 +359,12 @@ export function buildLazySubagentsHelp(): string {
     "Examples:",
     "  /lazy-subagents list",
     "  /lazy-subagents run reviewer \"Review the auth diff\"",
+    "  /lazy-subagents run reviewer \"Review the auth diff\" --name diff-reviewer",
+    "  /lazy-subagents continue diff-reviewer \"I applied your fixes; validate\"",
     "  /lazy-subagents run scout \"Inspect the package layout\"",
     "  lazy_subagents action=list",
+    "  lazy_subagents action=run agent=reviewer prompt=\"Review the auth diff\" name=diff-reviewer",
+    "  lazy_subagents action=continue target=diff-reviewer prompt=\"I applied your fixes; validate\"",
     "  lazy_subagents action=run agent=worker prompt=\"Implement the requested fix\"",
     "  lazy_subagents action=parallel children=[{agent:\"scout\",prompt:\"Inspect the package layout\"},{agent:\"reviewer\",prompt:\"Review the auth diff\"}]",
     "  lazy_subagents action=parallel children=[{agent:\"reviewer\",prompt:\"Review the diff\"},{agent:\"scout\",prompt:\"Find related docs\"},{agent:\"worker\",prompt:\"Prototype the isolated parser change\"}]",
@@ -410,6 +433,7 @@ export async function executeLazySubagentsCommand(
           prompt: parsed.prompt,
           title,
           taskSummary: title,
+          name: parsed.name,
         },
         ctx,
       );

@@ -89,6 +89,23 @@ describe("extension entrypoint", () => {
     expect(guidance).toContain("pin");
   });
 
+  test("tool schema exposes name parameter for named run addressing and continue", () => {
+    const { api, tools } = createPi();
+    lazySubagentsExtension(api as any);
+
+    const tool = tools.find((entry) => entry.name === TOOL_NAME);
+    expect(tool).toBeDefined();
+
+    // Verify the tool params schema exposes the name field
+    expect(tool.parameters.properties).toHaveProperty("name");
+
+    // Verify the prompt guidelines mention named runs and continue
+    const guidance = tool?.promptGuidelines.join("\n") ?? "";
+    expect(guidance).toContain("action=run name=<name>");
+    expect(guidance).toContain("follow-up via action=continue");
+    expect(guidance).toContain("action=continue target=<name");
+  });
+
   test("tool renderer shows wait progress details in the active tool row", () => {
     const { api, tools } = createPi();
     lazySubagentsExtension(api as any);
