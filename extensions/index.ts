@@ -2,7 +2,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
-import { DEFAULT_WAIT_TIMEOUT_MS, MAX_WAIT_TIMEOUT_MS, TOOL_NAME } from "../src/defaults.js";
+import { DEFAULT_WAIT_TIMEOUT_MS, MAX_WAIT_TIMEOUT_MS, RUN_NAME_PATTERN, TOOL_NAME } from "../src/defaults.js";
 import { DEFAULT_AGENT_PROFILE_NAME, resolveAgentProfileName } from "../src/launcher/agent-profiles.js";
 import { LazySubagentsController } from "../src/orchestration/controller.js";
 import { buildLazySubagentsAgentList, buildLazySubagentsHelp, executeLazySubagentsCommand, formatLaunchAcknowledgement, formatStatusReport, formatWaitReport } from "../src/orchestration/commands.js";
@@ -54,8 +54,8 @@ export const ToolParamsSchema = Type.Object({
     description: "Task for the child session. For action=run, describe the delegated work clearly and concisely, then let the child report completion or attention back asynchronously.",
   })),
   name: Type.Optional(Type.String({
-    description: "Stable name for this run, kept visible after completion for follow-up via action=continue. Must match /^[a-z0-9][a-z0-9_-]{0,63}$/. Use for long-lived review/rework agents.",
-    pattern: "^[a-z0-9][a-z0-9_-]{0,63}$",
+    description: `Stable name for this run, kept visible after completion for follow-up via action=continue. Must match /${RUN_NAME_PATTERN.source}/. Use for long-lived review/rework agents.`,
+    pattern: RUN_NAME_PATTERN.source,
   })),
   title: Type.Optional(Type.String({
     description: "Optional short label shown in the widget, status, and message cards.",
@@ -297,7 +297,7 @@ export default function lazySubagentsExtension(pi: ExtensionAPI): void {
           }
           const title = params.title ?? shortTitle(params.prompt);
           const run = await controller.continueChild(params.target, params.prompt, title, ctx);
-          return { content: [{ type: "text", text: formatLaunchAcknowledgement(`Continued ${run.id} (${run.agent}).`) }], details: { action: params.action, runId: run.id } };
+          return { content: [{ type: "text", text: formatLaunchAcknowledgement(`Continued ${run.id} (${run.agent}).`) }], details: { action: params.action, runId: run.id, agent: run.agent } };
         }
       }
     },

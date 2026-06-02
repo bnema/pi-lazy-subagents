@@ -42,7 +42,7 @@ pi --no-extensions -e /absolute/path/to/pi-lazy-subagents/extensions/index.ts
 /lazy-subagents help
 /lazy-subagents list
 /lazy-subagents run <agent> <prompt> [--title TITLE] [--name NAME]
-/lazy-subagents continue <target> <prompt> [--title TITLE]
+/lazy-subagents continue <name|runId> <prompt> [--title TITLE]
 /lazy-subagents status [runId]
 /lazy-subagents wait [runId] [--timeout-ms MS]
 /lazy-subagents result <runId>
@@ -132,9 +132,9 @@ lazy_subagents action=workflow maxConcurrency=2 steps=[{id:"triage",agent:"scout
 - `pickup` injects a completed result into chat.
 - `pin` keeps background progress visible without repeated status checks. Explicit pins add a durable progress card to chat; wait-time auto-pins use the tool row as the live surface.
 - completed successes auto-hide after a grace window; failed, paused, and pinned runs stay until resolved or cleared.
-- Named runs stay visible after completion for a bounded lease (default 30 min). Use `action=continue target=<name>` to send follow-up tasks before the lease expires.
+- Named runs stay visible after completion for a bounded lease (default 30 min). Use `action=continue target=<name|runId>` to send follow-up tasks before the lease expires; targets resolve by run id first, then by name.
 - Continuation reuses the existing child session so the agent has full context from prior turns.
-- Continuation is only supported for single named runs, not group or workflow runs.
+- Continuation is only supported for idle single runs. Active, expired, failed, cancelled, group, and workflow targets are rejected with a short `Cannot continue ...` error.
 
 ## Manual smoke test
 

@@ -984,6 +984,7 @@ export class LazySubagentsController {
       completedAt: undefined,
       resultPreview: undefined,
       errorPreview: undefined,
+      currentTool: undefined,
       attentionNeeded: false,
       leaseExpiry: newLeaseExpiry,
     });
