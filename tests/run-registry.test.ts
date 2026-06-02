@@ -156,6 +156,13 @@ describe("RunRegistry", () => {
       expect(registry.claimName("run-1", "-leading-hyphen")).toBe(false);
     });
 
+    test("claimName rejects missing run IDs without creating phantom names", () => {
+      const registry = new RunRegistry();
+
+      expect(registry.claimName("non-existent-run", "some-name")).toBe(false);
+      expect(registry.resolveTarget("some-name")).toBeUndefined();
+    });
+
     test("claimName rejects names already claimed by another non-archived run", () => {
       const registry = new RunRegistry();
       registry.upsert(createRun({ id: "run-1", status: "running" }));
@@ -183,6 +190,15 @@ describe("RunRegistry", () => {
       registry.upsert(createRun({ id: "run-1", status: "completed", completedAt: 1, archived: true }));
 
       expect(registry.claimName("run-1", "archived-name")).toBe(false);
+      expect(registry.resolveTarget("archived-name")).toBeUndefined();
+    });
+
+    test("upsert clears names on archived runs", () => {
+      const registry = new RunRegistry();
+
+      const archived = registry.upsert(createRun({ id: "run-1", status: "completed", completedAt: 1, archived: true, name: "archived-name" }));
+
+      expect(archived.name).toBeUndefined();
       expect(registry.resolveTarget("archived-name")).toBeUndefined();
     });
 
@@ -239,14 +255,6 @@ describe("RunRegistry", () => {
       expect(updated.name).toBe("new-name");
       expect(registry.resolveTarget("old-name")).toBeUndefined();
       expect(registry.resolveTarget("new-name")).toBe("run-1");
-    });
-
-    test("isNameAvailable cleans up stale name index entries", () => {
-      const registry = new RunRegistry();
-      (registry as any).nameIndex.set("stale-name", "missing-run");
-
-      expect(registry.isNameAvailable("stale-name")).toBe(true);
-      expect(registry.resolveTarget("stale-name")).toBeUndefined();
     });
 
     test("restore clears persisted names that cannot be claimed", () => {

@@ -1,7 +1,7 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { listAvailableAgentProfiles, resolveAgentProfileName } from "../launcher/agent-profiles.js";
-import { DEFAULT_WAIT_TIMEOUT_MS, MAX_WAIT_TIMEOUT_MS } from "../defaults.js";
+import { DEFAULT_WAIT_TIMEOUT_MS, MAX_WAIT_TIMEOUT_MS, RUN_NAME_PATTERN } from "../defaults.js";
 import type { RunEvent, RunRecord, RunRegistrySnapshot } from "../types.js";
 import { formatAge, formatCompactThousands, formatDuration } from "../utils/time.js";
 import type { LazySubagentsController } from "./controller.js";
@@ -168,6 +168,9 @@ export function parseLazySubagentsCommand(input: string): ParsedLazySubagentsCom
         title = token.slice("--title=".length);
         continue;
       }
+      if (token === "--name" || token.startsWith("--name=")) {
+        return { action: "help" };
+      }
       promptParts.push(token);
     }
 
@@ -214,6 +217,7 @@ export function parseLazySubagentsCommand(input: string): ParsedLazySubagentsCom
 
     const prompt = promptParts.join(" ").trim();
     if (!prompt) return { action: "help" };
+    if (name !== undefined && !RUN_NAME_PATTERN.test(name)) return { action: "help" };
     return { action, agent, prompt, title, name };
   }
 

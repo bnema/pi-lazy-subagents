@@ -568,7 +568,7 @@ describe("visibility helpers", () => {
 
     expect(lines[0]).toContain("lazy subagents");
     expect(lines[0]).toContain("1 live");
-    // expiresNamed and archived should NOT appear
+    // expiredNamed and archived should NOT appear
     expect(lines.join("\n")).not.toContain("stale-reviewer");
     expect(lines.join("\n")).not.toContain("Old review");
     expect(lines.join("\n")).not.toContain("Deleted");

@@ -13,6 +13,7 @@ describe("lazy_subagents tool schema", () => {
     expect(nameProp.type).toBe("string");
     expect(nameProp.pattern).toBe("^[a-z0-9][a-z0-9_-]{0,63}$");
     expect(nameProp.description).toContain("action=continue");
+    expect(nameProp.description).toMatch(/named run addressing/i);
   });
 
   test("workflow action exposes workflow steps and concurrency controls", () => {

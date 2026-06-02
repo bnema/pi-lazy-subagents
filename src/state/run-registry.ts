@@ -147,11 +147,14 @@ export class RunRegistry {
   upsert(run: RunRecord): RunRecord {
     const normalized = normalizeRun(run, this.recentEventLimit);
     const previous = this.runs.get(normalized.id);
-    if (previous?.name !== normalized.name) {
+    if (previous?.name !== normalized.name || normalized.archived) {
       this.releaseName(normalized.id);
     }
+    if (normalized.archived) {
+      normalized.name = undefined;
+    }
     this.runs.set(normalized.id, normalized);
-    if (normalized.name && !normalized.archived) {
+    if (normalized.name) {
       normalized.name = this.tryClaimName(normalized.id, normalized.name);
       this.runs.set(normalized.id, normalized);
     }

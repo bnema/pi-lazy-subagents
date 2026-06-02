@@ -818,9 +818,9 @@ export class LazySubagentsController {
 
   async launchWorkflow(request: ControllerLaunchWorkflowRequest, ctx: ExtensionContext): Promise<RunRecord> {
     this.captureContext(ctx);
+    assertValidWorkflowRequest(request);
     const nameReservation = this.reserveLaunchName(request.name);
     const normalizedName = nameReservation.normalizedName;
-    assertValidWorkflowRequest(request);
 
     const runId = this.createRunId();
     const timestamp = this.now();

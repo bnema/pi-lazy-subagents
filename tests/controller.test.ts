@@ -11,6 +11,7 @@ import { RunRegistry } from "../src/state/run-registry.js";
 import type { ContinueLaunchRequest, LaunchChildRequest, LaunchResult, Launcher, LauncherRuntimeContext, NormalizedRunUpdate } from "../src/launcher/interface.js";
 import type { RunRecord } from "../src/types.js";
 
+const __testHooks = controllerTestHooks;
 const trackedTempDirs: string[] = [];
 
 async function createTempDir(prefix: string): Promise<string> {
@@ -1905,14 +1906,16 @@ describe("continueChild", () => {
     const controller = new LazySubagentsController(api as any, { launcher, createRunId: () => "ignored", now: () => 100 });
     const { ctx } = createContext();
 
-    // Manually insert a group run into the registry
     const registry = new RunRegistry();
     registry.upsert(createRun({ id: "grp-1", kind: "group", status: "completed", completedAt: 50, launchRef: { runId: "grp-1", asyncId: "grp-1", asyncDir: "/tmp/grp-1" } }));
+    registry.upsert(createRun({ id: "wf-1", kind: "workflow", status: "completed", completedAt: 50, launchRef: { runId: "wf-1", asyncId: "wf-1", asyncDir: "/tmp/wf-1" } }));
     const persisted = createPersistedState(registry.serialize(), 10);
     await controller.handleSessionStart({ ...ctx, sessionManager: { ...ctx.sessionManager, getBranch: () => [{ type: "custom", customType: PERSISTED_STATE_ENTRY, data: persisted }] } });
 
     await expect(controller.continueChild("grp-1", "p", "t", ctx))
       .rejects.toThrow("Cannot continue group runs");
+    await expect(controller.continueChild("wf-1", "p", "t", ctx))
+      .rejects.toThrow("Cannot continue workflow runs");
   });
 
   test("rejects active runs", async () => {
@@ -2286,5 +2289,3 @@ describe("visibility helpers (shouldKeepRunVisibleInUi)", () => {
     expect(shouldKeepRunVisibleInUi(run, { isPinned: false, isAcknowledged: true, now: 3000 })).toBe(false);
   });
 });
-
-const __testHooks = controllerTestHooks;

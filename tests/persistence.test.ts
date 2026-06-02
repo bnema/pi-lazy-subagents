@@ -73,7 +73,7 @@ describe("persistence", () => {
     expect(restorePersistedState(null)).toEqual(createEmptyPersistedState());
   });
 
-  test("round-trips name, cwd, leaseExpiry, and archived fields", () => {
+  test("round-trips active names while archived runs release their names", () => {
     const registry = new RunRegistry();
     registry.upsert(createRun({
       id: "run-1",
@@ -112,7 +112,7 @@ describe("persistence", () => {
     expect(restoredRegistry.resolveTarget("archived-one")).toBeUndefined();
 
     const r2 = restoredRegistry.get("run-2")!;
-    expect(r2.name).toBe("archived-one");
+    expect(r2.name).toBeUndefined();
     expect(r2.cwd).toBe("/tmp");
     expect(r2.leaseExpiry).toBe(2_000_000);
     expect(r2.archived).toBe(true);

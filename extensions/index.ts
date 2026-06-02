@@ -54,7 +54,7 @@ export const ToolParamsSchema = Type.Object({
     description: "Task for the child session. For action=run, describe the delegated work clearly and concisely, then let the child report completion or attention back asynchronously.",
   })),
   name: Type.Optional(Type.String({
-    description: `Stable name for action=run single runs, kept visible after completion for follow-up via action=continue. Group and workflow runs cannot be continued by name. Must match /${RUN_NAME_PATTERN.source}/. Use for long-lived review/rework agents.`,
+    description: `Stable named run addressing name for action=run single runs, kept visible after completion for follow-up via action=continue. Group and workflow runs cannot be continued by name. Must match /${RUN_NAME_PATTERN.source}/. Use for long-lived review/rework agents.`,
     pattern: RUN_NAME_PATTERN.source,
   })),
   title: Type.Optional(Type.String({

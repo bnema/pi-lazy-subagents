@@ -136,6 +136,13 @@ describe("lazy-subagents command parsing", () => {
 
     expect(parseLazySubagentsCommand("continue")).toEqual({ action: "help" });
     expect(parseLazySubagentsCommand("continue my-agent")).toEqual({ action: "help" });
+    expect(parseLazySubagentsCommand('continue my-agent "prompt" --name another-name')).toEqual({ action: "help" });
+  });
+
+  test("rejects malformed run names in slash commands", () => {
+    expect(parseLazySubagentsCommand('run reviewer "Review" --name BadName')).toEqual({ action: "help" });
+    expect(parseLazySubagentsCommand('run reviewer "Review" --name -bad')).toEqual({ action: "help" });
+    expect(parseLazySubagentsCommand(`run reviewer "Review" --name ${"a".repeat(65)}`)).toEqual({ action: "help" });
   });
 
   test("parses list, run, status, wait, result, pickup, pin, clear, and cancel commands", () => {
