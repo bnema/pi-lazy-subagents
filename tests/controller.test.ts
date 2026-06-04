@@ -257,9 +257,9 @@ describe("LazySubagentsController", () => {
     const registry = new RunRegistry();
     registry.upsert(createRun({
       id: "branch-run",
-      status: "completed",
+      status: "running",
       updatedAt: 10,
-      completedAt: 10,
+      completedAt: undefined,
     }));
 
     const persisted = createPersistedState(registry.serialize(), 10);
@@ -280,7 +280,7 @@ describe("LazySubagentsController", () => {
     expect(renderRequests).toHaveLength(1);
   });
 
-  test("acknowledged named runs refresh out of the UI when their lease expires", async () => {
+  test("acknowledged named runs stay out of the UI and are released when their lease expires", async () => {
     vi.useFakeTimers();
     let clock = 1_000;
     const registry = new RunRegistry();
@@ -310,13 +310,13 @@ describe("LazySubagentsController", () => {
 
     try {
       await controller.handleSessionStart(ctx);
-      expect(widgets.at(-1)?.[1]?.join("\n")).toContain("Reusable reviewer");
+      expect(widgets.at(-1)).toBeUndefined();
 
       clock = 1_200;
       await vi.advanceTimersByTimeAsync(60);
       await Promise.resolve();
 
-      expect(widgets.at(-1)).toEqual([WIDGET_KEY, undefined]);
+      expect(widgets.at(-1)).toBeUndefined();
 
       const relaunched = await controller.launchChild({
         agent: "reviewer",
@@ -380,18 +380,18 @@ describe("LazySubagentsController", () => {
     firstRegistry.upsert(createRun({
       id: "branch-run-1",
       title: "First ready run",
-      status: "completed",
+      status: "running",
       updatedAt: 10,
-      completedAt: 10,
+      completedAt: undefined,
     }));
 
     const secondRegistry = new RunRegistry();
     secondRegistry.upsert(createRun({
       id: "branch-run-2",
       title: "Second ready run",
-      status: "completed",
+      status: "running",
       updatedAt: 20,
-      completedAt: 20,
+      completedAt: undefined,
     }));
 
     const branchEntries = [
@@ -604,6 +604,82 @@ describe("LazySubagentsController", () => {
     expect(wakeMessages[0]?.message.content).toContain("Result excerpt:\nFull reviewer report");
     expect(wakeMessages[0]?.message.content).not.toContain("Lazy subagent update");
     expect(wakeMessages[0]?.message.content).not.toContain("- Summary: Found 3 issues in auth.ts");
+  });
+
+  test("routes named successful completions without leaving inbox entries visible", async () => {
+    const { api, messages } = createPi();
+    const launcher = new FakeLauncher();
+    let clock = 100;
+    const controller = new LazySubagentsController(api as any, { launcher, createRunId: () => "run-1", now: () => clock });
+    const { ctx, widgets } = createContext({ isIdle: true, hasPendingMessages: false });
+
+    await controller.handleSessionStart(ctx);
+    await controller.launchChild(
+      {
+        agent: "reviewer",
+        title: "Tasked wrap-up follow-up",
+        taskSummary: "Tasked wrap-up follow-up",
+        prompt: "Review the follow-up.",
+        name: "tasked-follow-up",
+      },
+      ctx,
+    );
+
+    launcher.updates.set("run-1", {
+      runId: "run-1",
+      status: "completed",
+      updatedAt: 130,
+      completedAt: 130,
+      resultPreview: "Done",
+    });
+
+    await controller.pollOnce();
+    clock = 130 + 20 * 60_000;
+    await controller.pollOnce();
+
+    const widgetText = widgets.at(-1)?.[1]?.join("\n") ?? "";
+    expect(widgetText).not.toContain("Tasked wrap-up follow-up");
+    expect(widgetText).not.toContain("inbox");
+    expect(messages.filter((entry) => entry.message.customType === MESSAGE_TYPE_COMPLETION && entry.message.display === true)).toHaveLength(0);
+    const routedMessages = hiddenCompletionMessages(messages);
+    expect(routedMessages).toHaveLength(1);
+    expect(routedMessages[0]?.message.content).toContain("[DONE] Tasked wrap-up follow-up");
+    const run = controller.getSnapshot().runs.find((entry: RunRecord) => entry.id === "run-1");
+    expect(run?.name).toBe("tasked-follow-up");
+    expect(run?.leaseExpiry).toBeDefined();
+  });
+
+  test("keeps named failures visible", async () => {
+    const { api, messages } = createPi();
+    const launcher = new FakeLauncher();
+    const controller = new LazySubagentsController(api as any, { launcher, createRunId: () => "run-1", now: () => 100 });
+    const { ctx, widgets } = createContext({ isIdle: true, hasPendingMessages: false });
+
+    await controller.handleSessionStart(ctx);
+    await controller.launchChild(
+      {
+        agent: "reviewer",
+        title: "Tasked wrap-up follow-up",
+        taskSummary: "Tasked wrap-up follow-up",
+        prompt: "Review the follow-up.",
+        name: "tasked-follow-up",
+      },
+      ctx,
+    );
+
+    launcher.updates.set("run-1", {
+      runId: "run-1",
+      status: "failed",
+      updatedAt: 130,
+      completedAt: 130,
+      errorPreview: "boom",
+      attentionNeeded: true,
+    });
+
+    await controller.pollOnce();
+
+    expect(messages.filter((entry) => entry.message.customType === MESSAGE_TYPE_FAILURE && entry.message.display === true)).toHaveLength(1);
+    expect(widgets.at(-1)?.[1]?.join("\n") ?? "").toContain("Tasked wrap-up follow-up");
   });
 
   test("routes parallel group completion with all child report links and one aggregate summary", async () => {
@@ -999,7 +1075,7 @@ describe("LazySubagentsController", () => {
     expect(widgets.at(-1)?.[1]?.join("\n") ?? "").toContain("6.1k tok");
   });
 
-  test("keeps recent successful runs visible briefly, then hides them from live UI after the grace window", async () => {
+  test("routes restored successful runs without leaving them in live UI", async () => {
     const registry = new RunRegistry();
     registry.upsert(
       createRun({
@@ -1012,17 +1088,17 @@ describe("LazySubagentsController", () => {
       }),
     );
 
-    let clock = 20_000;
+    let clock = 10_000;
     const { api } = createPi();
     const launcher = new FakeLauncher();
     const controller = new LazySubagentsController(api as any, { launcher, now: () => clock });
     const { ctx, widgets } = createContext({
-      entries: [{ type: "custom", customType: PERSISTED_STATE_ENTRY, data: createPersistedState(registry.serialize(), 20_000) }],
-      branchEntries: [{ type: "custom", customType: PERSISTED_STATE_ENTRY, data: createPersistedState(registry.serialize(), 20_000) }],
+      entries: [{ type: "custom", customType: PERSISTED_STATE_ENTRY, data: createPersistedState(registry.serialize(), 10_000) }],
+      branchEntries: [{ type: "custom", customType: PERSISTED_STATE_ENTRY, data: createPersistedState(registry.serialize(), 10_000) }],
     });
 
     await controller.handleSessionStart(ctx);
-    expect(widgets.at(-1)?.[1]?.join("\n")).toContain("Done recent");
+    expect(widgets.at(-1)?.[1]?.join("\n") ?? "").not.toContain("Done recent");
 
     clock = 31_001;
     await controller.pollOnce();
@@ -1073,7 +1149,7 @@ describe("LazySubagentsController", () => {
     expect(widgetText).not.toContain("Done hidden");
     expect(widgetText).not.toContain("1 pinned");
     expect(widgetText).not.toContain("pinned · Done pinned");
-    expect(widgetText).toContain("Done pinned");
+    expect(widgetText).not.toContain("Done pinned");
     expect(widgetText).toContain("Failed visible");
   });
 
@@ -2444,7 +2520,7 @@ describe("visibility helpers (shouldKeepRunVisibleInUi)", () => {
     )).toBe(false);
   });
 
-  test("named completed runs are visible within lease expiry, even when acknowledged", () => {
+  test("named completed runs follow normal completion UI visibility while their lease remains resumable", () => {
     const run = createRun({
       id: "r1",
       status: "completed",
@@ -2452,10 +2528,9 @@ describe("visibility helpers (shouldKeepRunVisibleInUi)", () => {
       name: "my-agent",
       leaseExpiry: 2000,
     });
-    // Visible while lease is active — acknowledged doesn't hide it.
-    expect(shouldKeepRunVisibleInUi(run, { isPinned: false, isAcknowledged: true, now: 1500 })).toBe(true);
-    // Visible while lease is active — unacknowledged.
+    expect(shouldKeepRunVisibleInUi(run, { isPinned: false, isAcknowledged: true, now: 1500 })).toBe(false);
     expect(shouldKeepRunVisibleInUi(run, { isPinned: false, isAcknowledged: false, now: 1500 })).toBe(true);
+    expect(shouldKeepRunVisibleInUi(run, { isPinned: false, isAcknowledged: false, now: 30_501 })).toBe(false);
   });
 
   test("named completed runs are hidden immediately after lease expiry", () => {
@@ -2466,10 +2541,10 @@ describe("visibility helpers (shouldKeepRunVisibleInUi)", () => {
       name: "my-agent",
       leaseExpiry: 1000,
     });
-    expect(shouldKeepRunVisibleInUi(run, { isPinned: false, isAcknowledged: false, now: 1029 })).toBe(false);
+    expect(shouldKeepRunVisibleInUi(run, { isPinned: false, isAcknowledged: false, now: 31_000 })).toBe(false);
   });
 
-  test("named completed runs derive lease expiry from completedAt when missing", () => {
+  test("named completed runs with derived leases still hide when acknowledged", () => {
     const run = createRun({
       id: "r1",
       status: "completed",
@@ -2477,8 +2552,7 @@ describe("visibility helpers (shouldKeepRunVisibleInUi)", () => {
       name: "my-agent",
       leaseExpiry: undefined,
     });
-    expect(shouldKeepRunVisibleInUi(run, { isPinned: false, isAcknowledged: true, now: 500 + DEFAULT_NAMED_RUN_LEASE_MS })).toBe(true);
-    expect(shouldKeepRunVisibleInUi(run, { isPinned: false, isAcknowledged: true, now: 501 + DEFAULT_NAMED_RUN_LEASE_MS })).toBe(false);
+    expect(shouldKeepRunVisibleInUi(run, { isPinned: false, isAcknowledged: true, now: 500 + DEFAULT_NAMED_RUN_LEASE_MS })).toBe(false);
   });
 
   test("named completed runs past lease expiry are hidden when acknowledged", () => {
@@ -2507,7 +2581,8 @@ describe("visibility helpers (shouldKeepRunVisibleInUi)", () => {
       name: "my-agent",
       leaseExpiry: 2000,
     });
-    expect(shouldKeepRunVisibleInUi(run, { isPinned: false, isAcknowledged: true, now: 1500 })).toBe(true);
-    expect(shouldKeepRunVisibleInUi(run, { isPinned: false, isAcknowledged: true, now: 3000 })).toBe(false);
+    expect(shouldKeepRunVisibleInUi(run, { isPinned: false, isAcknowledged: true, now: 1500 })).toBe(false);
+    expect(shouldKeepRunVisibleInUi(run, { isPinned: false, isAcknowledged: false, now: 1500 })).toBe(true);
+    expect(shouldKeepRunVisibleInUi(run, { isPinned: false, isAcknowledged: false, now: 30_501 })).toBe(false);
   });
 });

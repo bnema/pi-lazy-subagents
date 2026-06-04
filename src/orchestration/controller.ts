@@ -536,13 +536,6 @@ function shouldKeepRunVisibleInUi(
   if (run.attentionNeeded) return true;
   if (run.status === "failed" || run.status === "paused") return true;
 
-  // Named completed runs stay visible until their effective lease expiry, even if acknowledged.
-  if (run.name && (run.status === "completed" || run.status === "skipped")) {
-    const leaseExpiry = computeLeaseExpiry(run);
-    if (leaseExpiry !== undefined) return options.now <= leaseExpiry;
-    return run.completedAt === undefined;
-  }
-
   if (run.status !== "completed" && run.status !== "skipped") return false;
   if (options.isAcknowledged) return false;
   if (run.completedAt === undefined) return true;
@@ -1479,7 +1472,9 @@ export class LazySubagentsController {
     if (run.status === "completed" || run.status === "skipped") {
       this.registry.unpinRun(run.id);
       this.surfacedPinnedMessages.delete(run.id);
-      this.sendVisiblePayload(createCompletionMessagePayload(run));
+      if (!run.name) {
+        this.sendVisiblePayload(createCompletionMessagePayload(run));
+      }
     } else if (run.status === "failed") {
       this.sendVisiblePayload(createFailureMessagePayload(run));
     } else if (run.status === "paused") {
@@ -1509,6 +1504,10 @@ export class LazySubagentsController {
       triggerTurn: isIdle && !hasPendingMessages,
       deliverAs: decision.deliverAs,
     });
+
+    if (run.status === "completed" || run.status === "skipped") {
+      this.registry.acknowledgeRun(run.id);
+    }
   }
 
   private async readArtifactText(run: RunRecord): Promise<string | undefined> {

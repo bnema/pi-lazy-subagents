@@ -381,7 +381,7 @@ describe("visibility helpers", () => {
     expect(formatRunMessageBody(malformed as any, true)).toBe("42");
   });
 
-  test("named completed run stays visible within lease", () => {
+  test("named completed run uses completion visibility instead of lease visibility", () => {
     const namedCompleted = createRun({
       id: "named-1",
       status: "completed",
@@ -390,19 +390,23 @@ describe("visibility helpers", () => {
       completedAt: 50_000,
     });
 
-    // At time 60_000 (well within lease of 100_000)
     expect(__testHooks.shouldKeepRunVisibleInUi(namedCompleted, {
       isPinned: false,
       isAcknowledged: true,
       now: 60_000,
-    })).toBe(true);
+    })).toBe(false);
 
-    // At time 60_000, not acknowledged — still visible (lease hasn't expired)
     expect(__testHooks.shouldKeepRunVisibleInUi(namedCompleted, {
       isPinned: false,
       isAcknowledged: false,
       now: 60_000,
     })).toBe(true);
+
+    expect(__testHooks.shouldKeepRunVisibleInUi(namedCompleted, {
+      isPinned: false,
+      isAcknowledged: false,
+      now: 90_001,
+    })).toBe(false);
   });
 
   test("named completed run hides immediately after lease expiry", () => {
@@ -428,11 +432,11 @@ describe("visibility helpers", () => {
       now: 130_000,
     })).toBe(false);
 
-    // At time 100_500 (just after lease expiry), named runs are no longer visible or resumable.
+    // Past the normal completion grace window, named runs are no longer visible.
     expect(__testHooks.shouldKeepRunVisibleInUi(namedCompleted, {
       isPinned: false,
       isAcknowledged: false,
-      now: 100_500,
+      now: 130_000,
     })).toBe(false);
   });
 
@@ -526,7 +530,7 @@ describe("visibility helpers", () => {
       agent: "reviewer",
       name: "diff-reviewer",
       leaseExpiry: 150_000,
-      completedAt: 90_000,
+      completedAt: 60_000,
       title: "Review auth diff",
     });
     const expiredNamed = createRun({
@@ -556,8 +560,8 @@ describe("visibility helpers", () => {
 
     const snapshot = createSnapshot(visibleRuns);
 
-    // Should have: active (running) + namedWithinLease (completed, within lease)
-    expect(visibleRuns.map((r) => r.id)).toEqual(["run-1", "named-1"]);
+    // Should only show active runs; named completed leases preserve resumability, not inbox visibility.
+    expect(visibleRuns.map((r) => r.id)).toEqual(["run-1"]);
 
     // Widget should still build
     const lines = buildWidgetLines(snapshot, now, 6, {
