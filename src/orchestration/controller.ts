@@ -532,7 +532,7 @@ function shouldKeepRunVisibleInUi(
 ): boolean {
   if (!isTerminalStatus(run.status)) return true;
   if (run.archived) return false;
-  if (options.isPinned) return true;
+  if (options.isPinned && run.status !== "completed" && run.status !== "skipped") return true;
   if (run.attentionNeeded) return true;
   if (run.status === "failed" || run.status === "paused") return true;
 
@@ -1089,9 +1089,9 @@ export class LazySubagentsController {
       leaseExpiry: newLeaseExpiry,
     });
     this.registry.recordEvent(runId, buildLaunchEvent(stored, now));
+    this.persistState();
     try {
       this.sendVisiblePayload(createLaunchMessagePayload(stored));
-      this.persistState();
       this.renderUi(ctx);
     } catch (error) {
       console.warn("[pi-lazy-subagents] failed to emit continuation launch UI state:", error);
@@ -1227,6 +1227,16 @@ export class LazySubagentsController {
     const run = this.registry.get(runId);
     if (!run) return false;
     const shouldSendMessage = options.sendMessage ?? true;
+    if (run.status === "completed" || run.status === "skipped") {
+      if (this.registry.isPinned(runId)) {
+        this.registry.unpinRun(runId);
+        this.surfacedPinnedMessages.delete(runId);
+        this.persistState();
+      }
+      this.renderUi();
+      return true;
+    }
+
     const alreadyPinned = this.registry.isPinned(runId);
 
     if (!alreadyPinned) {
@@ -1467,6 +1477,8 @@ export class LazySubagentsController {
     if (!this.registry.markCompletionSurfaced(run.id, fingerprint)) return;
 
     if (run.status === "completed" || run.status === "skipped") {
+      this.registry.unpinRun(run.id);
+      this.surfacedPinnedMessages.delete(run.id);
       this.sendVisiblePayload(createCompletionMessagePayload(run));
     } else if (run.status === "failed") {
       this.sendVisiblePayload(createFailureMessagePayload(run));
@@ -1634,10 +1646,23 @@ export class LazySubagentsController {
     });
   }
 
+  private unpinTerminalSuccesses(): boolean {
+    let changed = false;
+    for (const run of this.registry.snapshot().runs) {
+      if ((run.status === "completed" || run.status === "skipped") && this.registry.isPinned(run.id)) {
+        this.registry.unpinRun(run.id);
+        this.surfacedPinnedMessages.delete(run.id);
+        changed = true;
+      }
+    }
+    return changed;
+  }
+
   private cleanupExpiredNamedRunLeases(now = this.now()): boolean {
     const removed = this.registry.clearRuns((run) => {
       const leaseExpiry = computeLeaseExpiry(run);
       return Boolean(run.name)
+        && !this.registry.isPinned(run.id)
         && (run.status === "completed" || run.status === "skipped")
         && leaseExpiry !== undefined
         && now > leaseExpiry;
@@ -1682,9 +1707,10 @@ export class LazySubagentsController {
     this.registry = new RunRegistry({}, persisted);
     this.progressLines.clear();
     this.progressStats.clear();
+    const unpinnedTerminalSuccesses = this.unpinTerminalSuccesses();
     const releasedExpiredNames = this.cleanupExpiredNamedRunLeases();
     const removedAcknowledgedRuns = this.cleanupAcknowledgedCompletedRuns();
-    if (releasedExpiredNames || removedAcknowledgedRuns) this.persistState();
+    if (unpinnedTerminalSuccesses || releasedExpiredNames || removedAcknowledgedRuns) this.persistState();
     this.syncTrackedLaunchesFromSnapshot();
 
     for (const run of this.registry.snapshot().runs) {
