@@ -19,8 +19,7 @@ async function appendLine(filePath, line) {
   await fs.appendFile(filePath, `${line}\n`, "utf8");
 }
 
-async function findLatestSessionFile(sessionDir, excludedSessionFile) {
-  const excludedPath = excludedSessionFile ? path.resolve(excludedSessionFile) : undefined;
+async function findLatestSessionFile(sessionDir) {
   try {
     const entries = await fs.readdir(sessionDir, { withFileTypes: true });
     const files = await Promise.all(
@@ -28,21 +27,20 @@ async function findLatestSessionFile(sessionDir, excludedSessionFile) {
         .filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
         .map(async (entry) => {
           const fullPath = path.join(sessionDir, entry.name);
-          if (excludedPath && path.resolve(fullPath) === excludedPath) return undefined;
           const stats = await fs.stat(fullPath);
           return { fullPath, mtimeMs: stats.mtimeMs };
         }),
     );
-    const candidates = files.filter(Boolean);
-    candidates.sort((left, right) => right.mtimeMs - left.mtimeMs);
-    return candidates[0]?.fullPath;
+    files.sort((left, right) => right.mtimeMs - left.mtimeMs);
+    return files[0]?.fullPath;
   } catch {
     return undefined;
   }
 }
 
 export async function resolveCompletedSessionFile(sessionDir, continueSessionFile) {
-  return await findLatestSessionFile(sessionDir, continueSessionFile) ?? continueSessionFile;
+  if (continueSessionFile) return continueSessionFile;
+  return await findLatestSessionFile(sessionDir);
 }
 
 function extractAssistantText(message) {

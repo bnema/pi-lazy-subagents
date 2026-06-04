@@ -91,18 +91,24 @@ describe("RunRegistry", () => {
     expect(registry.get("run-2")).toBeUndefined();
   });
 
-  test("prunes old terminal runs while keeping active ones and the most recent terminal records", () => {
+  test("prunes old disposable terminal runs while keeping active and protected terminal records", () => {
     const registry = new RunRegistry({ completedRetentionLimit: 2, recentRunLimit: 2 });
 
     registry.upsert(createRun({ id: "old-complete", status: "completed", updatedAt: 1, completedAt: 1 }));
     registry.upsert(createRun({ id: "recent-failed", status: "failed", updatedAt: 2, completedAt: 2 }));
-    registry.upsert(createRun({ id: "newest-complete", status: "completed", updatedAt: 3, completedAt: 3 }));
-    registry.upsert(createRun({ id: "still-running", status: "running", updatedAt: 4 }));
+    registry.upsert(createRun({ id: "named-complete", status: "completed", name: "reviewer", updatedAt: 3, completedAt: 3, leaseExpiry: 10_000 }));
+    registry.upsert(createRun({ id: "attention-complete", status: "completed", attentionNeeded: true, updatedAt: 4, completedAt: 4 }));
+    registry.upsert(createRun({ id: "newer-complete", status: "completed", updatedAt: 5, completedAt: 5 }));
+    registry.upsert(createRun({ id: "newest-complete", status: "completed", updatedAt: 6, completedAt: 6 }));
+    registry.upsert(createRun({ id: "still-running", status: "running", updatedAt: 7 }));
 
     registry.prune();
 
     expect(registry.get("old-complete")).toBeUndefined();
     expect(registry.get("recent-failed")?.status).toBe("failed");
+    expect(registry.get("named-complete")?.name).toBe("reviewer");
+    expect(registry.get("attention-complete")?.attentionNeeded).toBe(true);
+    expect(registry.get("newer-complete")?.status).toBe("completed");
     expect(registry.get("newest-complete")?.status).toBe("completed");
     expect(registry.get("still-running")?.status).toBe("running");
   });

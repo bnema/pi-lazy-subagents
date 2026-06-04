@@ -84,7 +84,7 @@ describe("direct runner stdout processing", () => {
     }
   });
 
-  test("prefers the latest child session file over the provided continuation file", async () => {
+  test("keeps the provided continuation file even when older sibling session files exist", async () => {
     const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-lazy-subagents-session-file-"));
     try {
       const oldSessionFile = path.join(sessionDir, "old.jsonl");
@@ -94,10 +94,10 @@ describe("direct runner stdout processing", () => {
       await fs.writeFile(latestSessionFile, "latest", "utf8");
       await fs.writeFile(continuedSessionFile, "continued", "utf8");
       await fs.utimes(oldSessionFile, new Date(1_000), new Date(1_000));
-      await fs.utimes(latestSessionFile, new Date(2_000), new Date(2_000));
-      await fs.utimes(continuedSessionFile, new Date(3_000), new Date(3_000));
+      await fs.utimes(latestSessionFile, new Date(3_000), new Date(3_000));
+      await fs.utimes(continuedSessionFile, new Date(2_000), new Date(2_000));
 
-      expect(await resolveCompletedSessionFile(sessionDir, continuedSessionFile)).toBe(latestSessionFile);
+      expect(await resolveCompletedSessionFile(sessionDir, continuedSessionFile)).toBe(continuedSessionFile);
     } finally {
       await fs.rm(sessionDir, { recursive: true, force: true });
     }

@@ -53,6 +53,12 @@ function isTerminalStatus(status: RunStatus): boolean {
   return TERMINAL_STATUSES.has(status);
 }
 
+function isPrunableTerminalRun(run: RunRecord): boolean {
+  return (run.status === "completed" || run.status === "skipped" || run.status === "cancelled")
+    && !run.attentionNeeded
+    && !run.name;
+}
+
 function sortByUpdatedAtDescending(left: RunRecord, right: RunRecord): number {
   return right.updatedAt - left.updatedAt || right.startedAt - left.startedAt || left.id.localeCompare(right.id);
 }
@@ -351,11 +357,11 @@ export class RunRegistry {
   }
 
   prune(): void {
-    const terminalRuns = [...this.runs.values()].filter((run) => isTerminalStatus(run.status)).sort(sortByUpdatedAtDescending);
-    const keepTerminalIds = new Set(terminalRuns.slice(0, this.completedRetentionLimit).map((run) => run.id));
+    const prunableTerminalRuns = [...this.runs.values()].filter((run) => isPrunableTerminalRun(run)).sort(sortByUpdatedAtDescending);
+    const keepTerminalIds = new Set(prunableTerminalRuns.slice(0, this.completedRetentionLimit).map((run) => run.id));
 
     for (const [runId, run] of this.runs.entries()) {
-      if (isTerminalStatus(run.status) && !keepTerminalIds.has(runId) && !this.pinnedRunIds.has(runId)) {
+      if (isPrunableTerminalRun(run) && !keepTerminalIds.has(runId) && !this.pinnedRunIds.has(runId)) {
         this.clearRunMetadata(runId);
         this.runs.delete(runId);
       }
@@ -441,5 +447,6 @@ export class RunRegistry {
 export const __testHooks = {
   isActiveStatus,
   isTerminalStatus,
+  isPrunableTerminalRun,
   mergeRecentEvents,
 };
