@@ -1212,14 +1212,25 @@ export class LazySubagentsController {
   }
 
   async pinRun(runId: string, ctx?: ExtensionContext): Promise<boolean> {
-    return await this.surfacePinnedRun(runId, ctx);
+    return (await this.pinRunWithOutcome(runId, ctx)) === "pinned";
+  }
+
+  async pinRunWithOutcome(runId: string, ctx?: ExtensionContext): Promise<"pinned" | "not_found" | "not_pinnable"> {
+    if (ctx) this.captureContext(ctx);
+    const run = this.registry.get(runId);
+    if (!run) return "not_found";
+    if (run.status === "completed" || run.status === "skipped") {
+      await this.surfacePinnedRun(runId, ctx, { sendMessage: false });
+      return "not_pinnable";
+    }
+    return (await this.surfacePinnedRun(runId, ctx, { sendMessage: false })) ? "pinned" : "not_found";
   }
 
   private async surfacePinnedRun(runId: string, ctx?: ExtensionContext, options: { sendMessage?: boolean } = {}): Promise<boolean> {
     if (ctx) this.captureContext(ctx);
     const run = this.registry.get(runId);
     if (!run) return false;
-    const shouldSendMessage = options.sendMessage ?? true;
+    const shouldSendMessage = options.sendMessage ?? false;
     if (run.status === "completed" || run.status === "skipped") {
       if (this.registry.isPinned(runId)) {
         this.registry.unpinRun(runId);
@@ -1263,6 +1274,16 @@ export class LazySubagentsController {
       progressLines: this.progressLines.get(runId),
       progressStats: this.progressStats.get(runId),
     }).lines;
+  }
+
+  private getPinnedProgressLines(runId: string): string[] {
+    const run = this.registry.get(runId);
+    if (!run) return [];
+
+    return buildLiveRunViewModel(run, {
+      progressLines: this.progressLines.get(runId),
+      progressStats: this.progressStats.get(runId),
+    }).detailLines;
   }
 
   async cancelRun(runId: string, ctx?: ExtensionContext): Promise<boolean> {
@@ -1811,9 +1832,12 @@ export class LazySubagentsController {
 
     const snapshot = this.getLiveUiSnapshot();
     const timestamp = this.now();
-    const widgetOptions = { isPinned: (runId: string) => this.registry.isPinned(runId) };
+    const widgetOptions = {
+      isPinned: (runId: string) => this.registry.isPinned(runId),
+      getPinnedProgressLines: (runId: string) => this.getPinnedProgressLines(runId),
+    };
     const status = buildFooterStatus(snapshot, ctx.ui.theme);
-    const widgetLines = buildWidgetLines(snapshot, timestamp, 6, ctx.ui.theme, widgetOptions);
+    const widgetLines = buildWidgetLines(snapshot, timestamp, 7, ctx.ui.theme, widgetOptions);
     const widgetSignature = widgetLines.length > 0 ? JSON.stringify(widgetLines) : undefined;
 
     const statusChanged = status !== this.renderedStatus;
@@ -1825,7 +1849,7 @@ export class LazySubagentsController {
       this.renderedStatus = status;
     }
     if (widgetChanged) {
-      ctx.ui.setWidget(WIDGET_KEY, createWidgetContent(snapshot, timestamp, 6, widgetOptions));
+      ctx.ui.setWidget(WIDGET_KEY, createWidgetContent(snapshot, timestamp, 7, widgetOptions));
       this.renderedWidgetSignature = widgetSignature;
     }
 

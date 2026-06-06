@@ -292,11 +292,18 @@ export default function lazySubagentsExtension(pi: ExtensionAPI): void {
             content: [{ type: "text", text: params.runId && await controller.pickupRun(params.runId, ctx) ? `Injected result from ${params.runId} into chat.` : `Run not found: ${params.runId ?? "(missing runId)"}` }],
             details: { action: params.action, runId: params.runId },
           };
-        case "pin":
+        case "pin": {
+          const outcome = params.runId ? await controller.pinRunWithOutcome(params.runId, ctx) : "not_found";
+          const text = outcome === "pinned"
+            ? `Pinned ${params.runId} in widget.`
+            : outcome === "not_pinnable"
+              ? `Run already complete: ${params.runId} is not pinned in widget.`
+              : `Run not found: ${params.runId ?? "(missing runId)"}`;
           return {
-            content: [{ type: "text", text: params.runId && await controller.pinRun(params.runId, ctx) ? `Pinned ${params.runId} into chat.` : `Run not found: ${params.runId ?? "(missing runId)"}` }],
+            content: [{ type: "text", text }],
             details: { action: params.action, runId: params.runId },
           };
+        }
         case "clear": {
           const cleared = controller.clearRuns(params.scope ?? "completed", params.runId);
           return { content: [{ type: "text", text: cleared > 0 ? `Cleared ${cleared} run(s).` : "Nothing to clear." }], details: { action: params.action, cleared } };

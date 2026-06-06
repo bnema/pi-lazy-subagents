@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 
 import { __testHooks } from "../src/orchestration/controller.js";
 import { buildFooterStatus } from "../src/ui/status.js";
@@ -11,14 +11,11 @@ import {
   renderRunMessageText,
 } from "../src/ui/messages.js";
 import {
-  GLYPH_INBOX,
   GLYPH_LAZY_SUBAGENTS,
   GLYPH_PINNED,
-  GLYPH_RUNNING,
-  GLYPH_WAITING,
 } from "../src/ui/glyphs.js";
 import { buildLiveRunViewModel } from "../src/ui/live-run-view-model.js";
-import { buildWidgetLines } from "../src/ui/widget.js";
+import { buildWidgetLines, createWidgetContent } from "../src/ui/widget.js";
 import { MESSAGE_TYPE_PIN } from "../src/defaults.js";
 import type { RunRecord, RunRegistrySnapshot } from "../src/types.js";
 
@@ -116,27 +113,157 @@ describe("visibility helpers", () => {
       bold: (text: string) => `*${text}*`,
     } as any);
 
+    expect(lines).toHaveLength(1);
     expect(lines[0]).toContain(`<${GLYPH_LAZY_SUBAGENTS}>`);
-    expect(lines[0]).toContain("lazy subagents");
-    expect(lines[0]).toContain("1 live");
-    expect(lines[0]).not.toContain("2 live");
+    expect(lines[0]).toContain("Lazy");
+    expect(lines[0]).toContain("1 running");
+    expect(lines[0]).not.toContain("2 running");
     expect(lines[0]).toContain("attention");
     expect(lines[0]).toContain("inbox");
-    expect(lines[1]).toContain(`<${GLYPH_WAITING}>`);
-    expect(lines[1]).toContain("waiting");
-    expect(lines[1]).toContain("Needs human input");
-    expect(lines[1]).toContain("quiet 8s");
-    expect(lines[2]).toContain(`<${GLYPH_RUNNING}>`);
-    expect(lines[2]).toContain("live");
-    expect(lines[2]).toContain("Research auth flow");
-    expect(lines[2]).toContain("read");
-    expect(lines[2]).toContain("3 tools");
-    expect(lines[2]).toContain("1.2k");
-    expect(lines[2]).not.toContain("upd ");
-    expect(lines[3]).toContain(`<${GLYPH_INBOX}>`);
-    expect(lines[3]).toContain("inbox");
-    expect(lines[3]).toContain("Plan done");
-    expect(lines[3]).toContain("done 2s ago");
+    expect(lines[0]).toContain("Needs human input");
+  });
+
+  test("renders persistent Lazy widget as one compact running row", () => {
+    const running = createRun({
+      id: "run-1",
+      status: "running",
+      startedAt: 50_000,
+      updatedAt: 59_000,
+      title: "Research auth flow",
+    });
+    const snapshot = createSnapshot([running]);
+
+    const lines = buildWidgetLines(snapshot, 60_000, 6, {
+      fg: (_color: string, text: string) => `<${text}>`,
+      dim: (text: string) => `(${text})`,
+      muted: (text: string) => `{${text}}`,
+      bold: (text: string) => `*${text}*`,
+    } as any);
+    const content = createWidgetContent(snapshot, 60_000, 6);
+    const rendered = content?.({} as any, {
+      fg: (_color: string, text: string) => `<${text}>`,
+      dim: (text: string) => `(${text})`,
+      muted: (text: string) => `{${text}}`,
+      bold: (text: string) => `*${text}*`,
+    } as any).render(160) ?? [];
+
+    expect(lines).toHaveLength(1);
+    expect(rendered).toHaveLength(1);
+    expect(lines[0]).toContain(`<${GLYPH_LAZY_SUBAGENTS}>`);
+    expect(lines[0]).toContain("Lazy");
+    expect(lines[0]).toContain("│");
+    expect(lines[0]).toContain("1 running");
+    expect(lines[0]).toContain("Research auth flow");
+    expect(lines[0]).not.toContain("lazy subagents");
+    expect(lines[0]).not.toContain("live");
+  });
+
+  test("animates running dots and disposes the widget timer", () => {
+    vi.useFakeTimers();
+    try {
+      const running = createRun({
+        id: "run-1",
+        status: "running",
+        startedAt: 50_000,
+        updatedAt: 59_000,
+        title: "Research auth flow",
+      });
+      const snapshot = createSnapshot([running]);
+      const requestRender = vi.fn();
+      const component = createWidgetContent(snapshot, 60_000, 6)?.({ requestRender }, {
+        fg: (_color: string, text: string) => text,
+        dim: (text: string) => text,
+        muted: (text: string) => text,
+        bold: (text: string) => text,
+      } as any);
+
+      expect(component).toBeDefined();
+      const firstRender = component!.render(160).join("\n");
+      vi.advanceTimersByTime(450);
+      expect(requestRender).toHaveBeenCalledTimes(1);
+      const secondRender = component!.render(160).join("\n");
+      expect(secondRender).not.toBe(firstRender);
+      expect(secondRender).toContain("1 running.");
+
+      component!.dispose?.();
+      requestRender.mockClear();
+      vi.advanceTimersByTime(900);
+      expect(requestRender).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("renders a pinned panel above the compact Lazy row with four latest rail-prefixed progress lines", () => {
+    const pinned = createRun({
+      id: "run-pin",
+      status: "running",
+      startedAt: 50_000,
+      updatedAt: 59_000,
+      title: "Review auth diff",
+      recentEvents: [
+        { id: "event-1", category: "progress", timestamp: 1, summary: "oldest progress", status: "running" },
+        { id: "event-2", category: "progress", timestamp: 2, summary: "scan auth routes", status: "running" },
+        { id: "event-3", category: "progress", timestamp: 3, summary: "inspect token flow", status: "running" },
+        { id: "event-4", category: "progress", timestamp: 4, summary: "compare session handling", status: "running" },
+        { id: "event-5", category: "progress", timestamp: 5, summary: "write review notes", status: "running" },
+      ],
+    });
+    const snapshot = createSnapshot([pinned]);
+
+    const lines = buildWidgetLines(snapshot, 60_000, 8, undefined, { isPinned: (runId) => runId === "run-pin" });
+
+    expect(lines[0]).toContain(GLYPH_PINNED);
+    expect(lines[0]).toContain("Review auth diff");
+    expect(lines[1]).toBe("│ scan auth routes");
+    expect(lines[2]).toBe("│ inspect token flow");
+    expect(lines[3]).toBe("│ compare session handling");
+    expect(lines[4]).toBe("│ write review notes");
+    expect(lines.filter((line) => line.startsWith("│ "))).toHaveLength(4);
+    expect(lines[5]).toContain(GLYPH_LAZY_SUBAGENTS);
+    expect(lines[5]).toContain("Lazy");
+    expect(lines[5]).toContain("1 running");
+  });
+
+  test("renders one detailed pinned panel plus a compact more pinned indicator for multiple pinned runs", () => {
+    const firstPinned = createRun({
+      id: "run-pin-1",
+      status: "running",
+      startedAt: 50_000,
+      updatedAt: 59_000,
+      title: "Review auth diff",
+      recentEvents: [
+        { id: "event-1", category: "progress", timestamp: 1, summary: "inspect diff", status: "running" },
+        { id: "event-2", category: "progress", timestamp: 2, summary: "draft findings", status: "running" },
+      ],
+    });
+    const secondPinned = createRun({
+      id: "run-pin-2",
+      status: "running",
+      startedAt: 51_000,
+      updatedAt: 58_000,
+      title: "Trace login bug",
+    });
+    const thirdPinned = createRun({
+      id: "run-pin-3",
+      status: "running",
+      startedAt: 52_000,
+      updatedAt: 57_000,
+      title: "Audit settings copy",
+    });
+    const snapshot = createSnapshot([firstPinned, secondPinned, thirdPinned]);
+
+    const lines = buildWidgetLines(snapshot, 60_000, 8, undefined, { isPinned: (runId) => runId.startsWith("run-pin-") });
+    const text = lines.join("\n");
+
+    expect(lines[0]).toContain(GLYPH_PINNED);
+    expect(lines[0]).toContain("Review auth diff");
+    expect(text).toContain("│ inspect diff");
+    expect(text).toContain("│ draft findings");
+    expect(text).toContain("2 more pinned");
+    expect(text).not.toContain("Trace login bug");
+    expect(text).not.toContain("Audit settings copy");
+    expect(lines.at(-1)).toContain(GLYPH_LAZY_SUBAGENTS);
   });
 
   test("formats launch, completion, and failure message payloads", () => {
@@ -571,8 +698,8 @@ describe("visibility helpers", () => {
       bold: (text: string) => `*${text}*`,
     } as any);
 
-    expect(lines[0]).toContain("lazy subagents");
-    expect(lines[0]).toContain("1 live");
+    expect(lines[0]).toContain("Lazy");
+    expect(lines[0]).toContain("1 running");
     // expiredNamed and archived should NOT appear
     expect(lines.join("\n")).not.toContain("stale-reviewer");
     expect(lines.join("\n")).not.toContain("Old review");

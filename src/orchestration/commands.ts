@@ -428,10 +428,12 @@ export async function executeLazySubagentsCommand(
       return (await controller.pickupRun(parsed.runId, ctx))
         ? `Injected result from ${parsed.runId} into chat.`
         : `Run not found: ${parsed.runId}`;
-    case "pin":
-      return (await controller.pinRun(parsed.runId, ctx))
-        ? `Pinned ${parsed.runId} into chat.`
-        : `Run not found: ${parsed.runId}`;
+    case "pin": {
+      const outcome = await controller.pinRunWithOutcome(parsed.runId, ctx);
+      if (outcome === "pinned") return `Pinned ${parsed.runId} in widget.`;
+      if (outcome === "not_pinnable") return `Run already complete: ${parsed.runId} is not pinned in widget.`;
+      return `Run not found: ${parsed.runId}`;
+    }
     case "cancel":
       return (await controller.cancelRun(parsed.runId, ctx))
         ? `Cancelled ${parsed.runId}.`

@@ -6,6 +6,8 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { DEFAULT_NAMED_RUN_LEASE_MS, MESSAGE_TYPE_ATTENTION, MESSAGE_TYPE_COMPLETION, MESSAGE_TYPE_FAILURE, MESSAGE_TYPE_LAUNCH, MESSAGE_TYPE_PIN, PERSISTED_STATE_ENTRY, STATUS_KEY, WIDGET_KEY } from "../src/defaults.js";
 import { LazySubagentsController, __testHooks as controllerTestHooks } from "../src/orchestration/controller.js";
+import { executeLazySubagentsCommand } from "../src/orchestration/commands.js";
+import { GLYPH_PINNED } from "../src/ui/glyphs.js";
 import { createPersistedState } from "../src/state/persistence.js";
 import { RunRegistry } from "../src/state/run-registry.js";
 import type { ContinueLaunchRequest, LaunchChildRequest, LaunchResult, Launcher, LauncherRuntimeContext, NormalizedRunUpdate } from "../src/launcher/interface.js";
@@ -1460,10 +1462,81 @@ describe("LazySubagentsController", () => {
     expect(updates.at(-1)?.details?.lines.join("\n")).toContain("read");
     expect(widgets.at(-1)?.[1]?.join("\n") ?? "").not.toContain("1 pinned");
 
-    expect(await controller.pinRun("run-1", ctx)).toBe(true);
+    expect(await controller.pinRun("run-1", ctx)).toBe(false);
     expect(messages.filter((entry) => entry.message.customType === MESSAGE_TYPE_PIN && entry.message.details?.runId === "run-1")).toHaveLength(0);
-    expect(await controller.pinRun("run-1", ctx)).toBe(true);
+    expect(await controller.pinRun("run-1", ctx)).toBe(false);
     expect(messages.filter((entry) => entry.message.customType === MESSAGE_TYPE_PIN && entry.message.details?.runId === "run-1")).toHaveLength(0);
+  });
+
+  test("pin keeps an active run in the above-editor widget without adding a transcript card", async () => {
+    const { api, messages } = createPi();
+    const launcher = new FakeLauncher();
+    const controller = new LazySubagentsController(api as any, { launcher, createRunId: () => "run-1", now: () => 100 });
+    const { ctx, widgets } = createContext({ isIdle: true, hasPendingMessages: false });
+
+    await controller.handleSessionStart(ctx);
+    await controller.launchChild(
+      {
+        agent: "reviewer",
+        title: "Review auth diff",
+        taskSummary: "Review auth diff",
+        prompt: "Review the auth diff and summarize the issues.",
+      },
+      ctx,
+    );
+
+    expect(await controller.pinRun("run-1", ctx)).toBe(true);
+
+    const widgetText = widgets.at(-1)?.[1]?.join("\n") ?? "";
+    expect(widgetText).toContain("1 pinned");
+    expect(widgetText).toContain(`${GLYPH_PINNED} Review auth diff`);
+    expect(widgetText).toContain("│ reviewer │ queued");
+    expect(widgetText).toContain("│ Launched reviewer");
+    expect.soft(messages.filter((entry) => entry.message.customType === MESSAGE_TYPE_PIN && entry.message.details?.runId === "run-1")).toHaveLength(0);
+
+    launcher.updates.set("run-1", {
+      runId: "run-1",
+      status: "completed",
+      updatedAt: 120,
+      completedAt: 120,
+      resultPreview: "Looks good overall.",
+    });
+    await controller.pollOnce();
+    expect(widgets.at(-1)?.[1]?.join("\n") ?? "").not.toContain("1 pinned");
+    expect(controller.getSnapshot().runs.find((run) => run.id === "run-1")?.status).toBe("completed");
+
+    const registry = new RunRegistry();
+    registry.upsert(createRun({ id: "skipped-run", status: "skipped", title: "Skipped follow-up", updatedAt: 200, completedAt: 200 }));
+    const { api: skippedApi, messages: skippedMessages } = createPi();
+    const skippedController = new LazySubagentsController(skippedApi as any, { launcher: new FakeLauncher(), now: () => 200 });
+    const { ctx: skippedCtx } = createContext({
+      branchEntries: [{ type: "custom", customType: PERSISTED_STATE_ENTRY, data: createPersistedState(registry.serialize(), 200) }],
+    });
+
+    await skippedController.handleSessionStart(skippedCtx);
+    expect(await skippedController.pinRun("skipped-run", skippedCtx)).toBe(false);
+    await expect(executeLazySubagentsCommand("pin skipped-run", skippedController, skippedCtx)).resolves.toBe("Run already complete: skipped-run is not pinned in widget.");
+    expect(skippedMessages.filter((entry) => entry.message.customType === MESSAGE_TYPE_PIN && entry.message.details?.runId === "skipped-run")).toHaveLength(0);
+  });
+
+  test("pin command says the run was pinned in the widget", async () => {
+    const { api } = createPi();
+    const launcher = new FakeLauncher();
+    const controller = new LazySubagentsController(api as any, { launcher, createRunId: () => "run-1", now: () => 100 });
+    const { ctx } = createContext({ isIdle: true, hasPendingMessages: false });
+
+    await controller.handleSessionStart(ctx);
+    await controller.launchChild(
+      {
+        agent: "reviewer",
+        title: "Review auth diff",
+        taskSummary: "Review auth diff",
+        prompt: "Review the auth diff and summarize the issues.",
+      },
+      ctx,
+    );
+
+    await expect(executeLazySubagentsCommand("pin run-1", controller, ctx)).resolves.toBe("Pinned run-1 in widget.");
   });
 
   test("wait surfaces progress without leaving completed runs pinned", async () => {
@@ -1527,10 +1600,10 @@ describe("LazySubagentsController", () => {
     const result = await controller.waitForRunSignal("run-1", { ctx });
 
     expect(result.status).toBe("ready");
-    expect(messages.filter((entry) => entry.message.customType === MESSAGE_TYPE_PIN && entry.message.details?.runId === "run-1")).toHaveLength(1);
+    expect(messages.filter((entry) => entry.message.customType === MESSAGE_TYPE_PIN && entry.message.details?.runId === "run-1")).toHaveLength(0);
   });
 
-  test("pins a run into chat and renders detailed progress lines from child events", async () => {
+  test("pins a run in the widget and renders detailed progress lines from child events", async () => {
     const { api, messages } = createPi();
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-lazy-subagents-pin-"));
     const eventsPath = path.join(tempDir, "events.jsonl");
@@ -1578,7 +1651,7 @@ describe("LazySubagentsController", () => {
     await controller.pollOnce();
 
     expect(await controller.pinRun("run-1")).toBe(true);
-    expect(messages.at(-1)?.message.customType).toBe(MESSAGE_TYPE_PIN);
+    expect(messages.filter((entry) => entry.message.customType === MESSAGE_TYPE_PIN && entry.message.details?.runId === "run-1")).toHaveLength(0);
     expect(controller.getPinnedRunLines("run-1").join("\n")).toContain("model (openai-codex) gpt-5.4 • xhigh");
     expect(controller.getPinnedRunLines("run-1").join("\n")).toContain("tool start · read · /repo/src/auth.ts");
     expect(controller.getPinnedRunLines("run-1").join("\n")).toContain("Looks good overall.");

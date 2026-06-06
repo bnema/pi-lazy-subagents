@@ -130,7 +130,7 @@ lazy_subagents action=workflow maxConcurrency=2 steps=[{id:"triage",agent:"scout
 - `status` is for health checks: human request, suspected stall, or about 60 seconds with no signal. Do not poll.
 - `result` reads final output; it is not a live tail.
 - `pickup` injects a completed result into chat.
-- `pin` keeps background progress visible without repeated status checks. Explicit pins add a durable progress card to chat; wait-time auto-pins use the tool row as the live surface.
+- `pin` keeps background progress visible without repeated status checks by showing a pinned progress panel in the persistent above-editor widget.
 - completed successes auto-hide after a grace window; failed, paused, and pinned runs stay until resolved or cleared.
 - Names are only supported for `action=run` single runs; group and workflow runs cannot be continued by name.
 - Named single runs stay visible after completion for a bounded lease (default 30 min). Use `action=continue target=<name|runId>` to send follow-up tasks before the lease expires; targets resolve by run id first, then by name.
@@ -153,7 +153,7 @@ lazy_subagents action=workflow maxConcurrency=2 steps=[{id:"triage",agent:"scout
 3. Confirm:
    - a launch card appears;
    - the footer shows an active run;
-   - the widget shows elapsed/update/tool context.
+   - the widget shows a compact Lazy running row with current task context.
 4. Return to chat. Do not poll or call blocking `wait`; the completion card should arrive automatically.
 5. Confirm:
    - the footer/widget move the run into recent/completed state;
@@ -179,6 +179,7 @@ lazy_subagents action=workflow maxConcurrency=2 steps=[{id:"triage",agent:"scout
    ```
 
 11. Confirm the report shows live timing and recent activity fields.
+    - For a long-running task, run `/lazy-subagents pin <runId>` and confirm the pinned progress panel stays above the Lazy row.
 
 ### Print-mode smoke test
 
