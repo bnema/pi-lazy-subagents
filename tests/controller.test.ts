@@ -1519,6 +1519,29 @@ describe("LazySubagentsController", () => {
     expect(skippedMessages.filter((entry) => entry.message.customType === MESSAGE_TYPE_PIN && entry.message.details?.runId === "skipped-run")).toHaveLength(0);
   });
 
+  test("pin reports failed and cancelled runs as not pinnable", async () => {
+    const registry = new RunRegistry();
+    registry.upsert(createRun({ id: "failed-run", status: "failed", title: "Failed review", updatedAt: 200, completedAt: 200 }));
+    registry.pinRun("failed-run");
+    registry.upsert(createRun({ id: "cancelled-run", status: "cancelled", title: "Cancelled review", updatedAt: 201, completedAt: 201 }));
+    const { api, messages } = createPi();
+    const controller = new LazySubagentsController(api as any, { launcher: new FakeLauncher(), now: () => 200 });
+    const { ctx, widgets } = createContext({
+      branchEntries: [{ type: "custom", customType: PERSISTED_STATE_ENTRY, data: createPersistedState(registry.serialize(), 200) }],
+    });
+
+    await controller.handleSessionStart(ctx);
+
+    expect(await controller.pinRun("failed-run", ctx)).toBe(false);
+    await expect(executeLazySubagentsCommand("pin cancelled-run", controller, ctx)).resolves.toBe("Run already complete: cancelled-run is not pinned in widget.");
+    const widgetText = widgets.at(-1)?.[1]?.join("\n") ?? "";
+    expect(widgetText).toContain("Failed review");
+    expect(widgetText).toContain("attention");
+    expect(widgetText).not.toContain("1 pinned");
+    expect(widgetText).not.toContain(GLYPH_PINNED);
+    expect(messages.filter((entry) => entry.message.customType === MESSAGE_TYPE_PIN)).toHaveLength(0);
+  });
+
   test("pin command says the run was pinned in the widget", async () => {
     const { api } = createPi();
     const launcher = new FakeLauncher();

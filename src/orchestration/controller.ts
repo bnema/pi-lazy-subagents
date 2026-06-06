@@ -1219,7 +1219,7 @@ export class LazySubagentsController {
     if (ctx) this.captureContext(ctx);
     const run = this.registry.get(runId);
     if (!run) return "not_found";
-    if (run.status === "completed" || run.status === "skipped") {
+    if (isTerminalStatus(run.status)) {
       await this.surfacePinnedRun(runId, ctx, { sendMessage: false });
       return "not_pinnable";
     }
@@ -1231,7 +1231,7 @@ export class LazySubagentsController {
     const run = this.registry.get(runId);
     if (!run) return false;
     const shouldSendMessage = options.sendMessage ?? false;
-    if (run.status === "completed" || run.status === "skipped") {
+    if (isTerminalStatus(run.status)) {
       if (this.registry.isPinned(runId)) {
         this.registry.unpinRun(runId);
         this.surfacedPinnedMessages.delete(runId);

@@ -116,7 +116,8 @@ describe("visibility helpers", () => {
     expect(lines).toHaveLength(1);
     expect(lines[0]).toContain(`<${GLYPH_LAZY_SUBAGENTS}>`);
     expect(lines[0]).toContain("Lazy");
-    expect(lines[0]).toContain("1 running");
+    expect(lines[0]).toContain("running");
+    expect(lines[0]).not.toContain("1 running");
     expect(lines[0]).not.toContain("2 running");
     expect(lines[0]).toContain("attention");
     expect(lines[0]).toContain("inbox");
@@ -152,10 +153,40 @@ describe("visibility helpers", () => {
     expect(lines[0]).toContain(`<${GLYPH_LAZY_SUBAGENTS}>`);
     expect(lines[0]).toContain("Lazy");
     expect(lines[0]).toContain("│");
-    expect(lines[0]).toContain("1 running");
+    expect(lines[0]).toContain("running");
+    expect(lines[0]).not.toContain("1 running");
     expect(lines[0]).toContain("Research auth flow");
     expect(lines[0]).not.toContain("lazy subagents");
     expect(lines[0]).not.toContain("live");
+  });
+
+  test("includes a running count only when multiple runs are running", () => {
+    const first = createRun({ id: "run-1", status: "running", title: "Review auth diff" });
+    const second = createRun({ id: "run-2", status: "running", title: "Trace login bug", updatedAt: 2 });
+    const snapshot = createSnapshot([first, second]);
+
+    const lines = buildWidgetLines(snapshot, 60_000, 6);
+
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("2 running");
+  });
+
+  test("keeps queued runs as focus text without counting them as running", () => {
+    const queued = createRun({
+      id: "run-queued",
+      status: "queued",
+      startedAt: 50_000,
+      updatedAt: 59_000,
+      title: "Queued review",
+    });
+    const snapshot = createSnapshot([queued]);
+
+    const lines = buildWidgetLines(snapshot, 60_000, 6);
+
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("Lazy");
+    expect(lines[0]).toContain("Queued review");
+    expect(lines[0]).not.toContain("running");
   });
 
   test("animates running dots and disposes the widget timer", () => {
@@ -183,7 +214,7 @@ describe("visibility helpers", () => {
       expect(requestRender).toHaveBeenCalledTimes(1);
       const secondRender = component!.render(160).join("\n");
       expect(secondRender).not.toBe(firstRender);
-      expect(secondRender).toContain("1 running.");
+      expect(secondRender).toContain("running.");
 
       component!.dispose?.();
       requestRender.mockClear();
@@ -222,7 +253,8 @@ describe("visibility helpers", () => {
     expect(lines.filter((line) => line.startsWith("│ "))).toHaveLength(4);
     expect(lines[5]).toContain(GLYPH_LAZY_SUBAGENTS);
     expect(lines[5]).toContain("Lazy");
-    expect(lines[5]).toContain("1 running");
+    expect(lines[5]).toContain("running");
+    expect(lines[5]).not.toContain("1 running");
   });
 
   test("renders one detailed pinned panel plus a compact more pinned indicator for multiple pinned runs", () => {
@@ -699,7 +731,8 @@ describe("visibility helpers", () => {
     } as any);
 
     expect(lines[0]).toContain("Lazy");
-    expect(lines[0]).toContain("1 running");
+    expect(lines[0]).toContain("running");
+    expect(lines[0]).not.toContain("1 running");
     // expiredNamed and archived should NOT appear
     expect(lines.join("\n")).not.toContain("stale-reviewer");
     expect(lines.join("\n")).not.toContain("Old review");
