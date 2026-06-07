@@ -568,6 +568,7 @@ export class LazySubagentsController {
   private readonly progressStats = new Map<string, { turnCount: number; lastTurnTokens?: number }>();
   private readonly surfacedPinnedMessages = new Set<string>();
   private readonly reservedLaunchNames = new Set<string>();
+  private pinnedWidgetVisible = true;
   private renderedStatus: string | undefined;
   private renderedWidgetSignature: string | undefined;
   private currentCtx: ExtensionContext | undefined;
@@ -1111,8 +1112,6 @@ export class LazySubagentsController {
     const timeoutMs = Math.min(normalizedTimeoutMs, MAX_WAIT_TIMEOUT_MS);
     const startedWaitingAt = this.now();
     let latchedSelectedRunId = runId;
-    let surfacedPinnedRunId: string | undefined;
-    let lastWaitProgressSignature: string | undefined;
 
     const selectRun = (): WaitForRunSignalResult => {
       const snapshot = this.registry.snapshot();
@@ -1127,37 +1126,19 @@ export class LazySubagentsController {
       return { status: "ready", run: snapshot.activeRuns[0] };
     };
 
+    void options.onUpdate;
     const isReady = (run: RunRecord): boolean => isTerminalStatus(run.status) || run.attentionNeeded || run.status === "blocked";
-    const emitWaitProgress = (run: RunRecord): void => {
-      if (!options.onUpdate) return;
-      const lines = this.getPinnedRunLines(run.id, false);
-      const details: WaitProgressDetails = { kind: "wait-progress", runId: run.id, status: run.status, lines };
-      const signature = JSON.stringify(details);
-      if (signature === lastWaitProgressSignature) return;
-      lastWaitProgressSignature = signature;
-      options.onUpdate({ content: [{ type: "text", text: lines.join("\n") }], details });
-    };
 
     while (true) {
       if (options.signal?.aborted) return { status: "aborted" };
 
       let selected = selectRun();
       if (selected.status !== "ready") return selected;
-      if (!surfacedPinnedRunId) {
-        await this.surfacePinnedRun(selected.run.id, options.ctx, { sendMessage: false });
-        surfacedPinnedRunId = selected.run.id;
-      }
-      emitWaitProgress(selected.run);
       if (isReady(selected.run)) return selected;
 
       await this.pollOnce();
       selected = selectRun();
       if (selected.status !== "ready") return selected;
-      if (surfacedPinnedRunId !== selected.run.id) {
-        await this.surfacePinnedRun(selected.run.id, options.ctx, { sendMessage: false });
-        surfacedPinnedRunId = selected.run.id;
-      }
-      emitWaitProgress(selected.run);
       if (isReady(selected.run)) return selected;
 
       const remaining = timeoutMs - (this.now() - startedWaitingAt);
@@ -1213,6 +1194,13 @@ export class LazySubagentsController {
 
   async pinRun(runId: string, ctx?: ExtensionContext): Promise<boolean> {
     return (await this.pinRunWithOutcome(runId, ctx)) === "pinned";
+  }
+
+  setPinnedWidgetVisible(visible: boolean, ctx?: ExtensionContext): void {
+    if (ctx) this.captureContext(ctx);
+    this.pinnedWidgetVisible = visible;
+    this.renderedWidgetSignature = undefined;
+    this.renderUi(ctx ?? this.currentCtx);
   }
 
   async pinRunWithOutcome(runId: string, ctx?: ExtensionContext): Promise<"pinned" | "not_found" | "not_pinnable"> {
@@ -1372,7 +1360,7 @@ export class LazySubagentsController {
           }
           if (!update) continue;
           const applied = await this.applyUpdate(runId, update);
-          if ((applied.stateChanged || applied.recordedEvent) && this.registry.isPinned(runId)) {
+          if ((applied.stateChanged || applied.recordedEvent) && this.shouldShowPinnedPanelForRun(runId)) {
             await this.refreshProgressLines(runId, launch);
           }
         }
@@ -1734,7 +1722,7 @@ export class LazySubagentsController {
     this.syncTrackedLaunchesFromSnapshot();
 
     for (const run of this.registry.snapshot().runs) {
-      if (!this.registry.isPinned(run.id) || !run.launchRef) continue;
+      if (!this.shouldShowPinnedPanelForRun(run.id) || !run.launchRef) continue;
       await this.refreshProgressLines(run.id, run.launchRef);
     }
 
@@ -1814,6 +1802,13 @@ export class LazySubagentsController {
     }
   }
 
+  private shouldShowPinnedPanelForRun(runId: string): boolean {
+    if (!this.pinnedWidgetVisible) return false;
+    const run = this.registry.get(runId);
+    if (!run || isTerminalStatus(run.status)) return false;
+    return this.registry.isPinned(runId) || run.status === "queued" || run.status === "running" || run.status === "blocked";
+  }
+
   private syncTrackedLaunchesFromSnapshot(): void {
     this.trackedLaunches.clear();
     for (const run of this.registry.snapshot().activeRuns) {
@@ -1833,7 +1828,7 @@ export class LazySubagentsController {
     const snapshot = this.getLiveUiSnapshot();
     const timestamp = this.now();
     const widgetOptions = {
-      isPinned: (runId: string) => this.registry.isPinned(runId),
+      isPinned: (runId: string) => this.shouldShowPinnedPanelForRun(runId),
       getPinnedProgressLines: (runId: string) => this.getPinnedProgressLines(runId),
     };
     const status = buildFooterStatus(snapshot, ctx.ui.theme);

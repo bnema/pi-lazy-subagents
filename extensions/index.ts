@@ -293,6 +293,14 @@ export default function lazySubagentsExtension(pi: ExtensionAPI): void {
             details: { action: params.action, runId: params.runId },
           };
         case "pin": {
+          if (params.runId === "off") {
+            controller.setPinnedWidgetVisible(false, ctx);
+            return { content: [{ type: "text", text: "Pinned widget hidden." }], details: { action: params.action, runId: params.runId } };
+          }
+          if (params.runId === "on") {
+            controller.setPinnedWidgetVisible(true, ctx);
+            return { content: [{ type: "text", text: "Pinned widget visible." }], details: { action: params.action, runId: params.runId } };
+          }
           const outcome = params.runId ? await controller.pinRunWithOutcome(params.runId, ctx) : "not_found";
           const text = outcome === "pinned"
             ? `Pinned ${params.runId} in widget.`

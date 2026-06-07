@@ -1422,7 +1422,7 @@ describe("LazySubagentsController", () => {
     expect(messages.filter((entry) => entry.message.customType === MESSAGE_TYPE_ATTENTION)).toHaveLength(0);
   });
 
-  test("wait emits live tool updates for the selected run without requiring transcript pin surfacing", async () => {
+  test("wait blocks silently while the default pinned widget remains the progress surface", async () => {
     const { api, messages } = createPi();
     const launcher = new FakeLauncher();
     const controller = new LazySubagentsController(api as any, { launcher, createRunId: () => "run-1", now: () => 100 });
@@ -1440,6 +1440,10 @@ describe("LazySubagentsController", () => {
       ctx,
     );
 
+    const initialWidgetText = widgets.at(-1)?.[1]?.join("\n") ?? "";
+    expect(initialWidgetText).toContain(`${GLYPH_PINNED} Review auth diff`);
+    expect(initialWidgetText).toContain("│ Launched reviewer");
+
     launcher.updates.set("run-1", {
       runId: "run-1",
       status: "completed",
@@ -1455,20 +1459,10 @@ describe("LazySubagentsController", () => {
 
     expect(result.status).toBe("ready");
     expect(messages.some((entry) => entry.message.customType === MESSAGE_TYPE_PIN && entry.message.details?.runId === "run-1")).toBe(false);
-    expect(updates.length).toBeGreaterThan(0);
-    expect(updates.at(-1)?.details?.kind).toBe("wait-progress");
-    expect(updates.at(-1)?.details?.runId).toBe("run-1");
-    expect(updates.at(-1)?.details?.lines.join("\n")).toContain("Review auth diff");
-    expect(updates.at(-1)?.details?.lines.join("\n")).toContain("read");
-    expect(widgets.at(-1)?.[1]?.join("\n") ?? "").not.toContain("1 pinned");
-
-    expect(await controller.pinRun("run-1", ctx)).toBe(false);
-    expect(messages.filter((entry) => entry.message.customType === MESSAGE_TYPE_PIN && entry.message.details?.runId === "run-1")).toHaveLength(0);
-    expect(await controller.pinRun("run-1", ctx)).toBe(false);
-    expect(messages.filter((entry) => entry.message.customType === MESSAGE_TYPE_PIN && entry.message.details?.runId === "run-1")).toHaveLength(0);
+    expect(updates).toHaveLength(0);
   });
 
-  test("pin keeps an active run in the above-editor widget without adding a transcript card", async () => {
+  test("pin off hides the default pinned widget and pin on shows it again", async () => {
     const { api, messages } = createPi();
     const launcher = new FakeLauncher();
     const controller = new LazySubagentsController(api as any, { launcher, createRunId: () => "run-1", now: () => 100 });
@@ -1485,13 +1479,20 @@ describe("LazySubagentsController", () => {
       ctx,
     );
 
-    expect(await controller.pinRun("run-1", ctx)).toBe(true);
-
     const widgetText = widgets.at(-1)?.[1]?.join("\n") ?? "";
-    expect(widgetText).toContain("1 pinned");
     expect(widgetText).toContain(`${GLYPH_PINNED} Review auth diff`);
     expect(widgetText).toContain("│ reviewer │ queued");
     expect(widgetText).toContain("│ Launched reviewer");
+
+    await expect(executeLazySubagentsCommand("pin off", controller, ctx)).resolves.toBe("Pinned widget hidden.");
+    const hiddenWidgetText = widgets.at(-1)?.[1]?.join("\n") ?? "";
+    expect(hiddenWidgetText).not.toContain(GLYPH_PINNED);
+    expect(hiddenWidgetText).toContain("Lazy");
+    expect(hiddenWidgetText).toContain("Review auth diff");
+
+    await expect(executeLazySubagentsCommand("pin on", controller, ctx)).resolves.toBe("Pinned widget visible.");
+    const reshownWidgetText = widgets.at(-1)?.[1]?.join("\n") ?? "";
+    expect(reshownWidgetText).toContain(`${GLYPH_PINNED} Review auth diff`);
     expect.soft(messages.filter((entry) => entry.message.customType === MESSAGE_TYPE_PIN && entry.message.details?.runId === "run-1")).toHaveLength(0);
 
     launcher.updates.set("run-1", {
@@ -1721,9 +1722,6 @@ describe("LazySubagentsController", () => {
         totalTokens: 42,
       });
       await controller.pollOnce();
-      expect(readSpy.mock.calls.filter(([filePath]) => String(filePath) === eventsPath)).toHaveLength(0);
-
-      expect(await controller.pinRun("run-1")).toBe(true);
       expect(readSpy.mock.calls.filter(([filePath]) => String(filePath) === eventsPath)).toHaveLength(1);
 
       launcher.updates.set("run-1", {

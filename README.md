@@ -47,7 +47,7 @@ pi --no-extensions -e /absolute/path/to/pi-lazy-subagents/extensions/index.ts
 /lazy-subagents wait [runId] [--timeout-ms MS]
 /lazy-subagents result <runId>
 /lazy-subagents pickup <runId>
-/lazy-subagents pin <runId>
+/lazy-subagents pin <runId|on|off>
 /lazy-subagents cancel <runId>
 /lazy-subagents clear [all|runId]
 ```
@@ -63,7 +63,7 @@ Examples:
 /lazy-subagents wait [runId]
 /lazy-subagents result <runId>
 /lazy-subagents pickup <runId>
-/lazy-subagents pin <runId>
+/lazy-subagents pin <runId|on|off>
 ```
 
 ### Tool
@@ -130,7 +130,7 @@ lazy_subagents action=workflow maxConcurrency=2 steps=[{id:"triage",agent:"scout
 - `status` is for health checks: human request, suspected stall, or about 60 seconds with no signal. Do not poll.
 - `result` reads final output; it is not a live tail.
 - `pickup` injects a completed result into chat.
-- `pin` keeps background progress visible without repeated status checks by showing a pinned progress panel in the persistent above-editor widget.
+- Active runs show the pinned progress panel by default. Use `pin off` to hide it and `pin on` to show it again; `pin <runId>` keeps a specific active run visible.
 - completed successes auto-hide after a grace window; failed, paused, and pinned runs stay until resolved or cleared.
 - Names are only supported for `action=run` single runs; group and workflow runs cannot be continued by name.
 - Named single runs stay visible after completion for a bounded lease (default 30 min). Use `action=continue target=<name|runId>` to send follow-up tasks before the lease expires; targets resolve by run id first, then by name.
@@ -179,7 +179,7 @@ lazy_subagents action=workflow maxConcurrency=2 steps=[{id:"triage",agent:"scout
    ```
 
 11. Confirm the report shows live timing and recent activity fields.
-    - For a long-running task, run `/lazy-subagents pin <runId>` and confirm the pinned progress panel stays above the Lazy row.
+    - For a long-running task, confirm the pinned progress panel stays above the Lazy row; run `/lazy-subagents pin off` and `/lazy-subagents pin on` to verify the visibility toggle.
 
 ### Print-mode smoke test
 
