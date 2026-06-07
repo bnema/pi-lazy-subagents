@@ -202,7 +202,7 @@ function specialRunKindLabel(run: RunRecord): string | undefined {
 function buildPinnedTitleLine(run: RunRecord, theme?: WidgetThemeLike): string {
   const kindLabel = specialRunKindLabel(run);
   const title = `${kindLabel ? `(${kindLabel}) ` : ""}${shortTitle(run)}`;
-  return `${color(GLYPH_PINNED, "accent", theme)} ${bold(title, theme)} ${dim(RAIL, theme)}`;
+  return `${color(GLYPH_PINNED, "accent", theme)} ${bold(title, theme)}`;
 }
 
 function buildPinnedPanelLines(runs: RunRecord[], theme: WidgetThemeLike | undefined, options: WidgetBuildOptions): string[] {

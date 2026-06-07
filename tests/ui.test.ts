@@ -247,7 +247,7 @@ describe("visibility helpers", () => {
     const lines = buildWidgetLines(snapshot, 60_000, 8, undefined, { isPinned: (runId) => runId === "run-pin" });
 
     expect(lines[0]).toContain(`${GLYPH_PINNED} Review auth diff`);
-    expect(lines[0]).toContain("│");
+    expect(lines[0]).not.toContain("│");
     expect(lines[1]).toBe("│ oldest progress");
     expect(lines[2]).toBe("│ scan auth routes");
     expect(lines[3]).toBe("│ inspect token flow");
