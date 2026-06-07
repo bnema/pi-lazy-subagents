@@ -263,7 +263,7 @@ describe("visibility helpers", () => {
     expect(lines[6]).not.toContain("1 running");
   });
 
-  test("adds a special run kind label before non-single pinned titles", () => {
+  test("adds a special run kind label before user-visible special pinned titles", () => {
     const workflow = createRun({
       id: "run-workflow",
       kind: "workflow",
@@ -279,9 +279,19 @@ describe("visibility helpers", () => {
       updatedAt: 2,
       recentEvents: [{ id: "event-2", category: "progress", timestamp: 2, summary: "merge reviewer notes", status: "running" }],
     });
+    const child = createRun({
+      id: "run-child",
+      kind: "child",
+      status: "running",
+      title: "Internal child step",
+      updatedAt: 3,
+      recentEvents: [{ id: "event-3", category: "progress", timestamp: 3, summary: "finish internal step", status: "running" }],
+    });
 
     expect(buildWidgetLines(createSnapshot([workflow]), 60_000, 6, undefined, { isPinned: () => true })[0]).toContain(`${GLYPH_PINNED} (workflow) Review release pipeline`);
     expect(buildWidgetLines(createSnapshot([parallel]), 60_000, 6, undefined, { isPinned: () => true })[0]).toContain(`${GLYPH_PINNED} (parallel) Parallel review pass`);
+    expect(buildWidgetLines(createSnapshot([child]), 60_000, 6, undefined, { isPinned: () => true })[0]).toContain(`${GLYPH_PINNED} Internal child step`);
+    expect(buildWidgetLines(createSnapshot([child]), 60_000, 6, undefined, { isPinned: () => true })[0]).not.toContain("(child)");
   });
 
   test("renders one detailed pinned panel plus a compact more pinned indicator for multiple pinned runs", () => {

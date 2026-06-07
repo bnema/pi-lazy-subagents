@@ -196,7 +196,6 @@ function buildPinnedDetailLine(line: string, theme?: WidgetThemeLike): string {
 function specialRunKindLabel(run: RunRecord): string | undefined {
   if (run.kind === "group") return "parallel";
   if (run.kind === "workflow") return "workflow";
-  if (run.kind === "child") return "child";
   return undefined;
 }
 
