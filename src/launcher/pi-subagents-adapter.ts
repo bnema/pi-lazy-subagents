@@ -18,7 +18,7 @@ import type {
   LauncherRuntimeContext,
   NormalizedRunUpdate,
 } from "./interface.js";
-import type { RunEvent, RunStatus } from "../types.js";
+import type { RunChildProgress, RunEvent, RunStatus } from "../types.js";
 
 type DirectAsyncState = "queued" | "running" | "complete" | "failed" | "paused" | "cancelled";
 type DirectActivityState = "active_long_running" | "needs_attention";
@@ -485,6 +485,15 @@ function selectPrimaryStep(status: Pick<DirectAsyncStatus, "steps">): DirectAsyn
   return steps.find((step) => step.status === "running") ?? steps[0];
 }
 
+function normalizeStepProgress(step: DirectAsyncStatusStep): RunChildProgress {
+  return {
+    id: step.id,
+    agent: step.agent,
+    taskSummary: step.taskSummary,
+    status: step.status,
+  };
+}
+
 export function normalizeAsyncStatus(
   runId: string,
   asyncDir: string,
@@ -504,6 +513,7 @@ export function normalizeAsyncStatus(
   const totalTokens = status.totalTokens ?? primaryStep?.totalTokens;
   const outputFile = primaryStep?.outputFile ?? status.outputFile;
   const sessionFile = primaryStep?.sessionFile ?? status.sessionFile;
+  const childProgress = status.steps?.map(normalizeStepProgress);
   const artifactPath = outputFile
     ? path.isAbsolute(outputFile)
       ? outputFile
@@ -528,6 +538,7 @@ export function normalizeAsyncStatus(
     toolCount,
     totalTokens,
     attentionNeeded,
+    childProgress,
     event: buildEvent(runId, localStatus, updatedAt, summary, attentionNeeded),
   };
 }

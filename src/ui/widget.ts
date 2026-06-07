@@ -70,8 +70,28 @@ function formatCount(count: number, singular: string, plural = `${singular}s`): 
   return `${count} ${count === 1 ? singular : plural}`;
 }
 
+function formatChildTitle(labels: string[]): string | undefined {
+  const nonEmpty = labels.map((label) => label.trim()).filter(Boolean);
+  if (nonEmpty.length === 0) return undefined;
+  if (nonEmpty.length <= 2) return nonEmpty.join(" + ");
+  return `${nonEmpty.slice(0, 2).join(" + ")} + ${nonEmpty.length - 2} more`;
+}
+
+function isActiveChildStatus(status: NonNullable<RunRecord["childProgress"]>[number]["status"]): boolean {
+  return status === undefined || status === "pending" || status === "running" || status === "failed" || status === "paused";
+}
+
+function dynamicChildTitle(run: RunRecord): string | undefined {
+  if (run.kind !== "group" && run.kind !== "workflow") return undefined;
+  const children = run.childProgress ?? [];
+  if (children.length === 0) return undefined;
+  const activeChildren = children.filter((child) => isActiveChildStatus(child.status));
+  const visibleChildren = activeChildren.length > 0 ? activeChildren : children;
+  return formatChildTitle(visibleChildren.map((child) => child.taskSummary ?? child.id ?? child.agent ?? ""));
+}
+
 function shortTitle(run: RunRecord): string {
-  return run.title || run.taskSummary;
+  return dynamicChildTitle(run) ?? (run.title || run.taskSummary);
 }
 
 function compactTokenCount(tokens: number | undefined, suffix = "tok"): string | undefined {

@@ -1,6 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-import type { RunEvent, RunStatus } from "../types.js";
+import type { RunChildProgress, RunEvent, RunStatus } from "../types.js";
 
 export interface LauncherRuntimeContext {
   pi: ExtensionAPI;
@@ -91,6 +91,7 @@ export interface NormalizedRunUpdate {
   toolCount?: number;
   totalTokens?: number;
   attentionNeeded?: boolean;
+  childProgress?: RunChildProgress[];
   event?: RunEvent;
 }
 

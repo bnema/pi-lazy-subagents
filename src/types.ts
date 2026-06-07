@@ -45,6 +45,24 @@ export interface RunLaunchRef {
   artifactPath?: string;
 }
 
+export const RUN_CHILD_PROGRESS_STATUSES = [
+  "pending",
+  "running",
+  "completed",
+  "skipped",
+  "failed",
+  "paused",
+  "cancelled",
+] as const;
+export type RunChildProgressStatus = (typeof RUN_CHILD_PROGRESS_STATUSES)[number];
+
+export interface RunChildProgress {
+  id?: string;
+  agent?: string;
+  taskSummary?: string;
+  status?: RunChildProgressStatus;
+}
+
 export interface RunRecord {
   id: string;
   kind: RunKind;
@@ -71,6 +89,7 @@ export interface RunRecord {
   archived?: boolean;
   groupId?: string;
   children?: string[];
+  childProgress?: RunChildProgress[];
   launchRef?: RunLaunchRef;
   recentEvents: RunEvent[];
 }

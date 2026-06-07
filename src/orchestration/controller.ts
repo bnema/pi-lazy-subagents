@@ -261,6 +261,7 @@ function equalUpdate(existing: RunRecord, update: NormalizedRunUpdate): boolean 
     && existing.resultPreview === update.resultPreview
     && existing.errorPreview === update.errorPreview
     && existing.currentTool === update.currentTool
+    && (update.childProgress === undefined || JSON.stringify(existing.childProgress ?? []) === JSON.stringify(update.childProgress))
     && existing.toolCount === update.toolCount
     // equalUpdate compares against mergeTotalTokens because missing totals should preserve an existing non-zero value; the tests also cover the zero-update case, so we deliberately merge instead of comparing directly.
     && existing.totalTokens === mergeTotalTokens(existing.totalTokens, update.totalTokens)
@@ -1422,6 +1423,7 @@ export class LazySubagentsController {
         resultPreview: update.resultPreview ?? existing.resultPreview,
         errorPreview: update.errorPreview ?? existing.errorPreview,
         currentTool: update.currentTool,
+        childProgress: update.childProgress ?? existing.childProgress,
         toolCount: update.toolCount,
         totalTokens: mergeTotalTokens(existing.totalTokens, update.totalTokens),
         attentionNeeded: update.attentionNeeded ?? false,

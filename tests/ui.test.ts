@@ -44,6 +44,7 @@ function createRun(overrides: Partial<RunRecord> = {}): RunRecord {
     archived: overrides.archived,
     groupId: overrides.groupId,
     children: overrides.children,
+    childProgress: overrides.childProgress,
     launchRef: overrides.launchRef,
     recentEvents: overrides.recentEvents ?? [],
   };
@@ -261,6 +262,27 @@ describe("visibility helpers", () => {
     expect(lines[6]).toContain("12k tok");
     expect(lines[6]).not.toContain("Review auth diff");
     expect(lines[6]).not.toContain("1 running");
+  });
+
+  test("uses dynamic active child titles for special pinned run titles", () => {
+    const parallel = createRun({
+      id: "run-parallel",
+      kind: "group",
+      status: "running",
+      title: "Parallel run (3)",
+      childProgress: [
+        { id: "scan", taskSummary: "Scan routes", status: "completed" },
+        { id: "review", taskSummary: "Review auth", status: "running" },
+        { id: "verify", taskSummary: "Verify tests", status: "pending" },
+      ],
+      recentEvents: [{ id: "event-1", category: "progress", timestamp: 1, summary: "review running", status: "running" }],
+    });
+
+    const title = buildWidgetLines(createSnapshot([parallel]), 60_000, 6, undefined, { isPinned: () => true })[0];
+
+    expect(title).toContain(`${GLYPH_PINNED} (parallel) Review auth + Verify tests`);
+    expect(title).not.toContain("Parallel run (3)");
+    expect(title).not.toContain("Scan routes");
   });
 
   test("adds a special run kind label before user-visible special pinned titles", () => {
