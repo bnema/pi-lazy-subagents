@@ -225,7 +225,7 @@ describe("visibility helpers", () => {
     }
   });
 
-  test("renders a pinned panel above the compact Lazy row with four latest rail-prefixed progress lines", () => {
+  test("renders a pinned panel above the compact Lazy row with five latest rail-prefixed progress lines", () => {
     const pinned = createRun({
       id: "run-pin",
       status: "running",
@@ -244,13 +244,13 @@ describe("visibility helpers", () => {
 
     const lines = buildWidgetLines(snapshot, 60_000, 8, undefined, { isPinned: (runId) => runId === "run-pin" });
 
-    expect(lines[0]).toContain(GLYPH_PINNED);
-    expect(lines[0]).toContain("Review auth diff");
+    expect(lines[0]).toBe("│ oldest progress");
     expect(lines[1]).toBe("│ scan auth routes");
     expect(lines[2]).toBe("│ inspect token flow");
     expect(lines[3]).toBe("│ compare session handling");
     expect(lines[4]).toBe("│ write review notes");
-    expect(lines.filter((line) => line.startsWith("│ "))).toHaveLength(4);
+    expect(lines.filter((line) => line.startsWith("│ "))).toHaveLength(5);
+    expect(lines.join("\n")).not.toContain("Review auth diff");
     expect(lines[5]).toContain(GLYPH_LAZY_SUBAGENTS);
     expect(lines[5]).toContain("Lazy");
     expect(lines[5]).toContain("running");
@@ -288,11 +288,11 @@ describe("visibility helpers", () => {
     const lines = buildWidgetLines(snapshot, 60_000, 8, undefined, { isPinned: (runId) => runId.startsWith("run-pin-") });
     const text = lines.join("\n");
 
-    expect(lines[0]).toContain(GLYPH_PINNED);
-    expect(lines[0]).toContain("Review auth diff");
-    expect(text).toContain("│ inspect diff");
-    expect(text).toContain("│ draft findings");
-    expect(text).toContain("2 more pinned");
+    expect(lines[0]).toBe("│ inspect diff");
+    expect(lines[1]).toBe("│ draft findings");
+    expect(text).not.toContain("Review auth diff");
+    expect(text).toContain("2 more");
+    expect(text).not.toContain("2 more pinned");
     expect(text).not.toContain("Trace login bug");
     expect(text).not.toContain("Audit settings copy");
     expect(lines.at(-1)).toContain(GLYPH_LAZY_SUBAGENTS);

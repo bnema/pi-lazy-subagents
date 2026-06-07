@@ -1074,7 +1074,7 @@ describe("LazySubagentsController", () => {
     expect(controller.getSnapshot().activeRuns[0]?.totalTokens).toBe(6079);
     expect(statuses.at(-1)?.[1]).toContain("1 live");
     expect(statuses.at(-1)?.[1]).not.toContain("6.1k tok");
-    expect(widgets.at(-1)?.[1]?.join("\n") ?? "").toContain("6.1k tok");
+    expect(widgets.at(-1)?.[1]?.join("\n") ?? "").not.toContain("6.1k tok");
   });
 
   test("routes restored successful runs without leaving them in live UI", async () => {
@@ -1427,7 +1427,6 @@ describe("LazySubagentsController", () => {
     const launcher = new FakeLauncher();
     const controller = new LazySubagentsController(api as any, { launcher, createRunId: () => "run-1", now: () => 100 });
     const { ctx, widgets } = createContext({ isIdle: true, hasPendingMessages: false });
-    const updates: any[] = [];
 
     await controller.handleSessionStart(ctx);
     await controller.launchChild(
@@ -1441,8 +1440,11 @@ describe("LazySubagentsController", () => {
     );
 
     const initialWidgetText = widgets.at(-1)?.[1]?.join("\n") ?? "";
-    expect(initialWidgetText).toContain(`${GLYPH_PINNED} Review auth diff`);
     expect(initialWidgetText).toContain("│ Launched reviewer");
+    expect(initialWidgetText).toContain("Lazy");
+    expect(initialWidgetText).toContain("1 run");
+    expect(initialWidgetText).not.toContain(`${GLYPH_PINNED} Review auth diff`);
+    expect(initialWidgetText).not.toContain("1 pinned");
 
     launcher.updates.set("run-1", {
       runId: "run-1",
@@ -1455,11 +1457,10 @@ describe("LazySubagentsController", () => {
       totalTokens: 42,
     });
 
-    const result = await controller.waitForRunSignal("run-1", { ctx, onUpdate: (update) => updates.push(update) });
+    const result = await controller.waitForRunSignal("run-1", { ctx });
 
     expect(result.status).toBe("ready");
     expect(messages.some((entry) => entry.message.customType === MESSAGE_TYPE_PIN && entry.message.details?.runId === "run-1")).toBe(false);
-    expect(updates).toHaveLength(0);
   });
 
   test("pin off hides the default pinned widget and pin on shows it again", async () => {
@@ -1480,9 +1481,10 @@ describe("LazySubagentsController", () => {
     );
 
     const widgetText = widgets.at(-1)?.[1]?.join("\n") ?? "";
-    expect(widgetText).toContain(`${GLYPH_PINNED} Review auth diff`);
-    expect(widgetText).toContain("│ reviewer │ queued");
     expect(widgetText).toContain("│ Launched reviewer");
+    expect(widgetText).toContain("Lazy");
+    expect(widgetText).not.toContain(`${GLYPH_PINNED} Review auth diff`);
+    expect(widgetText).not.toContain("1 pinned");
 
     await expect(executeLazySubagentsCommand("pin off", controller, ctx)).resolves.toBe("Pinned widget hidden.");
     const hiddenWidgetText = widgets.at(-1)?.[1]?.join("\n") ?? "";
@@ -1490,9 +1492,16 @@ describe("LazySubagentsController", () => {
     expect(hiddenWidgetText).toContain("Lazy");
     expect(hiddenWidgetText).toContain("Review auth diff");
 
+    await expect(executeLazySubagentsCommand("pin run-1", controller, ctx)).resolves.toBe("Pinned run-1 in widget.");
+    const repinnedWidgetText = widgets.at(-1)?.[1]?.join("\n") ?? "";
+    expect(repinnedWidgetText).toContain("│ Launched reviewer");
+    expect(repinnedWidgetText).not.toContain(`${GLYPH_PINNED} Review auth diff`);
+
+    await expect(executeLazySubagentsCommand("pin off", controller, ctx)).resolves.toBe("Pinned widget hidden.");
     await expect(executeLazySubagentsCommand("pin on", controller, ctx)).resolves.toBe("Pinned widget visible.");
     const reshownWidgetText = widgets.at(-1)?.[1]?.join("\n") ?? "";
-    expect(reshownWidgetText).toContain(`${GLYPH_PINNED} Review auth diff`);
+    expect(reshownWidgetText).toContain("│ Launched reviewer");
+    expect(reshownWidgetText).not.toContain(`${GLYPH_PINNED} Review auth diff`);
     expect.soft(messages.filter((entry) => entry.message.customType === MESSAGE_TYPE_PIN && entry.message.details?.runId === "run-1")).toHaveLength(0);
 
     launcher.updates.set("run-1", {
@@ -1505,7 +1514,9 @@ describe("LazySubagentsController", () => {
     await controller.pollOnce();
     expect(widgets.at(-1)?.[1]?.join("\n") ?? "").not.toContain("1 pinned");
     expect(controller.getSnapshot().runs.find((run) => run.id === "run-1")?.status).toBe("completed");
+  });
 
+  test("rejects pinning a skipped run", async () => {
     const registry = new RunRegistry();
     registry.upsert(createRun({ id: "skipped-run", status: "skipped", title: "Skipped follow-up", updatedAt: 200, completedAt: 200 }));
     const { api: skippedApi, messages: skippedMessages } = createPi();

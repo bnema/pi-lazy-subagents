@@ -430,11 +430,11 @@ export async function executeLazySubagentsCommand(
         : `Run not found: ${parsed.runId}`;
     case "pin": {
       if (parsed.runId === "off") {
-        controller.setPinnedWidgetVisible(false, ctx);
+        await controller.setPinnedWidgetVisible(false, ctx);
         return "Pinned widget hidden.";
       }
       if (parsed.runId === "on") {
-        controller.setPinnedWidgetVisible(true, ctx);
+        await controller.setPinnedWidgetVisible(true, ctx);
         return "Pinned widget visible.";
       }
       const outcome = await controller.pinRunWithOutcome(parsed.runId, ctx);

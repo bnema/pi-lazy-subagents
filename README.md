@@ -126,12 +126,12 @@ lazy_subagents action=workflow maxConcurrency=2 steps=[{id:"triage",agent:"scout
 - `when` and empty `fanOutFrom` steps become `skipped` without launching a child; failed or skipped dependencies block dependent descendants.
 - Non-empty `fanOutFrom` steps stay as logical group barriers until every expanded child finishes. The group then becomes `completed`, `failed`, or `skipped` and downstream steps can consume the aggregate without knowing child ids.
 - Invalid workflow graphs are rejected before launch: duplicate ids, missing dependencies, self-dependencies, cycles, and fractional concurrency are not allowed.
-- `wait` blocks. Use it only for explicit blocking requests or non-interactive scripts. In interactive Pi, blocking waits render live progress in the active tool row while marking the run pinned for widget visibility.
+- `wait` blocks. Use it only for explicit blocking requests or non-interactive scripts. In interactive Pi, progress stays in the persistent widget instead of duplicating a live tool-row view.
 - `status` is for health checks: human request, suspected stall, or about 60 seconds with no signal. Do not poll.
 - `result` reads final output; it is not a live tail.
 - `pickup` injects a completed result into chat.
-- Active runs show the pinned progress panel by default. Use `pin off` to hide it and `pin on` to show it again; `pin <runId>` keeps a specific active run visible.
-- completed successes auto-hide after a grace window; failed, paused, and pinned runs stay until resolved or cleared.
+- Active runs show the persistent progress panel by default. Use `pin off` to hide it and `pin on` to show it again; `pin <runId>` re-enables the panel for a specific active run.
+- completed successes auto-hide after a grace window; failed and paused runs stay until resolved or cleared.
 - Names are only supported for `action=run` single runs; group and workflow runs cannot be continued by name.
 - Named single runs stay visible after completion for a bounded lease (default 30 min). Use `action=continue target=<name|runId>` to send follow-up tasks before the lease expires; targets resolve by run id first, then by name.
 - Both named and unnamed completed runs can be continued by their run ID while they remain available. Named runs remain continuable by name or run ID until their lease expires.

@@ -88,6 +88,10 @@ function isTerminalStatus(status: RunStatus): boolean {
   return status === "completed" || status === "skipped" || status === "failed" || status === "cancelled" || status === "paused";
 }
 
+function isPinnedPanelEligibleStatus(status: RunStatus): boolean {
+  return status === "queued" || status === "running" || status === "blocked" || status === "paused";
+}
+
 function isPersistedStateEntry(value: unknown): value is { data?: unknown } {
   return typeof value === "object"
     && value !== null
@@ -1103,7 +1107,7 @@ export class LazySubagentsController {
 
   async waitForRunSignal(
     runId?: string,
-    options: { timeoutMs?: number; signal?: AbortSignal; ctx?: ExtensionContext; onUpdate?: (update: WaitProgressUpdate) => void } = {},
+    options: { timeoutMs?: number; signal?: AbortSignal; ctx?: ExtensionContext } = {},
   ): Promise<WaitForRunSignalResult> {
     const requestedTimeoutMs = options.timeoutMs;
     const normalizedTimeoutMs = typeof requestedTimeoutMs === "number" && Number.isFinite(requestedTimeoutMs) && requestedTimeoutMs > 0
@@ -1126,7 +1130,6 @@ export class LazySubagentsController {
       return { status: "ready", run: snapshot.activeRuns[0] };
     };
 
-    void options.onUpdate;
     const isReady = (run: RunRecord): boolean => isTerminalStatus(run.status) || run.attentionNeeded || run.status === "blocked";
 
     while (true) {
@@ -1196,9 +1199,14 @@ export class LazySubagentsController {
     return (await this.pinRunWithOutcome(runId, ctx)) === "pinned";
   }
 
-  setPinnedWidgetVisible(visible: boolean, ctx?: ExtensionContext): void {
+  async setPinnedWidgetVisible(visible: boolean, ctx?: ExtensionContext): Promise<void> {
     if (ctx) this.captureContext(ctx);
     this.pinnedWidgetVisible = visible;
+    if (visible) {
+      for (const [runId, launch] of this.trackedLaunches.entries()) {
+        if (this.shouldShowPinnedPanelForRun(runId)) await this.refreshProgressLines(runId, launch);
+      }
+    }
     this.renderedWidgetSignature = undefined;
     this.renderUi(ctx ?? this.currentCtx);
   }
@@ -1207,10 +1215,11 @@ export class LazySubagentsController {
     if (ctx) this.captureContext(ctx);
     const run = this.registry.get(runId);
     if (!run) return "not_found";
-    if (isTerminalStatus(run.status)) {
+    if (!isPinnedPanelEligibleStatus(run.status)) {
       await this.surfacePinnedRun(runId, ctx, { sendMessage: false });
       return "not_pinnable";
     }
+    this.pinnedWidgetVisible = true;
     return (await this.surfacePinnedRun(runId, ctx, { sendMessage: false })) ? "pinned" : "not_found";
   }
 
@@ -1219,7 +1228,7 @@ export class LazySubagentsController {
     const run = this.registry.get(runId);
     if (!run) return false;
     const shouldSendMessage = options.sendMessage ?? false;
-    if (isTerminalStatus(run.status)) {
+    if (!isPinnedPanelEligibleStatus(run.status)) {
       if (this.registry.isPinned(runId)) {
         this.registry.unpinRun(runId);
         this.surfacedPinnedMessages.delete(runId);
@@ -1654,10 +1663,10 @@ export class LazySubagentsController {
     });
   }
 
-  private unpinTerminalRuns(): boolean {
+  private unpinUnpinnableRuns(): boolean {
     let changed = false;
     for (const run of this.registry.snapshot().runs) {
-      if (isTerminalStatus(run.status) && this.registry.isPinned(run.id)) {
+      if (!isPinnedPanelEligibleStatus(run.status) && this.registry.isPinned(run.id)) {
         this.registry.unpinRun(run.id);
         this.surfacedPinnedMessages.delete(run.id);
         changed = true;
@@ -1715,10 +1724,10 @@ export class LazySubagentsController {
     this.registry = new RunRegistry({}, persisted);
     this.progressLines.clear();
     this.progressStats.clear();
-    const unpinnedTerminalRuns = this.unpinTerminalRuns();
+    const unpinnedUnpinnableRuns = this.unpinUnpinnableRuns();
     const releasedExpiredNames = this.cleanupExpiredNamedRunLeases();
     const removedAcknowledgedRuns = this.cleanupAcknowledgedCompletedRuns();
-    if (unpinnedTerminalRuns || releasedExpiredNames || removedAcknowledgedRuns) this.persistState();
+    if (unpinnedUnpinnableRuns || releasedExpiredNames || removedAcknowledgedRuns) this.persistState();
     this.syncTrackedLaunchesFromSnapshot();
 
     for (const run of this.registry.snapshot().runs) {
@@ -1805,8 +1814,7 @@ export class LazySubagentsController {
   private shouldShowPinnedPanelForRun(runId: string): boolean {
     if (!this.pinnedWidgetVisible) return false;
     const run = this.registry.get(runId);
-    if (!run || isTerminalStatus(run.status)) return false;
-    return this.registry.isPinned(runId) || run.status === "queued" || run.status === "running" || run.status === "blocked";
+    return Boolean(run && isPinnedPanelEligibleStatus(run.status));
   }
 
   private syncTrackedLaunchesFromSnapshot(): void {

@@ -2,10 +2,7 @@ import { truncateToWidth } from "@earendil-works/pi-tui";
 
 import type { RunRecord, RunRegistrySnapshot } from "../types.js";
 import { formatCompactThousands } from "../utils/time.js";
-import {
-  GLYPH_LAZY_SUBAGENTS,
-  GLYPH_PINNED,
-} from "./glyphs.js";
+import { GLYPH_LAZY_SUBAGENTS } from "./glyphs.js";
 
 export interface WidgetViewModel {
   lines: string[];
@@ -23,13 +20,14 @@ export interface WidgetBuildOptions {
   isPinned?: (runId: string) => boolean;
   getPinnedProgressLines?: (runId: string) => string[];
   runningDots?: string;
+  suppressFocusDetails?: boolean;
 }
 
 const SEPARATOR = " │ ";
 const RAIL = "│";
 const RUNNING_DOT_FRAMES = ["   ", ".  ", ".. ", "..."];
 const RUNNING_DOT_INTERVAL_MS = 450;
-const PINNED_DETAIL_LIMIT = 4;
+const PINNED_DETAIL_LIMIT = 5;
 
 function needsAttention(run: RunRecord): boolean {
   return run.attentionNeeded
@@ -84,12 +82,8 @@ function joinParts(parts: string[], theme?: WidgetThemeLike): string {
   return parts.filter(Boolean).join(dim(SEPARATOR, theme));
 }
 
-function isTerminalStatus(run: RunRecord): boolean {
-  return run.status === "completed"
-    || run.status === "skipped"
-    || run.status === "failed"
-    || run.status === "cancelled"
-    || run.status === "paused";
+function isPinnedPanelEligible(run: RunRecord): boolean {
+  return run.status === "queued" || run.status === "running" || run.status === "blocked" || run.status === "paused";
 }
 
 function runningRuns(snapshot: RunRegistrySnapshot): RunRecord[] {
@@ -102,7 +96,7 @@ function queuedRuns(snapshot: RunRegistrySnapshot): RunRecord[] {
 
 function pinnedRuns(snapshot: RunRegistrySnapshot, isPinned: (runId: string) => boolean): RunRecord[] {
   return snapshot.runs
-    .filter((run) => isPinned(run.id) && !isTerminalStatus(run))
+    .filter((run) => isPinned(run.id) && isPinnedPanelEligible(run))
     .sort(sortByRecencyDesc);
 }
 
@@ -120,7 +114,6 @@ function buildLazyLine(snapshot: RunRegistrySnapshot, theme?: WidgetThemeLike, o
   const isPinned = options.isPinned ?? (() => false);
   const activeRuns = runningRuns(snapshot);
   const attentionCount = snapshot.runs.filter((run) => needsAttention(run)).length;
-  const pinnedCount = pinnedRuns(snapshot, isPinned).length;
   const inboxCount = snapshot.recentRuns.filter((run) => isSuccessfulInboxRun(run, isPinned(run.id))).length;
   const focusRun = lazyFocusRun(snapshot, isPinned);
 
@@ -133,9 +126,8 @@ function buildLazyLine(snapshot: RunRegistrySnapshot, theme?: WidgetThemeLike, o
     parts.push(color(`${runningLabel}${options.runningDots ?? ""}`, "accent", theme));
   }
   if (attentionCount > 0) parts.push(color(formatCount(attentionCount, "attention"), "warning", theme));
-  if (pinnedCount > 0) parts.push(color(formatCount(pinnedCount, "pinned"), "accent", theme));
   if (inboxCount > 0) parts.push(color(formatCount(inboxCount, "inbox"), "success", theme));
-  if (focusRun) {
+  if (focusRun && !options.suppressFocusDetails) {
     parts.push(bold(shortTitle(focusRun), theme));
     if (focusRun.currentTool) parts.push(muted(focusRun.currentTool, theme));
     if (focusRun.toolCount !== undefined && focusRun.toolCount > 0) parts.push(muted(`${focusRun.toolCount} tools`, theme));
@@ -145,21 +137,6 @@ function buildLazyLine(snapshot: RunRegistrySnapshot, theme?: WidgetThemeLike, o
   if (parts.length === 1) parts.push(color(formatCount(snapshot.runs.length, "run"), "muted", theme));
 
   return joinParts(parts, theme);
-}
-
-function pinnedHeaderParts(run: RunRecord, theme?: WidgetThemeLike): string[] {
-  return [
-    `${color(GLYPH_PINNED, "accent", theme)} ${bold(shortTitle(run), theme)}`,
-    muted(run.agent, theme),
-    color(run.status, needsAttention(run) ? "warning" : "accent", theme),
-    run.currentTool ? muted(run.currentTool, theme) : undefined,
-    run.toolCount !== undefined && run.toolCount > 0 ? muted(`${run.toolCount} tools`, theme) : undefined,
-    compactTokenCount(run.totalTokens) ? muted(compactTokenCount(run.totalTokens)!, theme) : undefined,
-  ].filter((part): part is string => Boolean(part));
-}
-
-function buildPinnedHeader(run: RunRecord, theme?: WidgetThemeLike): string {
-  return joinParts(pinnedHeaderParts(run, theme), theme);
 }
 
 function fallbackProgressLines(run: RunRecord): string[] {
@@ -218,13 +195,10 @@ function buildPinnedPanelLines(runs: RunRecord[], theme: WidgetThemeLike | undef
   const [primary, ...moreRuns] = runs;
   if (!primary) return [];
 
-  const lines = [
-    buildPinnedHeader(primary, theme),
-    ...progressLinesForRun(primary, options).map((line) => buildPinnedDetailLine(line, theme)),
-  ];
+  const lines = progressLinesForRun(primary, options).map((line) => buildPinnedDetailLine(line, theme));
 
   if (moreRuns.length > 0) {
-    lines.push(`${dim(RAIL, theme)} ${muted(`… ${formatCount(moreRuns.length, "more pinned", "more pinned")}`, theme)}`);
+    lines.push(`${dim(RAIL, theme)} ${muted(`… ${formatCount(moreRuns.length, "more", "more")}`, theme)}`);
   }
 
   return lines;
@@ -248,7 +222,7 @@ export function buildWidgetLines(
 
   const isPinned = options.isPinned ?? (() => false);
   const pinnedPanelLines = buildPinnedPanelLines(pinnedRuns(snapshot, isPinned), theme, options);
-  const lazyLine = buildLazyLine(snapshot, theme, options);
+  const lazyLine = buildLazyLine(snapshot, theme, { ...options, suppressFocusDetails: pinnedPanelLines.length > 0 });
 
   return keepFinalLineVisible([...pinnedPanelLines, lazyLine], limit);
 }
