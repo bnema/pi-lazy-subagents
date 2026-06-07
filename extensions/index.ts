@@ -98,6 +98,15 @@ function shortTitle(text: string): string {
   return singleLine.length <= 72 ? singleLine : `${singleLine.slice(0, 71).trimEnd()}…`;
 }
 
+export function buildDefaultParallelTitle(children: Array<{ prompt: string; taskSummary?: string }>): string {
+  const labels = children
+    .map((child) => shortTitle(child.taskSummary ?? child.prompt))
+    .filter(Boolean);
+  if (labels.length === 0) return "Parallel tasks";
+  if (labels.length <= 2) return labels.join(" + ");
+  return `${labels.slice(0, 2).join(" + ")} + ${labels.length - 2} more`;
+}
+
 function isWaitProgressDetails(value: unknown): value is { kind: "wait-progress"; lines: string[] } {
   const lines = typeof value === "object" && value !== null
     ? (value as { lines?: unknown }).lines
@@ -232,15 +241,16 @@ export default function lazySubagentsExtension(pi: ExtensionAPI): void {
             return { content: [{ type: "text", text: "name is only supported for action=run single runs; group runs cannot be continued by name." }], details: { action: params.action, name: params.name } };
           }
 
-          const title = params.title ?? `Parallel run (${params.children.length})`;
+          const children = params.children.map((child) => ({
+            ...child,
+            taskSummary: child.taskSummary ?? shortTitle(child.prompt),
+          }));
+          const title = params.title ?? buildDefaultParallelTitle(children);
           const run = await controller.launchGroup(
             {
               title,
               taskSummary: title,
-              children: params.children.map((child) => ({
-                ...child,
-                taskSummary: child.taskSummary ?? shortTitle(child.prompt),
-              })),
+              children,
             },
             ctx,
           );

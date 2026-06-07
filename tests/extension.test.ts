@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import lazySubagentsExtension from "../extensions/index.js";
+import lazySubagentsExtension, { buildDefaultParallelTitle } from "../extensions/index.js";
 import {
   MESSAGE_TYPE_ATTENTION,
   MESSAGE_TYPE_COMPLETION,
@@ -104,6 +104,18 @@ describe("extension entrypoint", () => {
     expect(guidance).toContain("action=run name=<name>");
     expect(guidance).toContain("follow-up via action=continue");
     expect(guidance).toContain("action=continue target=<name|runId>");
+  });
+
+  test("builds default parallel titles from child task summaries", () => {
+    expect(buildDefaultParallelTitle([
+      { prompt: "Inspect the package layout", taskSummary: "Inspect layout" },
+      { prompt: "Review the auth diff", taskSummary: "Review auth" },
+      { prompt: "Run focused tests", taskSummary: "Verify tests" },
+    ])).toBe("Inspect layout + Review auth + 1 more");
+    expect(buildDefaultParallelTitle([
+      { prompt: "Inspect the package layout" },
+      { prompt: "Review the auth diff" },
+    ])).toBe("Inspect the package layout + Review the auth diff");
   });
 
   test("tool rejects names on group and workflow runs", async () => {
