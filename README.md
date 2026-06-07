@@ -22,7 +22,15 @@ Current features:
 - manual controls for wait, status, result, pickup, clear, and cancel;
 - self-contained direct launcher; `pi-subagents` is **not required**.
 
-## Install locally
+## Install
+
+The easiest way to install the package is directly from GitHub:
+
+```bash
+pi install git:github.com/bnema/pi-lazy-subagents
+```
+
+For local development, install from a checkout:
 
 ```bash
 pi install /absolute/path/to/pi-lazy-subagents
