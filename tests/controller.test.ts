@@ -1532,6 +1532,11 @@ describe("LazySubagentsController", () => {
 
     await controller.handleSessionStart(ctx);
 
+    const restoredWidgetText = widgets.at(-1)?.[1]?.join("\n") ?? "";
+    expect(restoredWidgetText).not.toContain(GLYPH_PINNED);
+    expect(restoredWidgetText).not.toContain("1 pinned");
+    expect(messages.filter((entry) => entry.message.customType === MESSAGE_TYPE_PIN)).toHaveLength(0);
+
     expect(await controller.pinRun("failed-run", ctx)).toBe(false);
     await expect(executeLazySubagentsCommand("pin cancelled-run", controller, ctx)).resolves.toBe("Run already complete: cancelled-run is not pinned in widget.");
     const widgetText = widgets.at(-1)?.[1]?.join("\n") ?? "";

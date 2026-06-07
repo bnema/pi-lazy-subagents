@@ -1666,10 +1666,10 @@ export class LazySubagentsController {
     });
   }
 
-  private unpinTerminalSuccesses(): boolean {
+  private unpinTerminalRuns(): boolean {
     let changed = false;
     for (const run of this.registry.snapshot().runs) {
-      if ((run.status === "completed" || run.status === "skipped") && this.registry.isPinned(run.id)) {
+      if (isTerminalStatus(run.status) && this.registry.isPinned(run.id)) {
         this.registry.unpinRun(run.id);
         this.surfacedPinnedMessages.delete(run.id);
         changed = true;
@@ -1727,10 +1727,10 @@ export class LazySubagentsController {
     this.registry = new RunRegistry({}, persisted);
     this.progressLines.clear();
     this.progressStats.clear();
-    const unpinnedTerminalSuccesses = this.unpinTerminalSuccesses();
+    const unpinnedTerminalRuns = this.unpinTerminalRuns();
     const releasedExpiredNames = this.cleanupExpiredNamedRunLeases();
     const removedAcknowledgedRuns = this.cleanupAcknowledgedCompletedRuns();
-    if (unpinnedTerminalSuccesses || releasedExpiredNames || removedAcknowledgedRuns) this.persistState();
+    if (unpinnedTerminalRuns || releasedExpiredNames || removedAcknowledgedRuns) this.persistState();
     this.syncTrackedLaunchesFromSnapshot();
 
     for (const run of this.registry.snapshot().runs) {
