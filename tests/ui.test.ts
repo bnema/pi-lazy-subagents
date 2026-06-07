@@ -263,6 +263,27 @@ describe("visibility helpers", () => {
     expect(lines[6]).not.toContain("1 running");
   });
 
+  test("adds a special run kind label before non-single pinned titles", () => {
+    const workflow = createRun({
+      id: "run-workflow",
+      kind: "workflow",
+      status: "running",
+      title: "Review release pipeline",
+      recentEvents: [{ id: "event-1", category: "progress", timestamp: 1, summary: "collect step results", status: "running" }],
+    });
+    const parallel = createRun({
+      id: "run-parallel",
+      kind: "group",
+      status: "running",
+      title: "Parallel review pass",
+      updatedAt: 2,
+      recentEvents: [{ id: "event-2", category: "progress", timestamp: 2, summary: "merge reviewer notes", status: "running" }],
+    });
+
+    expect(buildWidgetLines(createSnapshot([workflow]), 60_000, 6, undefined, { isPinned: () => true })[0]).toContain(`${GLYPH_PINNED} (workflow) Review release pipeline`);
+    expect(buildWidgetLines(createSnapshot([parallel]), 60_000, 6, undefined, { isPinned: () => true })[0]).toContain(`${GLYPH_PINNED} (parallel) Parallel review pass`);
+  });
+
   test("renders one detailed pinned panel plus a compact more pinned indicator for multiple pinned runs", () => {
     const firstPinned = createRun({
       id: "run-pin-1",

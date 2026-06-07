@@ -193,8 +193,17 @@ function buildPinnedDetailLine(line: string, theme?: WidgetThemeLike): string {
   return `${dim(RAIL, theme)} ${formatKnownProgressLine(line, theme)}`;
 }
 
+function specialRunKindLabel(run: RunRecord): string | undefined {
+  if (run.kind === "group") return "parallel";
+  if (run.kind === "workflow") return "workflow";
+  if (run.kind === "child") return "child";
+  return undefined;
+}
+
 function buildPinnedTitleLine(run: RunRecord, theme?: WidgetThemeLike): string {
-  return `${color(GLYPH_PINNED, "accent", theme)} ${bold(shortTitle(run), theme)} ${dim(RAIL, theme)}`;
+  const kindLabel = specialRunKindLabel(run);
+  const title = `${kindLabel ? `(${kindLabel}) ` : ""}${shortTitle(run)}`;
+  return `${color(GLYPH_PINNED, "accent", theme)} ${bold(title, theme)} ${dim(RAIL, theme)}`;
 }
 
 function buildPinnedPanelLines(runs: RunRecord[], theme: WidgetThemeLike | undefined, options: WidgetBuildOptions): string[] {
