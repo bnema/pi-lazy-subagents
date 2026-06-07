@@ -131,7 +131,7 @@ lazy_subagents action=workflow maxConcurrency=2 steps=[{id:"triage",agent:"scout
 - `result` reads final output; it is not a live tail.
 - `pickup` injects a completed result into chat.
 - Active runs show the persistent progress panel by default. Use `pin off` to hide it and `pin on` to show it again; `pin <runId>` re-enables the panel for a specific active run.
-- completed successes auto-hide after a grace window; failed and paused runs stay until resolved or cleared.
+- Completed successful runs auto-hide after a grace window; failed and paused runs stay until resolved or cleared.
 - Names are only supported for `action=run` single runs; group and workflow runs cannot be continued by name.
 - Named single runs stay visible after completion for a bounded lease (default 30 min). Use `action=continue target=<name|runId>` to send follow-up tasks before the lease expires; targets resolve by run id first, then by name.
 - Both named and unnamed completed runs can be continued by their run ID while they remain available. Named runs remain continuable by name or run ID until their lease expires.

@@ -1811,10 +1811,15 @@ export class LazySubagentsController {
     }
   }
 
+  private hasExplicitPinnedPanelRun(): boolean {
+    return this.registry.snapshot().runs.some((run) => this.registry.isPinned(run.id) && isPinnedPanelEligibleStatus(run.status));
+  }
+
   private shouldShowPinnedPanelForRun(runId: string): boolean {
     if (!this.pinnedWidgetVisible) return false;
     const run = this.registry.get(runId);
-    return Boolean(run && isPinnedPanelEligibleStatus(run.status));
+    if (!run || !isPinnedPanelEligibleStatus(run.status)) return false;
+    return this.hasExplicitPinnedPanelRun() ? this.registry.isPinned(runId) : true;
   }
 
   private syncTrackedLaunchesFromSnapshot(): void {

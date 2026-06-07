@@ -2,7 +2,7 @@ import { truncateToWidth } from "@earendil-works/pi-tui";
 
 import type { RunRecord, RunRegistrySnapshot } from "../types.js";
 import { formatCompactThousands } from "../utils/time.js";
-import { GLYPH_LAZY_SUBAGENTS } from "./glyphs.js";
+import { GLYPH_LAZY_SUBAGENTS, GLYPH_PINNED } from "./glyphs.js";
 
 export interface WidgetViewModel {
   lines: string[];
@@ -122,7 +122,7 @@ function buildLazyLine(snapshot: RunRegistrySnapshot, theme?: WidgetThemeLike, o
   ];
 
   if (activeRuns.length > 0) {
-    const runningLabel = activeRuns.length === 1 ? "running" : formatCount(activeRuns.length, "running", "running");
+    const runningLabel = activeRuns.length === 1 ? "running" : `(${activeRuns.length}) running`;
     parts.push(color(`${runningLabel}${options.runningDots ?? ""}`, "accent", theme));
   }
   if (attentionCount > 0) parts.push(color(formatCount(attentionCount, "attention"), "warning", theme));
@@ -193,11 +193,18 @@ function buildPinnedDetailLine(line: string, theme?: WidgetThemeLike): string {
   return `${dim(RAIL, theme)} ${formatKnownProgressLine(line, theme)}`;
 }
 
+function buildPinnedTitleLine(run: RunRecord, theme?: WidgetThemeLike): string {
+  return `${color(GLYPH_PINNED, "accent", theme)} ${bold(shortTitle(run), theme)} ${dim(RAIL, theme)}`;
+}
+
 function buildPinnedPanelLines(runs: RunRecord[], theme: WidgetThemeLike | undefined, options: WidgetBuildOptions): string[] {
   const [primary, ...moreRuns] = runs;
   if (!primary) return [];
 
-  const lines = progressLinesForRun(primary, options).map((line) => buildPinnedDetailLine(line, theme));
+  const lines = [
+    buildPinnedTitleLine(primary, theme),
+    ...progressLinesForRun(primary, options).map((line) => buildPinnedDetailLine(line, theme)),
+  ];
 
   if (moreRuns.length > 0) {
     lines.push(`${dim(RAIL, theme)} ${muted(`… ${formatCount(moreRuns.length, "more", "more")}`, theme)}`);
@@ -207,6 +214,7 @@ function buildPinnedPanelLines(runs: RunRecord[], theme: WidgetThemeLike | undef
 }
 
 function keepFinalLineVisible(lines: string[], limit: number): string[] {
+  if (limit <= 0) return [];
   if (lines.length <= limit) return lines;
   const finalLine = lines[lines.length - 1]!;
   return [...lines.slice(0, Math.max(0, limit - 1)), finalLine];
