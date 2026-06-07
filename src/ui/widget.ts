@@ -20,7 +20,7 @@ export interface WidgetBuildOptions {
   isPinned?: (runId: string) => boolean;
   getPinnedProgressLines?: (runId: string) => string[];
   runningDots?: string;
-  suppressFocusDetails?: boolean;
+  suppressFocusIdentity?: boolean;
 }
 
 const SEPARATOR = " │ ";
@@ -127,9 +127,11 @@ function buildLazyLine(snapshot: RunRegistrySnapshot, theme?: WidgetThemeLike, o
   }
   if (attentionCount > 0) parts.push(color(formatCount(attentionCount, "attention"), "warning", theme));
   if (inboxCount > 0) parts.push(color(formatCount(inboxCount, "inbox"), "success", theme));
-  if (focusRun && !options.suppressFocusDetails) {
-    parts.push(bold(shortTitle(focusRun), theme));
-    if (focusRun.currentTool) parts.push(muted(focusRun.currentTool, theme));
+  if (focusRun) {
+    if (!options.suppressFocusIdentity) {
+      parts.push(bold(shortTitle(focusRun), theme));
+      if (focusRun.currentTool) parts.push(muted(focusRun.currentTool, theme));
+    }
     if (focusRun.toolCount !== undefined && focusRun.toolCount > 0) parts.push(muted(`${focusRun.toolCount} tools`, theme));
     const tokens = compactTokenCount(focusRun.totalTokens);
     if (tokens) parts.push(muted(tokens, theme));
@@ -222,7 +224,7 @@ export function buildWidgetLines(
 
   const isPinned = options.isPinned ?? (() => false);
   const pinnedPanelLines = buildPinnedPanelLines(pinnedRuns(snapshot, isPinned), theme, options);
-  const lazyLine = buildLazyLine(snapshot, theme, { ...options, suppressFocusDetails: pinnedPanelLines.length > 0 });
+  const lazyLine = buildLazyLine(snapshot, theme, { ...options, suppressFocusIdentity: pinnedPanelLines.length > 0 });
 
   return keepFinalLineVisible([...pinnedPanelLines, lazyLine], limit);
 }

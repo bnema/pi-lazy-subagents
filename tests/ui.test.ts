@@ -240,6 +240,8 @@ describe("visibility helpers", () => {
         { id: "event-5", category: "progress", timestamp: 5, summary: "write review notes", status: "running" },
       ],
     });
+    (pinned as any).toolCount = 7;
+    (pinned as any).totalTokens = 12_400;
     const snapshot = createSnapshot([pinned]);
 
     const lines = buildWidgetLines(snapshot, 60_000, 8, undefined, { isPinned: (runId) => runId === "run-pin" });
@@ -254,6 +256,9 @@ describe("visibility helpers", () => {
     expect(lines[5]).toContain(GLYPH_LAZY_SUBAGENTS);
     expect(lines[5]).toContain("Lazy");
     expect(lines[5]).toContain("running");
+    expect(lines[5]).toContain("7 tools");
+    expect(lines[5]).toContain("12k tok");
+    expect(lines[5]).not.toContain("Review auth diff");
     expect(lines[5]).not.toContain("1 running");
   });
 

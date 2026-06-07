@@ -1074,7 +1074,8 @@ describe("LazySubagentsController", () => {
     expect(controller.getSnapshot().activeRuns[0]?.totalTokens).toBe(6079);
     expect(statuses.at(-1)?.[1]).toContain("1 live");
     expect(statuses.at(-1)?.[1]).not.toContain("6.1k tok");
-    expect(widgets.at(-1)?.[1]?.join("\n") ?? "").not.toContain("6.1k tok");
+    expect(widgets.at(-1)?.[1]?.join("\n") ?? "").toContain("6.1k tok");
+    expect(widgets.at(-1)?.[1]?.join("\n") ?? "").toContain("51 tools");
   });
 
   test("routes restored successful runs without leaving them in live UI", async () => {
