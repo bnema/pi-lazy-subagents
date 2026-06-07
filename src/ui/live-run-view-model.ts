@@ -16,7 +16,7 @@ interface LiveRunViewModelOptions {
   maxExpandedDetails?: number;
 }
 
-interface LiveRunViewModel {
+export interface LiveRunViewModel {
   runId: string;
   title: string;
   metaLine: string;

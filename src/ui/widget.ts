@@ -1,17 +1,8 @@
 import { truncateToWidth } from "@earendil-works/pi-tui";
 
 import type { RunRecord, RunRegistrySnapshot } from "../types.js";
-import { formatAge, formatCompactThousands, formatDuration } from "../utils/time.js";
-import {
-  GLYPH_FAILED,
-  GLYPH_INBOX,
-  GLYPH_LAZY_SUBAGENTS,
-  GLYPH_PAUSED,
-  GLYPH_PINNED,
-  GLYPH_QUEUED,
-  GLYPH_RUNNING,
-  GLYPH_WAITING,
-} from "./glyphs.js";
+import { formatCompactThousands } from "../utils/time.js";
+import { GLYPH_LAZY_SUBAGENTS, GLYPH_PINNED } from "./glyphs.js";
 
 export interface WidgetViewModel {
   lines: string[];
@@ -27,13 +18,16 @@ export interface WidgetThemeLike {
 
 export interface WidgetBuildOptions {
   isPinned?: (runId: string) => boolean;
+  getPinnedProgressLines?: (runId: string) => string[];
+  runningDots?: string;
+  suppressFocusIdentity?: boolean;
 }
 
-interface WidgetLabel {
-  icon: string;
-  label: string;
-  color: string;
-}
+const SEPARATOR = " │ ";
+const RAIL = "│";
+const RUNNING_DOT_FRAMES = ["   ", ".  ", ".. ", "..."];
+const RUNNING_DOT_INTERVAL_MS = 450;
+const PINNED_DETAIL_LIMIT = 5;
 
 function needsAttention(run: RunRecord): boolean {
   return run.attentionNeeded
@@ -80,89 +74,158 @@ function shortTitle(run: RunRecord): string {
   return run.title || run.taskSummary;
 }
 
-function latestMeta(run: RunRecord, now: number): string | undefined {
-  if (run.status === "completed" && run.completedAt) return `done ${formatAge({ now, timestamp: run.completedAt })}`;
-  if (run.status === "skipped" && run.completedAt) return `skipped ${formatAge({ now, timestamp: run.completedAt })}`;
-  if (run.status === "failed" && run.completedAt) return `failed ${formatAge({ now, timestamp: run.completedAt })}`;
-  if (run.status === "cancelled" && run.completedAt) return `cancelled ${formatAge({ now, timestamp: run.completedAt })}`;
-  if (run.status === "paused") return `paused ${formatDuration(now - run.updatedAt)}`;
-  if (run.status === "blocked") return `quiet ${formatDuration(now - run.updatedAt)}`;
-  if (run.status === "queued") return `queued ${formatDuration(now - run.startedAt)}`;
+function compactTokenCount(tokens: number | undefined, suffix = "tok"): string | undefined {
+  return tokens !== undefined && tokens > 0 ? `${formatCompactThousands(tokens)} ${suffix}` : undefined;
+}
+
+function joinParts(parts: string[], theme?: WidgetThemeLike): string {
+  return parts.filter(Boolean).join(dim(SEPARATOR, theme));
+}
+
+function isPinnedPanelEligible(run: RunRecord): boolean {
+  return run.status === "queued" || run.status === "running" || run.status === "blocked" || run.status === "paused";
+}
+
+function runningRuns(snapshot: RunRegistrySnapshot): RunRecord[] {
+  return snapshot.activeRuns.filter((run) => run.status === "running");
+}
+
+function queuedRuns(snapshot: RunRegistrySnapshot): RunRecord[] {
+  return snapshot.activeRuns.filter((run) => run.status === "queued");
+}
+
+function pinnedRuns(snapshot: RunRegistrySnapshot, isPinned: (runId: string) => boolean): RunRecord[] {
+  return snapshot.runs
+    .filter((run) => isPinned(run.id) && isPinnedPanelEligible(run))
+    .sort(sortByRecencyDesc);
+}
+
+function lazyFocusRun(snapshot: RunRegistrySnapshot, isPinned: (runId: string) => boolean): RunRecord | undefined {
+  return [
+    ...snapshot.runs.filter((run) => needsAttention(run)).sort(sortByRecencyDesc),
+    ...pinnedRuns(snapshot, isPinned),
+    ...runningRuns(snapshot).sort(sortByRecencyDesc),
+    ...queuedRuns(snapshot).sort(sortByRecencyDesc),
+    ...[...snapshot.recentRuns].sort(sortByRecencyDesc),
+  ][0];
+}
+
+function buildLazyLine(snapshot: RunRegistrySnapshot, theme?: WidgetThemeLike, options: WidgetBuildOptions = {}): string {
+  const isPinned = options.isPinned ?? (() => false);
+  const activeRuns = runningRuns(snapshot);
+  const attentionCount = snapshot.runs.filter((run) => needsAttention(run)).length;
+  const inboxCount = snapshot.recentRuns.filter((run) => isSuccessfulInboxRun(run, isPinned(run.id))).length;
+  const focusRun = lazyFocusRun(snapshot, isPinned);
+
+  const parts = [
+    `${color(GLYPH_LAZY_SUBAGENTS, "accent", theme)} ${bold("Lazy", theme)}`,
+  ];
+
+  if (activeRuns.length > 0) {
+    const runningLabel = activeRuns.length === 1 ? "running" : `(${activeRuns.length}) running`;
+    parts.push(color(`${runningLabel}${options.runningDots ?? ""}`, "accent", theme));
+  }
+  if (attentionCount > 0) parts.push(color(formatCount(attentionCount, "attention"), "warning", theme));
+  if (inboxCount > 0) parts.push(color(formatCount(inboxCount, "inbox"), "success", theme));
+  if (focusRun) {
+    if (!options.suppressFocusIdentity) {
+      parts.push(bold(shortTitle(focusRun), theme));
+      if (focusRun.currentTool) parts.push(muted(focusRun.currentTool, theme));
+    }
+    if (focusRun.toolCount !== undefined && focusRun.toolCount > 0) parts.push(muted(`${focusRun.toolCount} tools`, theme));
+    const tokens = compactTokenCount(focusRun.totalTokens);
+    if (tokens) parts.push(muted(tokens, theme));
+  }
+  if (parts.length === 1) parts.push(color(formatCount(snapshot.runs.length, "run"), "muted", theme));
+
+  return joinParts(parts, theme);
+}
+
+function fallbackProgressLines(run: RunRecord): string[] {
+  return run.recentEvents
+    .map((event) => event.summary.trim())
+    .filter(Boolean);
+}
+
+function progressLinesForRun(run: RunRecord, options: WidgetBuildOptions): string[] {
+  const detailLines = (options.getPinnedProgressLines?.(run.id) ?? fallbackProgressLines(run))
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  return detailLines.slice(Math.max(0, detailLines.length - PINNED_DETAIL_LIMIT));
+}
+
+function formatKnownProgressLine(line: string, theme?: WidgetThemeLike): string {
+  const parts = line.split(" · ").map((part) => part.trim()).filter(Boolean);
+  const prefix = parts.length > 1 && /^#\d+/.test(parts[0] ?? "") ? parts.shift() : undefined;
+  const head = parts.shift();
+  if (!head) return line;
+
+  const sep = dim(SEPARATOR, theme);
+  const prefixText = prefix ? `${dim(prefix, theme)}${sep}` : "";
+  const [firstDetail, ...restDetails] = parts;
+  const detail = [firstDetail ? bold(firstDetail, theme) : undefined, ...restDetails.map((part) => muted(part, theme))]
+    .filter((part): part is string => Boolean(part))
+    .join(sep);
+
+  if (head === "tool start" || head === "tool end") {
+    const icon = head === "tool end" ? color("✓", "success", theme) : color("↗", "accent", theme);
+    const label = color(head, head === "tool end" ? "success" : "accent", theme);
+    return `${prefixText}${icon} ${label}${detail ? `${sep}${detail}` : ""}`;
+  }
+
+  if (head === "assistant") {
+    return `${prefixText}${color("✦", "success", theme)} ${muted("assistant", theme)}${detail ? `${sep}${detail}` : ""}`;
+  }
+
+  if (head === "turn end") {
+    return `${prefixText}${muted("•", theme)} ${muted("turn end", theme)}${detail ? `${sep}${detail}` : ""}`;
+  }
+
+  if (head.includes("fail") || head.includes("error")) {
+    const body = [head, ...parts].join(" · ");
+    return `${prefixText}${color("!", "error", theme)} ${color(body, "error", theme)}`;
+  }
+
+  return line;
+}
+
+function buildPinnedDetailLine(line: string, theme?: WidgetThemeLike): string {
+  return `${dim(RAIL, theme)} ${formatKnownProgressLine(line, theme)}`;
+}
+
+function specialRunKindLabel(run: RunRecord): string | undefined {
+  if (run.kind === "group") return "parallel";
+  if (run.kind === "workflow") return "workflow";
   return undefined;
 }
 
-function metadataParts(run: RunRecord, now: number): string[] {
-  return [
-    run.agent,
-    latestMeta(run, now),
-    run.currentTool,
-    run.toolCount !== undefined && run.toolCount > 0 ? `${run.toolCount} tools` : undefined,
-    run.totalTokens !== undefined && run.totalTokens > 0 ? `${formatCompactThousands(run.totalTokens)} tok` : undefined,
-  ].filter((value): value is string => Boolean(value));
+function buildPinnedTitleLine(run: RunRecord, theme?: WidgetThemeLike): string {
+  const kindLabel = specialRunKindLabel(run);
+  const title = `${kindLabel ? `(${kindLabel}) ` : ""}${shortTitle(run)}`;
+  return `${color(GLYPH_PINNED, "accent", theme)} ${bold(title, theme)}`;
 }
 
-function labelForRun(run: RunRecord, isPinned: boolean): WidgetLabel {
-  if (needsAttention(run)) {
-    if (run.status === "failed") return { icon: GLYPH_FAILED, label: "failed", color: "error" };
-    if (run.status === "paused") return { icon: GLYPH_PAUSED, label: "paused", color: "warning" };
-    return { icon: GLYPH_WAITING, label: "waiting", color: "warning" };
-  }
+function buildPinnedPanelLines(runs: RunRecord[], theme: WidgetThemeLike | undefined, options: WidgetBuildOptions): string[] {
+  const [primary, ...moreRuns] = runs;
+  if (!primary) return [];
 
-  if (isPinned) return { icon: GLYPH_PINNED, label: "pinned", color: "accent" };
-  if (run.status === "queued") return { icon: GLYPH_QUEUED, label: "queued", color: "muted" };
-  return { icon: GLYPH_RUNNING, label: "live", color: "accent" };
-}
-
-function formatRunLine(run: RunRecord, now: number, theme?: WidgetThemeLike, isPinned = false): string {
-  const label = labelForRun(run, isPinned);
-  const prefix = `${color(label.icon, label.color, theme)} ${color(label.label, label.color, theme)}`;
-  const title = bold(shortTitle(run), theme);
-  const meta = muted(metadataParts(run, now).join(dim(" · ", theme)), theme);
-  return `${prefix}${dim(" · ", theme)}${title}${dim(" · ", theme)}${meta}`;
-}
-
-function formatInboxLine(runs: RunRecord[], now: number, theme?: WidgetThemeLike): string {
-  const latest = [...runs].sort(sortByRecencyDesc)[0];
-  if (!latest) return "";
-
-  const prefix = `${color(GLYPH_INBOX, "success", theme)} ${color("inbox", "success", theme)}`;
-  const summary = runs.length === 1
-    ? bold(shortTitle(latest), theme)
-    : bold(`${formatCount(runs.length, "completed")}`, theme);
-
-  const metaParts = runs.length === 1
-    ? metadataParts(latest, now)
-    : [
-      `latest ${shortTitle(latest)}`,
-      latest.agent,
-      latestMeta(latest, now),
-      latest.totalTokens && latest.totalTokens > 0 ? `${formatCompactThousands(latest.totalTokens)} tok` : undefined,
-    ].filter((value): value is string => Boolean(value));
-
-  return `${prefix}${dim(" · ", theme)}${summary}${dim(" · ", theme)}${muted(metaParts.join(dim(" · ", theme)), theme)}`;
-}
-
-function formatMoreLine(hiddenCount: number, theme?: WidgetThemeLike): string {
-  return `${muted("…", theme)} ${muted(`${hiddenCount} more run${hiddenCount === 1 ? "" : "s"}`, theme)}`;
-}
-
-function buildSummaryLine(snapshot: RunRegistrySnapshot, theme?: WidgetThemeLike, options: WidgetBuildOptions = {}): string {
-  const isPinned = options.isPinned ?? (() => false);
-  const liveCount = snapshot.activeRuns.filter((run) => run.status !== "blocked" && run.status !== "paused").length;
-  const attentionCount = snapshot.runs.filter((run) => needsAttention(run)).length;
-  const pinnedCount = snapshot.runs.filter((run) => isPinned(run.id) && !needsAttention(run)).length;
-  const inboxCount = snapshot.recentRuns.filter((run) => isSuccessfulInboxRun(run, isPinned(run.id))).length;
-
-  const parts = [
-    `${color(GLYPH_LAZY_SUBAGENTS, "accent", theme)} ${bold("lazy subagents", theme)}`,
+  const lines = [
+    buildPinnedTitleLine(primary, theme),
+    ...progressLinesForRun(primary, options).map((line) => buildPinnedDetailLine(line, theme)),
   ];
 
-  if (liveCount > 0) parts.push(color(formatCount(liveCount, "live"), "accent", theme));
-  if (attentionCount > 0) parts.push(color(formatCount(attentionCount, "attention"), "warning", theme));
-  if (pinnedCount > 0) parts.push(color(formatCount(pinnedCount, "pinned"), "accent", theme));
-  if (inboxCount > 0) parts.push(color(formatCount(inboxCount, "inbox"), "success", theme));
+  if (moreRuns.length > 0) {
+    lines.push(`${dim(RAIL, theme)} ${muted(`… ${formatCount(moreRuns.length, "more", "more")}`, theme)}`);
+  }
 
-  return parts.join(dim(" · ", theme));
+  return lines;
+}
+
+function keepFinalLineVisible(lines: string[], limit: number): string[] {
+  if (limit <= 0) return [];
+  if (lines.length <= limit) return lines;
+  const finalLine = lines[lines.length - 1]!;
+  return [...lines.slice(0, Math.max(0, limit - 1)), finalLine];
 }
 
 export function buildWidgetLines(
@@ -172,49 +235,18 @@ export function buildWidgetLines(
   theme?: WidgetThemeLike,
   options: WidgetBuildOptions = {},
 ): string[] {
+  void now;
   if (snapshot.runs.length === 0 || limit <= 0) return [];
 
   const isPinned = options.isPinned ?? (() => false);
-  const header = buildSummaryLine(snapshot, theme, options);
+  const pinnedPanelLines = buildPinnedPanelLines(pinnedRuns(snapshot, isPinned), theme, options);
+  const lazyLine = buildLazyLine(snapshot, theme, { ...options, suppressFocusIdentity: pinnedPanelLines.length > 0 });
 
-  const attentionRuns = snapshot.runs
-    .filter((run) => needsAttention(run))
-    .sort(sortByRecencyDesc);
+  return keepFinalLineVisible([...pinnedPanelLines, lazyLine], limit);
+}
 
-  const pinnedRuns = snapshot.runs
-    .filter((run) => !needsAttention(run) && isPinned(run.id))
-    .sort(sortByRecencyDesc);
-
-  const hiddenIds = new Set([...attentionRuns, ...pinnedRuns].map((run) => run.id));
-  const liveRuns = snapshot.activeRuns
-    .filter((run) => !hiddenIds.has(run.id))
-    .sort(sortByRecencyDesc);
-
-  const inboxRuns = snapshot.recentRuns
-    .filter((run) => isSuccessfulInboxRun(run, isPinned(run.id)))
-    .sort(sortByRecencyDesc);
-
-  const featuredRuns = [...attentionRuns, ...pinnedRuns, ...liveRuns];
-  const lines = [header];
-  const reserveForInbox = inboxRuns.length > 0 ? 1 : 0;
-  const reserveForMore = featuredRuns.length > 0 ? 1 : 0;
-  const featuredBudget = Math.max(0, limit - lines.length - reserveForInbox - reserveForMore);
-  const visibleFeatured = featuredRuns.slice(0, featuredBudget);
-
-  for (const run of visibleFeatured) {
-    lines.push(formatRunLine(run, now, theme, isPinned(run.id)));
-  }
-
-  if (inboxRuns.length > 0 && lines.length < limit) {
-    lines.push(formatInboxLine(inboxRuns, now, theme));
-  }
-
-  const hiddenFeatured = Math.max(0, featuredRuns.length - visibleFeatured.length);
-  if (hiddenFeatured > 0 && lines.length < limit) {
-    lines.push(formatMoreLine(hiddenFeatured, theme));
-  }
-
-  return lines.slice(0, limit);
+function hasRunningAnimation(snapshot: RunRegistrySnapshot): boolean {
+  return runningRuns(snapshot).length > 0;
 }
 
 export function createWidgetContent(
@@ -225,13 +257,27 @@ export function createWidgetContent(
 ) {
   if (snapshot.runs.length === 0) return undefined;
 
-  return (_tui: unknown, theme: WidgetThemeLike) => {
-    const lines = buildWidgetLines(snapshot, now, limit, theme, options);
+  return (tui: { requestRender?: () => void }, theme: WidgetThemeLike) => {
+    let frameIndex = 0;
+    const shouldAnimate = hasRunningAnimation(snapshot) && typeof tui.requestRender === "function";
+    const interval = shouldAnimate
+      ? setInterval(() => {
+        frameIndex = (frameIndex + 1) % RUNNING_DOT_FRAMES.length;
+        tui.requestRender?.();
+      }, RUNNING_DOT_INTERVAL_MS)
+      : undefined;
+    interval?.unref?.();
+
     return {
       render(width: number) {
+        const runningDots = shouldAnimate ? RUNNING_DOT_FRAMES[frameIndex] : undefined;
+        const lines = buildWidgetLines(snapshot, now, limit, theme, { ...options, runningDots });
         return lines.map((line) => truncateToWidth(line, Math.max(1, width), "…"));
       },
       invalidate() {},
+      dispose() {
+        if (interval) clearInterval(interval);
+      },
     };
   };
 }

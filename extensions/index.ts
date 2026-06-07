@@ -186,7 +186,7 @@ export default function lazySubagentsExtension(pi: ExtensionAPI): void {
       "Subagents always report terminal results back to the main agent; completed, failed, paused, and attention states all return as follow-up input automatically.",
       "Use action=wait only for explicit blocking requests or non-interactive scripts.",
       "Use action=status only for human-requested health checks, suspected stalls, or after about 60s with no signal. Do not poll.",
-      "Use action=result after terminal completion, pickup to inject the result, pin for durable live progress, and clear/cancel to manage runs.",
+      "Use action=result after terminal completion, pickup to inject the result, pin off/on to hide or restore the persistent progress panel, and clear/cancel to manage runs.",
       "Use action=continue target=<name|runId> prompt=<new prompt> to resume a completed named subagent for another review round. The run reuses its existing session.",
     ],
     parameters: ToolParamsSchema,
@@ -276,7 +276,7 @@ export default function lazySubagentsExtension(pi: ExtensionAPI): void {
           return { content: [{ type: "text", text: formatStatusReport(controller.getSnapshot(), params.runId) }], details: { action: params.action, runId: params.runId } };
         case "wait":
           return {
-            content: [{ type: "text", text: formatWaitReport(await controller.waitForRunSignal(params.runId, { timeoutMs: params.timeoutMs, signal: _signal, ctx, onUpdate: _onUpdate })) }],
+            content: [{ type: "text", text: formatWaitReport(await controller.waitForRunSignal(params.runId, { timeoutMs: params.timeoutMs, signal: _signal, ctx })) }],
             details: { action: params.action, runId: params.runId, timeoutMs: params.timeoutMs },
           };
         case "result": {
@@ -292,11 +292,26 @@ export default function lazySubagentsExtension(pi: ExtensionAPI): void {
             content: [{ type: "text", text: params.runId && await controller.pickupRun(params.runId, ctx) ? `Injected result from ${params.runId} into chat.` : `Run not found: ${params.runId ?? "(missing runId)"}` }],
             details: { action: params.action, runId: params.runId },
           };
-        case "pin":
+        case "pin": {
+          if (params.runId === "off") {
+            await controller.setPinnedWidgetVisible(false, ctx);
+            return { content: [{ type: "text", text: "Pinned widget hidden." }], details: { action: params.action, runId: params.runId } };
+          }
+          if (params.runId === "on") {
+            await controller.setPinnedWidgetVisible(true, ctx);
+            return { content: [{ type: "text", text: "Pinned widget visible." }], details: { action: params.action, runId: params.runId } };
+          }
+          const outcome = params.runId ? await controller.pinRunWithOutcome(params.runId, ctx) : "not_found";
+          const text = outcome === "pinned"
+            ? `Pinned ${params.runId} in widget.`
+            : outcome === "not_pinnable"
+              ? `Run already complete: ${params.runId} is not pinned in widget.`
+              : `Run not found: ${params.runId ?? "(missing runId)"}`;
           return {
-            content: [{ type: "text", text: params.runId && await controller.pinRun(params.runId, ctx) ? `Pinned ${params.runId} into chat.` : `Run not found: ${params.runId ?? "(missing runId)"}` }],
+            content: [{ type: "text", text }],
             details: { action: params.action, runId: params.runId },
           };
+        }
         case "clear": {
           const cleared = controller.clearRuns(params.scope ?? "completed", params.runId);
           return { content: [{ type: "text", text: cleared > 0 ? `Cleared ${cleared} run(s).` : "Nothing to clear." }], details: { action: params.action, cleared } };

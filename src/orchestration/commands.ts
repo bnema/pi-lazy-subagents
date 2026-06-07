@@ -342,7 +342,7 @@ export function buildLazySubagentsHelp(): string {
     "  /lazy-subagents wait [runId] [--timeout-ms MS]",
     "  /lazy-subagents result <runId>",
     "  /lazy-subagents pickup <runId>",
-    "  /lazy-subagents pin <runId>",
+    "  /lazy-subagents pin <runId|on|off>",
     "  /lazy-subagents cancel <runId>",
     "  /lazy-subagents clear [all|runId]",
     "",
@@ -357,7 +357,7 @@ export function buildLazySubagentsHelp(): string {
     `  lazy_subagents action=wait [runId=<runId>] [timeoutMs=${DEFAULT_WAIT_TIMEOUT_MS}]`,
     "  lazy_subagents action=result runId=<runId>",
     "  lazy_subagents action=pickup runId=<runId>",
-    "  lazy_subagents action=pin runId=<runId>",
+    "  lazy_subagents action=pin runId=<runId|on|off>",
     "  lazy_subagents action=cancel runId=<runId>",
     "  lazy_subagents action=clear [scope=completed|all] [runId=<runId>]",
     "",
@@ -398,7 +398,7 @@ export function buildLazySubagentsHelp(): string {
     "Default flow: launch, then return to the user or continue work. Signals arrive automatically.",
     "wait blocks the main turn. Use it only for explicit blocking requests or scripts.",
     "status is for human-requested health checks, suspected stalls, or after about 60s with no signal. Do not poll.",
-    "Use result after completion, pickup to inject the result, and pin for durable live progress.",
+    "Use result after completion, pickup to inject the result, and pin off/on to hide or restore the durable widget progress panel.",
   ].join("\n");
 }
 
@@ -428,10 +428,20 @@ export async function executeLazySubagentsCommand(
       return (await controller.pickupRun(parsed.runId, ctx))
         ? `Injected result from ${parsed.runId} into chat.`
         : `Run not found: ${parsed.runId}`;
-    case "pin":
-      return (await controller.pinRun(parsed.runId, ctx))
-        ? `Pinned ${parsed.runId} into chat.`
-        : `Run not found: ${parsed.runId}`;
+    case "pin": {
+      if (parsed.runId === "off") {
+        await controller.setPinnedWidgetVisible(false, ctx);
+        return "Pinned widget hidden.";
+      }
+      if (parsed.runId === "on") {
+        await controller.setPinnedWidgetVisible(true, ctx);
+        return "Pinned widget visible.";
+      }
+      const outcome = await controller.pinRunWithOutcome(parsed.runId, ctx);
+      if (outcome === "pinned") return `Pinned ${parsed.runId} in widget.`;
+      if (outcome === "not_pinnable") return `Run already complete: ${parsed.runId} is not pinned in widget.`;
+      return `Run not found: ${parsed.runId}`;
+    }
     case "cancel":
       return (await controller.cancelRun(parsed.runId, ctx))
         ? `Cancelled ${parsed.runId}.`

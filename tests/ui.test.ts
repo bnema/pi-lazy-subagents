@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 
 import { __testHooks } from "../src/orchestration/controller.js";
 import { buildFooterStatus } from "../src/ui/status.js";
@@ -11,14 +11,11 @@ import {
   renderRunMessageText,
 } from "../src/ui/messages.js";
 import {
-  GLYPH_INBOX,
   GLYPH_LAZY_SUBAGENTS,
   GLYPH_PINNED,
-  GLYPH_RUNNING,
-  GLYPH_WAITING,
 } from "../src/ui/glyphs.js";
 import { buildLiveRunViewModel } from "../src/ui/live-run-view-model.js";
-import { buildWidgetLines } from "../src/ui/widget.js";
+import { buildWidgetLines, createWidgetContent } from "../src/ui/widget.js";
 import { MESSAGE_TYPE_PIN } from "../src/defaults.js";
 import type { RunRecord, RunRegistrySnapshot } from "../src/types.js";
 
@@ -116,27 +113,226 @@ describe("visibility helpers", () => {
       bold: (text: string) => `*${text}*`,
     } as any);
 
+    expect(lines).toHaveLength(1);
     expect(lines[0]).toContain(`<${GLYPH_LAZY_SUBAGENTS}>`);
-    expect(lines[0]).toContain("lazy subagents");
-    expect(lines[0]).toContain("1 live");
-    expect(lines[0]).not.toContain("2 live");
+    expect(lines[0]).toContain("Lazy");
+    expect(lines[0]).toContain("running");
+    expect(lines[0]).not.toContain("1 running");
+    expect(lines[0]).not.toContain("2 running");
     expect(lines[0]).toContain("attention");
     expect(lines[0]).toContain("inbox");
-    expect(lines[1]).toContain(`<${GLYPH_WAITING}>`);
-    expect(lines[1]).toContain("waiting");
-    expect(lines[1]).toContain("Needs human input");
-    expect(lines[1]).toContain("quiet 8s");
-    expect(lines[2]).toContain(`<${GLYPH_RUNNING}>`);
-    expect(lines[2]).toContain("live");
-    expect(lines[2]).toContain("Research auth flow");
-    expect(lines[2]).toContain("read");
-    expect(lines[2]).toContain("3 tools");
-    expect(lines[2]).toContain("1.2k");
-    expect(lines[2]).not.toContain("upd ");
-    expect(lines[3]).toContain(`<${GLYPH_INBOX}>`);
-    expect(lines[3]).toContain("inbox");
-    expect(lines[3]).toContain("Plan done");
-    expect(lines[3]).toContain("done 2s ago");
+    expect(lines[0]).toContain("Needs human input");
+  });
+
+  test("renders persistent Lazy widget as one compact running row", () => {
+    const running = createRun({
+      id: "run-1",
+      status: "running",
+      startedAt: 50_000,
+      updatedAt: 59_000,
+      title: "Research auth flow",
+    });
+    const snapshot = createSnapshot([running]);
+
+    const lines = buildWidgetLines(snapshot, 60_000, 6, {
+      fg: (_color: string, text: string) => `<${text}>`,
+      dim: (text: string) => `(${text})`,
+      muted: (text: string) => `{${text}}`,
+      bold: (text: string) => `*${text}*`,
+    } as any);
+    const content = createWidgetContent(snapshot, 60_000, 6);
+    const rendered = content?.({} as any, {
+      fg: (_color: string, text: string) => `<${text}>`,
+      dim: (text: string) => `(${text})`,
+      muted: (text: string) => `{${text}}`,
+      bold: (text: string) => `*${text}*`,
+    } as any).render(160) ?? [];
+
+    expect(lines).toHaveLength(1);
+    expect(rendered).toHaveLength(1);
+    expect(lines[0]).toContain(`<${GLYPH_LAZY_SUBAGENTS}>`);
+    expect(lines[0]).toContain("Lazy");
+    expect(lines[0]).toContain("│");
+    expect(lines[0]).toContain("running");
+    expect(lines[0]).not.toContain("1 running");
+    expect(lines[0]).toContain("Research auth flow");
+    expect(lines[0]).not.toContain("lazy subagents");
+    expect(lines[0]).not.toContain("live");
+  });
+
+  test("includes a running count only when multiple runs are running", () => {
+    const first = createRun({ id: "run-1", status: "running", title: "Review auth diff" });
+    const second = createRun({ id: "run-2", status: "running", title: "Trace login bug", updatedAt: 2 });
+    const snapshot = createSnapshot([first, second]);
+
+    const lines = buildWidgetLines(snapshot, 60_000, 6);
+
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("(2) running");
+  });
+
+  test("keeps queued runs as focus text without counting them as running", () => {
+    const queued = createRun({
+      id: "run-queued",
+      status: "queued",
+      startedAt: 50_000,
+      updatedAt: 59_000,
+      title: "Queued review",
+    });
+    const snapshot = createSnapshot([queued]);
+
+    const lines = buildWidgetLines(snapshot, 60_000, 6);
+
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("Lazy");
+    expect(lines[0]).toContain("Queued review");
+    expect(lines[0]).not.toContain("running");
+  });
+
+  test("animates running dots and disposes the widget timer", () => {
+    vi.useFakeTimers();
+    try {
+      const running = createRun({
+        id: "run-1",
+        status: "running",
+        startedAt: 50_000,
+        updatedAt: 59_000,
+        title: "Research auth flow",
+      });
+      const snapshot = createSnapshot([running]);
+      const requestRender = vi.fn();
+      const component = createWidgetContent(snapshot, 60_000, 6)?.({ requestRender }, {
+        fg: (_color: string, text: string) => text,
+        dim: (text: string) => text,
+        muted: (text: string) => text,
+        bold: (text: string) => text,
+      } as any);
+
+      expect(component).toBeDefined();
+      const firstRender = component!.render(160).join("\n");
+      vi.advanceTimersByTime(450);
+      expect(requestRender).toHaveBeenCalledTimes(1);
+      const secondRender = component!.render(160).join("\n");
+      expect(secondRender).not.toBe(firstRender);
+      expect(secondRender).toContain("running.");
+
+      component!.dispose?.();
+      requestRender.mockClear();
+      vi.advanceTimersByTime(900);
+      expect(requestRender).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("renders a pinned panel above the compact Lazy row with five latest rail-prefixed progress lines", () => {
+    const pinned = createRun({
+      id: "run-pin",
+      status: "running",
+      startedAt: 50_000,
+      updatedAt: 59_000,
+      title: "Review auth diff",
+      recentEvents: [
+        { id: "event-1", category: "progress", timestamp: 1, summary: "oldest progress", status: "running" },
+        { id: "event-2", category: "progress", timestamp: 2, summary: "scan auth routes", status: "running" },
+        { id: "event-3", category: "progress", timestamp: 3, summary: "inspect token flow", status: "running" },
+        { id: "event-4", category: "progress", timestamp: 4, summary: "compare session handling", status: "running" },
+        { id: "event-5", category: "progress", timestamp: 5, summary: "write review notes", status: "running" },
+      ],
+    });
+    (pinned as any).toolCount = 7;
+    (pinned as any).totalTokens = 12_400;
+    const snapshot = createSnapshot([pinned]);
+
+    const lines = buildWidgetLines(snapshot, 60_000, 8, undefined, { isPinned: (runId) => runId === "run-pin" });
+
+    expect(lines[0]).toContain(`${GLYPH_PINNED} Review auth diff`);
+    expect(lines[0]).not.toContain("│");
+    expect(lines[1]).toBe("│ oldest progress");
+    expect(lines[2]).toBe("│ scan auth routes");
+    expect(lines[3]).toBe("│ inspect token flow");
+    expect(lines[4]).toBe("│ compare session handling");
+    expect(lines[5]).toBe("│ write review notes");
+    expect(lines.filter((line) => line.startsWith("│ "))).toHaveLength(5);
+    expect(lines[6]).toContain(GLYPH_LAZY_SUBAGENTS);
+    expect(lines[6]).toContain("Lazy");
+    expect(lines[6]).toContain("running");
+    expect(lines[6]).toContain("7 tools");
+    expect(lines[6]).toContain("12k tok");
+    expect(lines[6]).not.toContain("Review auth diff");
+    expect(lines[6]).not.toContain("1 running");
+  });
+
+  test("adds a special run kind label before user-visible special pinned titles", () => {
+    const workflow = createRun({
+      id: "run-workflow",
+      kind: "workflow",
+      status: "running",
+      title: "Review release pipeline",
+      recentEvents: [{ id: "event-1", category: "progress", timestamp: 1, summary: "collect step results", status: "running" }],
+    });
+    const parallel = createRun({
+      id: "run-parallel",
+      kind: "group",
+      status: "running",
+      title: "Parallel review pass",
+      updatedAt: 2,
+      recentEvents: [{ id: "event-2", category: "progress", timestamp: 2, summary: "merge reviewer notes", status: "running" }],
+    });
+    const child = createRun({
+      id: "run-child",
+      kind: "child",
+      status: "running",
+      title: "Internal child step",
+      updatedAt: 3,
+      recentEvents: [{ id: "event-3", category: "progress", timestamp: 3, summary: "finish internal step", status: "running" }],
+    });
+
+    expect(buildWidgetLines(createSnapshot([workflow]), 60_000, 6, undefined, { isPinned: () => true })[0]).toContain(`${GLYPH_PINNED} (workflow) Review release pipeline`);
+    expect(buildWidgetLines(createSnapshot([parallel]), 60_000, 6, undefined, { isPinned: () => true })[0]).toContain(`${GLYPH_PINNED} (parallel) Parallel review pass`);
+    expect(buildWidgetLines(createSnapshot([child]), 60_000, 6, undefined, { isPinned: () => true })[0]).toContain(`${GLYPH_PINNED} Internal child step`);
+    expect(buildWidgetLines(createSnapshot([child]), 60_000, 6, undefined, { isPinned: () => true })[0]).not.toContain("(child)");
+  });
+
+  test("renders one detailed pinned panel plus a compact more pinned indicator for multiple pinned runs", () => {
+    const firstPinned = createRun({
+      id: "run-pin-1",
+      status: "running",
+      startedAt: 50_000,
+      updatedAt: 59_000,
+      title: "Review auth diff",
+      recentEvents: [
+        { id: "event-1", category: "progress", timestamp: 1, summary: "inspect diff", status: "running" },
+        { id: "event-2", category: "progress", timestamp: 2, summary: "draft findings", status: "running" },
+      ],
+    });
+    const secondPinned = createRun({
+      id: "run-pin-2",
+      status: "running",
+      startedAt: 51_000,
+      updatedAt: 58_000,
+      title: "Trace login bug",
+    });
+    const thirdPinned = createRun({
+      id: "run-pin-3",
+      status: "running",
+      startedAt: 52_000,
+      updatedAt: 57_000,
+      title: "Audit settings copy",
+    });
+    const snapshot = createSnapshot([firstPinned, secondPinned, thirdPinned]);
+
+    const lines = buildWidgetLines(snapshot, 60_000, 8, undefined, { isPinned: (runId) => runId.startsWith("run-pin-") });
+    const text = lines.join("\n");
+
+    expect(lines[0]).toContain(`${GLYPH_PINNED} Review auth diff`);
+    expect(lines[1]).toBe("│ inspect diff");
+    expect(lines[2]).toBe("│ draft findings");
+    expect(text).toContain("2 more");
+    expect(text).not.toContain("2 more pinned");
+    expect(text).not.toContain("Trace login bug");
+    expect(text).not.toContain("Audit settings copy");
+    expect(lines.at(-1)).toContain(GLYPH_LAZY_SUBAGENTS);
   });
 
   test("formats launch, completion, and failure message payloads", () => {
@@ -381,7 +577,7 @@ describe("visibility helpers", () => {
     expect(formatRunMessageBody(malformed as any, true)).toBe("42");
   });
 
-  test("named completed run stays visible within lease", () => {
+  test("named completed run uses completion visibility instead of lease visibility", () => {
     const namedCompleted = createRun({
       id: "named-1",
       status: "completed",
@@ -390,19 +586,23 @@ describe("visibility helpers", () => {
       completedAt: 50_000,
     });
 
-    // At time 60_000 (well within lease of 100_000)
     expect(__testHooks.shouldKeepRunVisibleInUi(namedCompleted, {
       isPinned: false,
       isAcknowledged: true,
       now: 60_000,
-    })).toBe(true);
+    })).toBe(false);
 
-    // At time 60_000, not acknowledged — still visible (lease hasn't expired)
     expect(__testHooks.shouldKeepRunVisibleInUi(namedCompleted, {
       isPinned: false,
       isAcknowledged: false,
       now: 60_000,
     })).toBe(true);
+
+    expect(__testHooks.shouldKeepRunVisibleInUi(namedCompleted, {
+      isPinned: false,
+      isAcknowledged: false,
+      now: 90_001,
+    })).toBe(false);
   });
 
   test("named completed run hides immediately after lease expiry", () => {
@@ -428,11 +628,11 @@ describe("visibility helpers", () => {
       now: 130_000,
     })).toBe(false);
 
-    // At time 100_500 (just after lease expiry), named runs are no longer visible or resumable.
+    // Past the normal completion grace window, named runs are no longer visible.
     expect(__testHooks.shouldKeepRunVisibleInUi(namedCompleted, {
       isPinned: false,
       isAcknowledged: false,
-      now: 100_500,
+      now: 130_000,
     })).toBe(false);
   });
 
@@ -526,7 +726,7 @@ describe("visibility helpers", () => {
       agent: "reviewer",
       name: "diff-reviewer",
       leaseExpiry: 150_000,
-      completedAt: 90_000,
+      completedAt: 60_000,
       title: "Review auth diff",
     });
     const expiredNamed = createRun({
@@ -556,8 +756,8 @@ describe("visibility helpers", () => {
 
     const snapshot = createSnapshot(visibleRuns);
 
-    // Should have: active (running) + namedWithinLease (completed, within lease)
-    expect(visibleRuns.map((r) => r.id)).toEqual(["run-1", "named-1"]);
+    // Should only show active runs; named completed leases preserve resumability, not inbox visibility.
+    expect(visibleRuns.map((r) => r.id)).toEqual(["run-1"]);
 
     // Widget should still build
     const lines = buildWidgetLines(snapshot, now, 6, {
@@ -567,8 +767,9 @@ describe("visibility helpers", () => {
       bold: (text: string) => `*${text}*`,
     } as any);
 
-    expect(lines[0]).toContain("lazy subagents");
-    expect(lines[0]).toContain("1 live");
+    expect(lines[0]).toContain("Lazy");
+    expect(lines[0]).toContain("running");
+    expect(lines[0]).not.toContain("1 running");
     // expiredNamed and archived should NOT appear
     expect(lines.join("\n")).not.toContain("stale-reviewer");
     expect(lines.join("\n")).not.toContain("Old review");

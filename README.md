@@ -22,7 +22,15 @@ Current features:
 - manual controls for wait, status, result, pickup, clear, and cancel;
 - self-contained direct launcher; `pi-subagents` is **not required**.
 
-## Install locally
+## Install
+
+The easiest way to install the package is directly from GitHub:
+
+```bash
+pi install git:github.com/bnema/pi-lazy-subagents
+```
+
+For local development, install from a checkout:
 
 ```bash
 pi install /absolute/path/to/pi-lazy-subagents
@@ -47,7 +55,7 @@ pi --no-extensions -e /absolute/path/to/pi-lazy-subagents/extensions/index.ts
 /lazy-subagents wait [runId] [--timeout-ms MS]
 /lazy-subagents result <runId>
 /lazy-subagents pickup <runId>
-/lazy-subagents pin <runId>
+/lazy-subagents pin <runId|on|off>
 /lazy-subagents cancel <runId>
 /lazy-subagents clear [all|runId]
 ```
@@ -63,7 +71,7 @@ Examples:
 /lazy-subagents wait [runId]
 /lazy-subagents result <runId>
 /lazy-subagents pickup <runId>
-/lazy-subagents pin <runId>
+/lazy-subagents pin <runId|on|off>
 ```
 
 ### Tool
@@ -126,12 +134,12 @@ lazy_subagents action=workflow maxConcurrency=2 steps=[{id:"triage",agent:"scout
 - `when` and empty `fanOutFrom` steps become `skipped` without launching a child; failed or skipped dependencies block dependent descendants.
 - Non-empty `fanOutFrom` steps stay as logical group barriers until every expanded child finishes. The group then becomes `completed`, `failed`, or `skipped` and downstream steps can consume the aggregate without knowing child ids.
 - Invalid workflow graphs are rejected before launch: duplicate ids, missing dependencies, self-dependencies, cycles, and fractional concurrency are not allowed.
-- `wait` blocks. Use it only for explicit blocking requests or non-interactive scripts. In interactive Pi, blocking waits render live progress in the active tool row while marking the run pinned for widget visibility.
+- `wait` blocks. Use it only for explicit blocking requests or non-interactive scripts. In interactive Pi, progress stays in the persistent widget instead of duplicating a live tool-row view.
 - `status` is for health checks: human request, suspected stall, or about 60 seconds with no signal. Do not poll.
 - `result` reads final output; it is not a live tail.
 - `pickup` injects a completed result into chat.
-- `pin` keeps background progress visible without repeated status checks. Explicit pins add a durable progress card to chat; wait-time auto-pins use the tool row as the live surface.
-- completed successes auto-hide after a grace window; failed, paused, and pinned runs stay until resolved or cleared.
+- Active runs show the persistent progress panel by default. Use `pin off` to hide it and `pin on` to show it again; `pin <runId>` re-enables the panel for a specific active run.
+- Completed successful runs auto-hide after a grace window; failed and paused runs stay until resolved or cleared.
 - Names are only supported for `action=run` single runs; group and workflow runs cannot be continued by name.
 - Named single runs stay visible after completion for a bounded lease (default 30 min). Use `action=continue target=<name|runId>` to send follow-up tasks before the lease expires; targets resolve by run id first, then by name.
 - Both named and unnamed completed runs can be continued by their run ID while they remain available. Named runs remain continuable by name or run ID until their lease expires.
@@ -153,7 +161,7 @@ lazy_subagents action=workflow maxConcurrency=2 steps=[{id:"triage",agent:"scout
 3. Confirm:
    - a launch card appears;
    - the footer shows an active run;
-   - the widget shows elapsed/update/tool context.
+   - the widget shows a compact Lazy running row with current task context.
 4. Return to chat. Do not poll or call blocking `wait`; the completion card should arrive automatically.
 5. Confirm:
    - the footer/widget move the run into recent/completed state;
@@ -179,6 +187,7 @@ lazy_subagents action=workflow maxConcurrency=2 steps=[{id:"triage",agent:"scout
    ```
 
 11. Confirm the report shows live timing and recent activity fields.
+    - For a long-running task, confirm the pinned progress panel stays above the Lazy row; run `/lazy-subagents pin off` and `/lazy-subagents pin on` to verify the visibility toggle.
 
 ### Print-mode smoke test
 

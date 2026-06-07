@@ -6,6 +6,8 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { DEFAULT_NAMED_RUN_LEASE_MS, MESSAGE_TYPE_ATTENTION, MESSAGE_TYPE_COMPLETION, MESSAGE_TYPE_FAILURE, MESSAGE_TYPE_LAUNCH, MESSAGE_TYPE_PIN, PERSISTED_STATE_ENTRY, STATUS_KEY, WIDGET_KEY } from "../src/defaults.js";
 import { LazySubagentsController, __testHooks as controllerTestHooks } from "../src/orchestration/controller.js";
+import { executeLazySubagentsCommand } from "../src/orchestration/commands.js";
+import { GLYPH_PINNED } from "../src/ui/glyphs.js";
 import { createPersistedState } from "../src/state/persistence.js";
 import { RunRegistry } from "../src/state/run-registry.js";
 import type { ContinueLaunchRequest, LaunchChildRequest, LaunchResult, Launcher, LauncherRuntimeContext, NormalizedRunUpdate } from "../src/launcher/interface.js";
@@ -257,9 +259,9 @@ describe("LazySubagentsController", () => {
     const registry = new RunRegistry();
     registry.upsert(createRun({
       id: "branch-run",
-      status: "completed",
+      status: "running",
       updatedAt: 10,
-      completedAt: 10,
+      completedAt: undefined,
     }));
 
     const persisted = createPersistedState(registry.serialize(), 10);
@@ -280,7 +282,7 @@ describe("LazySubagentsController", () => {
     expect(renderRequests).toHaveLength(1);
   });
 
-  test("acknowledged named runs refresh out of the UI when their lease expires", async () => {
+  test("acknowledged named runs stay out of the UI and are released when their lease expires", async () => {
     vi.useFakeTimers();
     let clock = 1_000;
     const registry = new RunRegistry();
@@ -310,13 +312,13 @@ describe("LazySubagentsController", () => {
 
     try {
       await controller.handleSessionStart(ctx);
-      expect(widgets.at(-1)?.[1]?.join("\n")).toContain("Reusable reviewer");
+      expect(widgets.at(-1)).toBeUndefined();
 
       clock = 1_200;
       await vi.advanceTimersByTimeAsync(60);
       await Promise.resolve();
 
-      expect(widgets.at(-1)).toEqual([WIDGET_KEY, undefined]);
+      expect(widgets.at(-1)).toBeUndefined();
 
       const relaunched = await controller.launchChild({
         agent: "reviewer",
@@ -380,18 +382,18 @@ describe("LazySubagentsController", () => {
     firstRegistry.upsert(createRun({
       id: "branch-run-1",
       title: "First ready run",
-      status: "completed",
+      status: "running",
       updatedAt: 10,
-      completedAt: 10,
+      completedAt: undefined,
     }));
 
     const secondRegistry = new RunRegistry();
     secondRegistry.upsert(createRun({
       id: "branch-run-2",
       title: "Second ready run",
-      status: "completed",
+      status: "running",
       updatedAt: 20,
-      completedAt: 20,
+      completedAt: undefined,
     }));
 
     const branchEntries = [
@@ -604,6 +606,82 @@ describe("LazySubagentsController", () => {
     expect(wakeMessages[0]?.message.content).toContain("Result excerpt:\nFull reviewer report");
     expect(wakeMessages[0]?.message.content).not.toContain("Lazy subagent update");
     expect(wakeMessages[0]?.message.content).not.toContain("- Summary: Found 3 issues in auth.ts");
+  });
+
+  test("routes named successful completions without leaving inbox entries visible", async () => {
+    const { api, messages } = createPi();
+    const launcher = new FakeLauncher();
+    let clock = 100;
+    const controller = new LazySubagentsController(api as any, { launcher, createRunId: () => "run-1", now: () => clock });
+    const { ctx, widgets } = createContext({ isIdle: true, hasPendingMessages: false });
+
+    await controller.handleSessionStart(ctx);
+    await controller.launchChild(
+      {
+        agent: "reviewer",
+        title: "Tasked wrap-up follow-up",
+        taskSummary: "Tasked wrap-up follow-up",
+        prompt: "Review the follow-up.",
+        name: "tasked-follow-up",
+      },
+      ctx,
+    );
+
+    launcher.updates.set("run-1", {
+      runId: "run-1",
+      status: "completed",
+      updatedAt: 130,
+      completedAt: 130,
+      resultPreview: "Done",
+    });
+
+    await controller.pollOnce();
+    clock = 130 + 20 * 60_000;
+    await controller.pollOnce();
+
+    const widgetText = widgets.at(-1)?.[1]?.join("\n") ?? "";
+    expect(widgetText).not.toContain("Tasked wrap-up follow-up");
+    expect(widgetText).not.toContain("inbox");
+    expect(messages.filter((entry) => entry.message.customType === MESSAGE_TYPE_COMPLETION && entry.message.display === true)).toHaveLength(0);
+    const routedMessages = hiddenCompletionMessages(messages);
+    expect(routedMessages).toHaveLength(1);
+    expect(routedMessages[0]?.message.content).toContain("[DONE] Tasked wrap-up follow-up");
+    const run = controller.getSnapshot().runs.find((entry: RunRecord) => entry.id === "run-1");
+    expect(run?.name).toBe("tasked-follow-up");
+    expect(run?.leaseExpiry).toBeDefined();
+  });
+
+  test("keeps named failures visible", async () => {
+    const { api, messages } = createPi();
+    const launcher = new FakeLauncher();
+    const controller = new LazySubagentsController(api as any, { launcher, createRunId: () => "run-1", now: () => 100 });
+    const { ctx, widgets } = createContext({ isIdle: true, hasPendingMessages: false });
+
+    await controller.handleSessionStart(ctx);
+    await controller.launchChild(
+      {
+        agent: "reviewer",
+        title: "Tasked wrap-up follow-up",
+        taskSummary: "Tasked wrap-up follow-up",
+        prompt: "Review the follow-up.",
+        name: "tasked-follow-up",
+      },
+      ctx,
+    );
+
+    launcher.updates.set("run-1", {
+      runId: "run-1",
+      status: "failed",
+      updatedAt: 130,
+      completedAt: 130,
+      errorPreview: "boom",
+      attentionNeeded: true,
+    });
+
+    await controller.pollOnce();
+
+    expect(messages.filter((entry) => entry.message.customType === MESSAGE_TYPE_FAILURE && entry.message.display === true)).toHaveLength(1);
+    expect(widgets.at(-1)?.[1]?.join("\n") ?? "").toContain("Tasked wrap-up follow-up");
   });
 
   test("routes parallel group completion with all child report links and one aggregate summary", async () => {
@@ -997,9 +1075,10 @@ describe("LazySubagentsController", () => {
     expect(statuses.at(-1)?.[1]).toContain("1 live");
     expect(statuses.at(-1)?.[1]).not.toContain("6.1k tok");
     expect(widgets.at(-1)?.[1]?.join("\n") ?? "").toContain("6.1k tok");
+    expect(widgets.at(-1)?.[1]?.join("\n") ?? "").toContain("51 tools");
   });
 
-  test("keeps recent successful runs visible briefly, then hides them from live UI after the grace window", async () => {
+  test("routes restored successful runs without leaving them in live UI", async () => {
     const registry = new RunRegistry();
     registry.upsert(
       createRun({
@@ -1012,17 +1091,17 @@ describe("LazySubagentsController", () => {
       }),
     );
 
-    let clock = 20_000;
+    let clock = 10_000;
     const { api } = createPi();
     const launcher = new FakeLauncher();
     const controller = new LazySubagentsController(api as any, { launcher, now: () => clock });
     const { ctx, widgets } = createContext({
-      entries: [{ type: "custom", customType: PERSISTED_STATE_ENTRY, data: createPersistedState(registry.serialize(), 20_000) }],
-      branchEntries: [{ type: "custom", customType: PERSISTED_STATE_ENTRY, data: createPersistedState(registry.serialize(), 20_000) }],
+      entries: [{ type: "custom", customType: PERSISTED_STATE_ENTRY, data: createPersistedState(registry.serialize(), 10_000) }],
+      branchEntries: [{ type: "custom", customType: PERSISTED_STATE_ENTRY, data: createPersistedState(registry.serialize(), 10_000) }],
     });
 
     await controller.handleSessionStart(ctx);
-    expect(widgets.at(-1)?.[1]?.join("\n")).toContain("Done recent");
+    expect(widgets.at(-1)?.[1]?.join("\n") ?? "").not.toContain("Done recent");
 
     clock = 31_001;
     await controller.pollOnce();
@@ -1073,7 +1152,7 @@ describe("LazySubagentsController", () => {
     expect(widgetText).not.toContain("Done hidden");
     expect(widgetText).not.toContain("1 pinned");
     expect(widgetText).not.toContain("pinned · Done pinned");
-    expect(widgetText).toContain("Done pinned");
+    expect(widgetText).not.toContain("Done pinned");
     expect(widgetText).toContain("Failed visible");
   });
 
@@ -1344,12 +1423,11 @@ describe("LazySubagentsController", () => {
     expect(messages.filter((entry) => entry.message.customType === MESSAGE_TYPE_ATTENTION)).toHaveLength(0);
   });
 
-  test("wait emits live tool updates for the selected run without requiring transcript pin surfacing", async () => {
+  test("wait blocks silently while the default pinned widget remains the progress surface", async () => {
     const { api, messages } = createPi();
     const launcher = new FakeLauncher();
     const controller = new LazySubagentsController(api as any, { launcher, createRunId: () => "run-1", now: () => 100 });
     const { ctx, widgets } = createContext({ isIdle: true, hasPendingMessages: false });
-    const updates: any[] = [];
 
     await controller.handleSessionStart(ctx);
     await controller.launchChild(
@@ -1362,6 +1440,13 @@ describe("LazySubagentsController", () => {
       ctx,
     );
 
+    const initialWidgetText = widgets.at(-1)?.[1]?.join("\n") ?? "";
+    expect(initialWidgetText).toContain("│ Launched reviewer");
+    expect(initialWidgetText).toContain("Lazy");
+    expect(initialWidgetText).toContain("1 run");
+    expect(initialWidgetText).toContain(`${GLYPH_PINNED} Review auth diff`);
+    expect(initialWidgetText).not.toContain("1 pinned");
+
     launcher.updates.set("run-1", {
       runId: "run-1",
       status: "completed",
@@ -1373,21 +1458,145 @@ describe("LazySubagentsController", () => {
       totalTokens: 42,
     });
 
-    const result = await controller.waitForRunSignal("run-1", { ctx, onUpdate: (update) => updates.push(update) });
+    const result = await controller.waitForRunSignal("run-1", { ctx });
 
     expect(result.status).toBe("ready");
     expect(messages.some((entry) => entry.message.customType === MESSAGE_TYPE_PIN && entry.message.details?.runId === "run-1")).toBe(false);
-    expect(updates.length).toBeGreaterThan(0);
-    expect(updates.at(-1)?.details?.kind).toBe("wait-progress");
-    expect(updates.at(-1)?.details?.runId).toBe("run-1");
-    expect(updates.at(-1)?.details?.lines.join("\n")).toContain("Review auth diff");
-    expect(updates.at(-1)?.details?.lines.join("\n")).toContain("read");
-    expect(widgets.at(-1)?.[1]?.join("\n") ?? "").not.toContain("1 pinned");
+  });
 
-    expect(await controller.pinRun("run-1", ctx)).toBe(true);
-    expect(messages.filter((entry) => entry.message.customType === MESSAGE_TYPE_PIN && entry.message.details?.runId === "run-1")).toHaveLength(0);
-    expect(await controller.pinRun("run-1", ctx)).toBe(true);
-    expect(messages.filter((entry) => entry.message.customType === MESSAGE_TYPE_PIN && entry.message.details?.runId === "run-1")).toHaveLength(0);
+  test("pin off hides the default pinned widget and pin on shows it again", async () => {
+    const { api, messages } = createPi();
+    const launcher = new FakeLauncher();
+    const controller = new LazySubagentsController(api as any, { launcher, createRunId: () => "run-1", now: () => 100 });
+    const { ctx, widgets } = createContext({ isIdle: true, hasPendingMessages: false });
+
+    await controller.handleSessionStart(ctx);
+    await controller.launchChild(
+      {
+        agent: "reviewer",
+        title: "Review auth diff",
+        taskSummary: "Review auth diff",
+        prompt: "Review the auth diff and summarize the issues.",
+      },
+      ctx,
+    );
+
+    const widgetText = widgets.at(-1)?.[1]?.join("\n") ?? "";
+    expect(widgetText).toContain("│ Launched reviewer");
+    expect(widgetText).toContain("Lazy");
+    expect(widgetText).toContain(`${GLYPH_PINNED} Review auth diff`);
+    expect(widgetText).not.toContain("1 pinned");
+
+    await expect(executeLazySubagentsCommand("pin off", controller, ctx)).resolves.toBe("Pinned widget hidden.");
+    const hiddenWidgetText = widgets.at(-1)?.[1]?.join("\n") ?? "";
+    expect(hiddenWidgetText).not.toContain(GLYPH_PINNED);
+    expect(hiddenWidgetText).toContain("Lazy");
+    expect(hiddenWidgetText).toContain("Review auth diff");
+
+    await expect(executeLazySubagentsCommand("pin run-1", controller, ctx)).resolves.toBe("Pinned run-1 in widget.");
+    const repinnedWidgetText = widgets.at(-1)?.[1]?.join("\n") ?? "";
+    expect(repinnedWidgetText).toContain("│ Launched reviewer");
+    expect(repinnedWidgetText).toContain(`${GLYPH_PINNED} Review auth diff`);
+
+    await expect(executeLazySubagentsCommand("pin off", controller, ctx)).resolves.toBe("Pinned widget hidden.");
+    await expect(executeLazySubagentsCommand("pin on", controller, ctx)).resolves.toBe("Pinned widget visible.");
+    const reshownWidgetText = widgets.at(-1)?.[1]?.join("\n") ?? "";
+    expect(reshownWidgetText).toContain("│ Launched reviewer");
+    expect(reshownWidgetText).toContain(`${GLYPH_PINNED} Review auth diff`);
+    expect.soft(messages.filter((entry) => entry.message.customType === MESSAGE_TYPE_PIN && entry.message.details?.runId === "run-1")).toHaveLength(0);
+
+    launcher.updates.set("run-1", {
+      runId: "run-1",
+      status: "completed",
+      updatedAt: 120,
+      completedAt: 120,
+      resultPreview: "Looks good overall.",
+    });
+    await controller.pollOnce();
+    expect(widgets.at(-1)?.[1]?.join("\n") ?? "").not.toContain("1 pinned");
+    expect(controller.getSnapshot().runs.find((run) => run.id === "run-1")?.status).toBe("completed");
+  });
+
+  test("explicit pin focuses that run when multiple active runs exist", async () => {
+    const registry = new RunRegistry();
+    registry.upsert(createRun({ id: "run-1", status: "running", title: "Newer active run", updatedAt: 300 }));
+    registry.upsert(createRun({ id: "run-2", status: "running", title: "Pinned active run", updatedAt: 200 }));
+    registry.pinRun("run-2");
+    const { api } = createPi();
+    const controller = new LazySubagentsController(api as any, { launcher: new FakeLauncher(), now: () => 300 });
+    const { ctx, widgets } = createContext({
+      branchEntries: [{ type: "custom", customType: PERSISTED_STATE_ENTRY, data: createPersistedState(registry.serialize(), 300) }],
+    });
+
+    await controller.handleSessionStart(ctx);
+
+    const widgetText = widgets.at(-1)?.[1]?.join("\n") ?? "";
+    expect(widgetText).toContain(`${GLYPH_PINNED} Pinned active run`);
+    expect(widgetText).not.toContain(`${GLYPH_PINNED} Newer active run`);
+    expect(widgetText).toContain("(2) running");
+  });
+
+  test("rejects pinning a skipped run", async () => {
+    const registry = new RunRegistry();
+    registry.upsert(createRun({ id: "skipped-run", status: "skipped", title: "Skipped follow-up", updatedAt: 200, completedAt: 200 }));
+    const { api: skippedApi, messages: skippedMessages } = createPi();
+    const skippedController = new LazySubagentsController(skippedApi as any, { launcher: new FakeLauncher(), now: () => 200 });
+    const { ctx: skippedCtx } = createContext({
+      branchEntries: [{ type: "custom", customType: PERSISTED_STATE_ENTRY, data: createPersistedState(registry.serialize(), 200) }],
+    });
+
+    await skippedController.handleSessionStart(skippedCtx);
+    expect(await skippedController.pinRun("skipped-run", skippedCtx)).toBe(false);
+    await expect(executeLazySubagentsCommand("pin skipped-run", skippedController, skippedCtx)).resolves.toBe("Run already complete: skipped-run is not pinned in widget.");
+    expect(skippedMessages.filter((entry) => entry.message.customType === MESSAGE_TYPE_PIN && entry.message.details?.runId === "skipped-run")).toHaveLength(0);
+  });
+
+  test("pin reports failed and cancelled runs as not pinnable", async () => {
+    const registry = new RunRegistry();
+    registry.upsert(createRun({ id: "failed-run", status: "failed", title: "Failed review", updatedAt: 200, completedAt: 200 }));
+    registry.pinRun("failed-run");
+    registry.upsert(createRun({ id: "cancelled-run", status: "cancelled", title: "Cancelled review", updatedAt: 201, completedAt: 201 }));
+    const { api, messages } = createPi();
+    const controller = new LazySubagentsController(api as any, { launcher: new FakeLauncher(), now: () => 200 });
+    const { ctx, widgets } = createContext({
+      branchEntries: [{ type: "custom", customType: PERSISTED_STATE_ENTRY, data: createPersistedState(registry.serialize(), 200) }],
+    });
+
+    await controller.handleSessionStart(ctx);
+
+    const restoredWidgetText = widgets.at(-1)?.[1]?.join("\n") ?? "";
+    expect(restoredWidgetText).not.toContain(GLYPH_PINNED);
+    expect(restoredWidgetText).not.toContain("1 pinned");
+    expect(messages.filter((entry) => entry.message.customType === MESSAGE_TYPE_PIN)).toHaveLength(0);
+
+    expect(await controller.pinRun("failed-run", ctx)).toBe(false);
+    await expect(executeLazySubagentsCommand("pin cancelled-run", controller, ctx)).resolves.toBe("Run already complete: cancelled-run is not pinned in widget.");
+    const widgetText = widgets.at(-1)?.[1]?.join("\n") ?? "";
+    expect(widgetText).toContain("Failed review");
+    expect(widgetText).toContain("attention");
+    expect(widgetText).not.toContain("1 pinned");
+    expect(widgetText).not.toContain(GLYPH_PINNED);
+    expect(messages.filter((entry) => entry.message.customType === MESSAGE_TYPE_PIN)).toHaveLength(0);
+  });
+
+  test("pin command says the run was pinned in the widget", async () => {
+    const { api } = createPi();
+    const launcher = new FakeLauncher();
+    const controller = new LazySubagentsController(api as any, { launcher, createRunId: () => "run-1", now: () => 100 });
+    const { ctx } = createContext({ isIdle: true, hasPendingMessages: false });
+
+    await controller.handleSessionStart(ctx);
+    await controller.launchChild(
+      {
+        agent: "reviewer",
+        title: "Review auth diff",
+        taskSummary: "Review auth diff",
+        prompt: "Review the auth diff and summarize the issues.",
+      },
+      ctx,
+    );
+
+    await expect(executeLazySubagentsCommand("pin run-1", controller, ctx)).resolves.toBe("Pinned run-1 in widget.");
   });
 
   test("wait surfaces progress without leaving completed runs pinned", async () => {
@@ -1451,10 +1660,10 @@ describe("LazySubagentsController", () => {
     const result = await controller.waitForRunSignal("run-1", { ctx });
 
     expect(result.status).toBe("ready");
-    expect(messages.filter((entry) => entry.message.customType === MESSAGE_TYPE_PIN && entry.message.details?.runId === "run-1")).toHaveLength(1);
+    expect(messages.filter((entry) => entry.message.customType === MESSAGE_TYPE_PIN && entry.message.details?.runId === "run-1")).toHaveLength(0);
   });
 
-  test("pins a run into chat and renders detailed progress lines from child events", async () => {
+  test("pins a run in the widget and renders detailed progress lines from child events", async () => {
     const { api, messages } = createPi();
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-lazy-subagents-pin-"));
     const eventsPath = path.join(tempDir, "events.jsonl");
@@ -1502,7 +1711,7 @@ describe("LazySubagentsController", () => {
     await controller.pollOnce();
 
     expect(await controller.pinRun("run-1")).toBe(true);
-    expect(messages.at(-1)?.message.customType).toBe(MESSAGE_TYPE_PIN);
+    expect(messages.filter((entry) => entry.message.customType === MESSAGE_TYPE_PIN && entry.message.details?.runId === "run-1")).toHaveLength(0);
     expect(controller.getPinnedRunLines("run-1").join("\n")).toContain("model (openai-codex) gpt-5.4 • xhigh");
     expect(controller.getPinnedRunLines("run-1").join("\n")).toContain("tool start · read · /repo/src/auth.ts");
     expect(controller.getPinnedRunLines("run-1").join("\n")).toContain("Looks good overall.");
@@ -1544,9 +1753,6 @@ describe("LazySubagentsController", () => {
         totalTokens: 42,
       });
       await controller.pollOnce();
-      expect(readSpy.mock.calls.filter(([filePath]) => String(filePath) === eventsPath)).toHaveLength(0);
-
-      expect(await controller.pinRun("run-1")).toBe(true);
       expect(readSpy.mock.calls.filter(([filePath]) => String(filePath) === eventsPath)).toHaveLength(1);
 
       launcher.updates.set("run-1", {
@@ -2444,7 +2650,7 @@ describe("visibility helpers (shouldKeepRunVisibleInUi)", () => {
     )).toBe(false);
   });
 
-  test("named completed runs are visible within lease expiry, even when acknowledged", () => {
+  test("named completed runs follow normal completion UI visibility while their lease remains resumable", () => {
     const run = createRun({
       id: "r1",
       status: "completed",
@@ -2452,10 +2658,9 @@ describe("visibility helpers (shouldKeepRunVisibleInUi)", () => {
       name: "my-agent",
       leaseExpiry: 2000,
     });
-    // Visible while lease is active — acknowledged doesn't hide it.
-    expect(shouldKeepRunVisibleInUi(run, { isPinned: false, isAcknowledged: true, now: 1500 })).toBe(true);
-    // Visible while lease is active — unacknowledged.
+    expect(shouldKeepRunVisibleInUi(run, { isPinned: false, isAcknowledged: true, now: 1500 })).toBe(false);
     expect(shouldKeepRunVisibleInUi(run, { isPinned: false, isAcknowledged: false, now: 1500 })).toBe(true);
+    expect(shouldKeepRunVisibleInUi(run, { isPinned: false, isAcknowledged: false, now: 30_501 })).toBe(false);
   });
 
   test("named completed runs are hidden immediately after lease expiry", () => {
@@ -2466,10 +2671,10 @@ describe("visibility helpers (shouldKeepRunVisibleInUi)", () => {
       name: "my-agent",
       leaseExpiry: 1000,
     });
-    expect(shouldKeepRunVisibleInUi(run, { isPinned: false, isAcknowledged: false, now: 1029 })).toBe(false);
+    expect(shouldKeepRunVisibleInUi(run, { isPinned: false, isAcknowledged: false, now: 31_000 })).toBe(false);
   });
 
-  test("named completed runs derive lease expiry from completedAt when missing", () => {
+  test("named completed runs with derived leases still hide when acknowledged", () => {
     const run = createRun({
       id: "r1",
       status: "completed",
@@ -2477,8 +2682,7 @@ describe("visibility helpers (shouldKeepRunVisibleInUi)", () => {
       name: "my-agent",
       leaseExpiry: undefined,
     });
-    expect(shouldKeepRunVisibleInUi(run, { isPinned: false, isAcknowledged: true, now: 500 + DEFAULT_NAMED_RUN_LEASE_MS })).toBe(true);
-    expect(shouldKeepRunVisibleInUi(run, { isPinned: false, isAcknowledged: true, now: 501 + DEFAULT_NAMED_RUN_LEASE_MS })).toBe(false);
+    expect(shouldKeepRunVisibleInUi(run, { isPinned: false, isAcknowledged: true, now: 500 + DEFAULT_NAMED_RUN_LEASE_MS })).toBe(false);
   });
 
   test("named completed runs past lease expiry are hidden when acknowledged", () => {
@@ -2507,7 +2711,8 @@ describe("visibility helpers (shouldKeepRunVisibleInUi)", () => {
       name: "my-agent",
       leaseExpiry: 2000,
     });
-    expect(shouldKeepRunVisibleInUi(run, { isPinned: false, isAcknowledged: true, now: 1500 })).toBe(true);
-    expect(shouldKeepRunVisibleInUi(run, { isPinned: false, isAcknowledged: true, now: 3000 })).toBe(false);
+    expect(shouldKeepRunVisibleInUi(run, { isPinned: false, isAcknowledged: true, now: 1500 })).toBe(false);
+    expect(shouldKeepRunVisibleInUi(run, { isPinned: false, isAcknowledged: false, now: 1500 })).toBe(true);
+    expect(shouldKeepRunVisibleInUi(run, { isPinned: false, isAcknowledged: false, now: 30_501 })).toBe(false);
   });
 });
