@@ -29,6 +29,7 @@ function createRun(overrides: Partial<RunRecord> = {}): RunRecord {
     archived: overrides.archived,
     groupId: overrides.groupId,
     children: overrides.children,
+    childProgress: overrides.childProgress,
     launchRef: overrides.launchRef,
     recentEvents: overrides.recentEvents ?? [],
   };
@@ -118,6 +119,30 @@ describe("persistence", () => {
     expect(r2.archived).toBe(true);
     // Archived run still findable by ID.
     expect(restoredRegistry.resolveTarget("run-2")).toBe("run-2");
+  });
+
+  test("drops fully empty child progress entries during restore", () => {
+    const restored = restorePersistedState({
+      version: 1,
+      updatedAt: 123,
+      surfacedCompletionKeys: [],
+      acknowledgedRunIds: [],
+      pinnedRunIds: [],
+      runs: [{
+        ...createRun({ id: "group-1", kind: "group", status: "running", completedAt: undefined }),
+        childProgress: [
+          {},
+          { id: "scan", taskSummary: "Scan routes", status: "running" },
+          { agent: "reviewer" },
+          { status: "not-a-status" },
+        ],
+      }],
+    });
+
+    expect(restored.runs[0]?.childProgress).toEqual([
+      { id: "scan", taskSummary: "Scan routes", status: "running" },
+      { agent: "reviewer", id: undefined, taskSummary: undefined, status: undefined },
+    ]);
   });
 
   test("round-trips runs with cwd and child session launchRef", () => {

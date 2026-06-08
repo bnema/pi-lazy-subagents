@@ -58,7 +58,7 @@ function normalizeChildProgress(value: unknown): RunChildProgress[] | undefined 
         status: status && isRunChildProgressStatus(status) ? status : undefined,
       };
     })
-    .filter((entry): entry is RunChildProgress => Boolean(entry));
+    .filter((entry): entry is RunChildProgress => Boolean(entry?.id || entry?.agent || entry?.taskSummary || entry?.status));
   return progress.length > 0 ? progress : undefined;
 }
 
