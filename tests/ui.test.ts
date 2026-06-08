@@ -262,6 +262,12 @@ describe("visibility helpers", () => {
     expect(lines[6]).toContain("12k tok");
     expect(lines[6]).not.toContain("Review auth diff");
     expect(lines[6]).not.toContain("1 running");
+
+    const themed = buildWidgetLines(snapshot, 60_000, 8, {
+      fg: (colorName: string, text: string) => `<${colorName}:${text}>`,
+      bold: (text: string) => `*${text}*`,
+    }, { isPinned: (runId) => runId === "run-pin" });
+    expect(themed[1]).toContain("<muted:│>");
   });
 
   test("uses dynamic active child titles for special pinned run titles", () => {

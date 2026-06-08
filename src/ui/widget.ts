@@ -54,6 +54,10 @@ function dim(text: string, theme?: WidgetThemeLike): string {
   return theme?.dim ? theme.dim(text) : text;
 }
 
+function rail(theme?: WidgetThemeLike): string {
+  return color(RAIL, "muted", theme);
+}
+
 function muted(text: string, theme?: WidgetThemeLike): string {
   return theme?.muted ? theme.muted(text) : text;
 }
@@ -210,7 +214,7 @@ function formatKnownProgressLine(line: string, theme?: WidgetThemeLike): string 
 }
 
 function buildPinnedDetailLine(line: string, theme?: WidgetThemeLike): string {
-  return `${dim(RAIL, theme)} ${formatKnownProgressLine(line, theme)}`;
+  return `${rail(theme)} ${formatKnownProgressLine(line, theme)}`;
 }
 
 function specialRunKindLabel(run: RunRecord): string | undefined {
@@ -235,7 +239,7 @@ function buildPinnedPanelLines(runs: RunRecord[], theme: WidgetThemeLike | undef
   ];
 
   if (moreRuns.length > 0) {
-    lines.push(`${dim(RAIL, theme)} ${muted(`… ${formatCount(moreRuns.length, "more", "more")}`, theme)}`);
+    lines.push(`${rail(theme)} ${muted(`… ${formatCount(moreRuns.length, "more", "more")}`, theme)}`);
   }
 
   return lines;
