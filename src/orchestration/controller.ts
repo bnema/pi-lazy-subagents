@@ -138,6 +138,13 @@ function isSingleWorkflowReference(template: string | undefined): boolean {
   return Boolean(template && SINGLE_WORKFLOW_REFERENCE_PATTERN.test(template.trim()));
 }
 
+function appendUniqueWorkflowDependency(dependsOn: string[], dependencyId: string | undefined): void {
+  const normalizedDependencyId = dependencyId?.trim();
+  if (normalizedDependencyId && !dependsOn.includes(normalizedDependencyId)) {
+    dependsOn.push(normalizedDependencyId);
+  }
+}
+
 function assertValidWorkflowRequest(request: ControllerLaunchWorkflowRequest): void {
   if (request.maxConcurrency !== undefined && (!Number.isInteger(request.maxConcurrency) || request.maxConcurrency < 1)) {
     throw new Error("maxConcurrency must be an integer greater than or equal to 1.");
@@ -187,9 +194,45 @@ function assertValidWorkflowRequest(request: ControllerLaunchWorkflowRequest): v
         throw new Error(`Workflow step ${id} has an invalid fanOutFrom maxItems value. Expected a non-negative integer.`);
       }
     }
+
+    for (const referencedStepId of extractWorkflowReferenceStepIds(step.prompt)) {
+      appendUniqueWorkflowDependency(dependsOn, referencedStepId);
+    }
+    for (const referencedStepId of extractWorkflowReferenceStepIds(step.when)) {
+      appendUniqueWorkflowDependency(dependsOn, referencedStepId);
+    }
+    if (step.fanOutFrom) {
+      appendUniqueWorkflowDependency(dependsOn, step.fanOutFrom.step);
+    }
   }
 
   for (const { id, step, dependsOn } of normalizedSteps) {
+    for (const referencedStepId of extractWorkflowReferenceStepIds(step.prompt)) {
+      if (!ids.has(referencedStepId)) {
+        throw new Error(`Workflow step ${id} prompt references unknown step ${referencedStepId}.`);
+      }
+    }
+
+    for (const referencedStepId of extractWorkflowReferenceStepIds(step.when)) {
+      if (!ids.has(referencedStepId)) {
+        throw new Error(`Workflow step ${id} when references unknown step ${referencedStepId}.`);
+      }
+    }
+
+    if (step.fanOutFrom) {
+      const sourceStep = step.fanOutFrom.step;
+      if (!ids.has(sourceStep)) {
+        throw new Error(`Workflow step ${id} fanOutFrom references unknown step ${sourceStep}.`);
+      }
+      if (sourceStep === id) {
+        throw new Error(`Workflow step ${id} cannot fanOutFrom itself.`);
+      }
+      const source = normalizedSteps.find((candidate) => candidate.id === sourceStep)?.step;
+      if (source?.outputMode !== "json") {
+        throw new Error(`Workflow step ${id} fanOutFrom source ${sourceStep} must use outputMode=json.`);
+      }
+    }
+
     for (const dependencyId of dependsOn) {
       if (!dependencyId) {
         throw new Error(`Workflow step ${id} has an empty dependency id.`);
@@ -199,32 +242,6 @@ function assertValidWorkflowRequest(request: ControllerLaunchWorkflowRequest): v
       }
       if (dependencyId === id) {
         throw new Error(`Workflow step ${id} cannot depend on itself.`);
-      }
-    }
-
-    for (const referencedStepId of extractWorkflowReferenceStepIds(step.when)) {
-      if (!ids.has(referencedStepId)) {
-        throw new Error(`Workflow step ${id} when references unknown step ${referencedStepId}.`);
-      }
-      if (!dependsOn.includes(referencedStepId)) {
-        throw new Error(`Workflow step ${id} when reference ${referencedStepId} must be listed in dependsOn.`);
-      }
-    }
-
-    if (step.fanOutFrom) {
-      const sourceStep = step.fanOutFrom.step;
-      if (!ids.has(sourceStep)) {
-        throw new Error(`Workflow step ${id} fanOutFrom references unknown step ${sourceStep}.`);
-      }
-      if (!dependsOn.includes(sourceStep)) {
-        throw new Error(`Workflow step ${id} fanOutFrom source ${sourceStep} must be listed in dependsOn.`);
-      }
-      if (sourceStep === id) {
-        throw new Error(`Workflow step ${id} cannot fanOutFrom itself.`);
-      }
-      const source = normalizedSteps.find((candidate) => candidate.id === sourceStep)?.step;
-      if (source?.outputMode !== "json") {
-        throw new Error(`Workflow step ${id} fanOutFrom source ${sourceStep} must use outputMode=json.`);
       }
     }
   }
