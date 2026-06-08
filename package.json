@@ -1,15 +1,15 @@
 {
   "name": "pi-lazy-subagents",
   "version": "0.0.0",
-  "description": "Pi package for asynchronous subagent orchestration with persistent visibility and completion routing.",
+  "description": "Run background subagents from Pi without blocking the main session.",
   "license": "MIT",
   "author": "bnema",
   "type": "module",
   "keywords": [
-    "pi-package",
     "pi",
+    "pi-extension",
     "subagents",
-    "async",
+    "workflows",
     "orchestration"
   ],
   "files": [
