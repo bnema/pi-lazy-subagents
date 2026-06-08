@@ -36,6 +36,7 @@ pi install git:github.com/bnema/pi-lazy-subagents
 
 The `lazy_subagents` tool supports:
 
+- `help`
 - `list`
 - `run`
 - `parallel`
@@ -49,7 +50,26 @@ The `lazy_subagents` tool supports:
 - `clear`
 - `cancel`
 
-Use `run` for one child, `parallel` for independent children, and `workflow` for dependency-aware pipelines. Workflow steps can use `retries`, `outputMode: "json"`, `outputSchema`, `when`, and `fanOutFrom`. Prompts can reference earlier step results with forms like `{{stepId.summary}}`, `{{stepId.output}}`, and `{{stepId.structured.title}}`.
+Core parameters:
+
+- `agent`, `prompt`, `title`, `name` for single runs.
+- `children` for parallel groups: each child has `agent`, `prompt`, optional `taskSummary`, and optional `cwd`.
+- `steps` for workflows: each step has `id`, `agent`, `prompt`, optional `dependsOn`, `retries`, `outputMode`, `outputSchema`, `when`, `fanOutFrom`, and `cwd`.
+- `target` for continuing a named run or run id.
+- `runId`, `timeoutMs`, and `scope` for status/result/wait/clear-style actions.
+
+Examples:
+
+```text
+lazy_subagents action=run agent=reviewer prompt="Review the auth diff" name=auth-review
+lazy_subagents action=continue target=auth-review prompt="I applied your fixes; validate again"
+lazy_subagents action=parallel children=[{agent:"reviewer",prompt:"Review correctness"},{agent:"scout",prompt:"Find docs"}]
+lazy_subagents action=wait runId=<runId> timeoutMs=600000
+lazy_subagents action=result runId=<runId>
+lazy_subagents action=pickup runId=<runId>
+```
+
+Use `run` for one child, `parallel` for independent children, and `workflow` for dependency-aware pipelines. Workflow steps can use `retries`, `outputMode: "json"`, `outputSchema`, `when`, and `fanOutFrom`. Prompts can reference earlier step results with forms like `{{stepId.summary}}`, `{{stepId.output}}`, and `{{stepId.structured.title}}`. If a workflow step references another step in `prompt`, `when`, or `fanOutFrom`, list that source step in `dependsOn`.
 
 ## Notes
 
