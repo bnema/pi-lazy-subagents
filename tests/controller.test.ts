@@ -53,6 +53,7 @@ function createRun(overrides: Partial<RunRecord> = {}): RunRecord {
     archived: overrides.archived,
     groupId: overrides.groupId,
     children: overrides.children,
+    childProgress: overrides.childProgress,
     launchRef: overrides.launchRef,
     recentEvents: overrides.recentEvents ?? [],
   };
@@ -1032,6 +1033,50 @@ describe("LazySubagentsController", () => {
       await controller.handleSessionShutdown(ctx);
       warnSpy.mockRestore();
     }
+  });
+
+  test("does not churn UI when later updates omit unchanged child progress", async () => {
+    const registry = new RunRegistry();
+    registry.upsert({
+      id: "group-1",
+      kind: "group",
+      agent: "scout, reviewer",
+      title: "Parallel run (2)",
+      taskSummary: "Parallel run (2)",
+      status: "running",
+      startedAt: 100,
+      updatedAt: 110,
+      completionPolicy: "wake_if_idle",
+      currentTool: "read",
+      childProgress: [
+        { id: "scan", taskSummary: "Scan routes", status: "running" },
+        { id: "review", taskSummary: "Review auth", status: "pending" },
+      ],
+      attentionNeeded: false,
+      launchRef: { runId: "group-1", asyncId: "group-1" },
+      recentEvents: [],
+    });
+    const { api } = createPi();
+    const launcher = new FakeLauncher();
+    const controller = new LazySubagentsController(api as any, { launcher, now: () => 110 });
+    const { ctx, widgets } = createContext({
+      branchEntries: [{ type: "custom", customType: PERSISTED_STATE_ENTRY, data: createPersistedState(registry.serialize(), 110) }],
+    });
+
+    await controller.handleSessionStart(ctx);
+    const renderedWidgets = widgets.length;
+    launcher.updates.set("group-1", {
+      runId: "group-1",
+      status: "running",
+      updatedAt: 110,
+      currentTool: "read",
+      attentionNeeded: false,
+    });
+
+    await controller.pollOnce();
+
+    expect(widgets).toHaveLength(renderedWidgets);
+    expect(controller.getSnapshot().runs.find((run) => run.id === "group-1")?.childProgress).toHaveLength(2);
   });
 
   test("keeps the last nonzero token total when later live updates report zero", async () => {

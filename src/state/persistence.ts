@@ -1,5 +1,5 @@
-import type { CompletionPolicy, RunEvent, RunEventCategory, RunKind, RunLaunchRef, RunRecord, RunStatus } from "../types.js";
-import { COMPLETION_POLICIES, RUN_EVENT_CATEGORIES, RUN_KINDS, RUN_STATUSES } from "../types.js";
+import type { CompletionPolicy, RunChildProgress, RunEvent, RunEventCategory, RunKind, RunLaunchRef, RunRecord, RunStatus } from "../types.js";
+import { COMPLETION_POLICIES, RUN_CHILD_PROGRESS_STATUSES, RUN_EVENT_CATEGORIES, RUN_KINDS, RUN_STATUSES } from "../types.js";
 
 import type { SerializedRunRegistryState } from "./run-registry.js";
 
@@ -39,6 +39,27 @@ function isCompletionPolicy(value: string): value is CompletionPolicy {
 
 function isRunEventCategory(value: string): value is RunEventCategory {
   return RUN_EVENT_CATEGORIES.includes(value as RunEventCategory);
+}
+
+function isRunChildProgressStatus(value: string): value is NonNullable<RunChildProgress["status"]> {
+  return RUN_CHILD_PROGRESS_STATUSES.includes(value as NonNullable<RunChildProgress["status"]>);
+}
+
+function normalizeChildProgress(value: unknown): RunChildProgress[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const progress = value
+    .map((entry): RunChildProgress | undefined => {
+      if (!isObject(entry)) return undefined;
+      const status = asString(entry.status);
+      return {
+        id: asString(entry.id),
+        agent: asString(entry.agent),
+        taskSummary: asString(entry.taskSummary),
+        status: status && isRunChildProgressStatus(status) ? status : undefined,
+      };
+    })
+    .filter((entry): entry is RunChildProgress => Boolean(entry?.id || entry?.agent || entry?.taskSummary || entry?.status));
+  return progress.length > 0 ? progress : undefined;
 }
 
 function normalizeLaunchRef(value: unknown): RunLaunchRef | undefined {
@@ -139,6 +160,7 @@ function normalizeRunRecord(value: unknown): RunRecord | undefined {
     archived: typeof value.archived === "boolean" ? value.archived : undefined,
     groupId: asString(value.groupId),
     children: Array.isArray(value.children) ? asStringArray(value.children) : undefined,
+    childProgress: normalizeChildProgress(value.childProgress),
     launchRef: normalizeLaunchRef(value.launchRef),
     recentEvents,
   };
