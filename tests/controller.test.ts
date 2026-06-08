@@ -1883,7 +1883,7 @@ describe("LazySubagentsController", () => {
         maxConcurrency: 2,
         steps: [
           { id: "research", agent: "scout", prompt: "Inspect the codebase", taskSummary: "Inspect the codebase", outputMode: "json", outputSchema: "{ summary: string }" },
-          { id: "plan", agent: "reviewer", prompt: "Draft the plan", taskSummary: "Draft the plan", dependsOn: ["research"], retries: 2 },
+          { id: "plan", agent: "reviewer", prompt: "Draft the plan from {{research.summary}}", taskSummary: "Draft the plan", retries: 2 },
         ],
       },
       ctx,
@@ -2033,7 +2033,7 @@ describe("LazySubagentsController", () => {
       ctx,
     )).rejects.toThrow("fanOutFrom references unknown step missing");
 
-    await expect(controller.launchWorkflow(
+    await controller.launchWorkflow(
       {
         title: "When without dependency",
         taskSummary: "When without dependency",
@@ -2043,9 +2043,11 @@ describe("LazySubagentsController", () => {
         ],
       },
       ctx,
-    )).rejects.toThrow("when reference triage must be listed in dependsOn");
+    );
+    expect(launcher.workflowLaunches.at(-1)?.steps[1]).toMatchObject({ id: "security", dependsOn: ["triage"] });
+    launchWorkflowSpy.mockClear();
 
-    await expect(controller.launchWorkflow(
+    await controller.launchWorkflow(
       {
         title: "Fanout without dependency",
         taskSummary: "Fanout without dependency",
@@ -2055,7 +2057,9 @@ describe("LazySubagentsController", () => {
         ],
       },
       ctx,
-    )).rejects.toThrow("fanOutFrom source triage must be listed in dependsOn");
+    );
+    expect(launcher.workflowLaunches.at(-1)?.steps[1]).toMatchObject({ id: "review", dependsOn: ["triage"] });
+    launchWorkflowSpy.mockClear();
 
     await expect(controller.launchWorkflow(
       {

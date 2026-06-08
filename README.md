@@ -69,7 +69,16 @@ lazy_subagents action=result runId=<runId>
 lazy_subagents action=pickup runId=<runId>
 ```
 
-Use `run` for one child, `parallel` for independent children, and `workflow` for dependency-aware pipelines. Workflow steps can use `retries`, `outputMode: "json"`, `outputSchema`, `when`, and `fanOutFrom`. Prompts can reference earlier step results with forms like `{{stepId.summary}}`, `{{stepId.output}}`, and `{{stepId.structured.title}}`. If a workflow step references another step in `prompt`, `when`, or `fanOutFrom`, list that source step in `dependsOn`.
+Use `run` for one child, `parallel` for independent children, and `workflow` for dependency-aware pipelines. Workflow steps can use `retries`, `outputMode: "json"`, `outputSchema`, `when`, and `fanOutFrom`. Prompts can reference earlier step results with forms like `{{stepId.summary}}`, `{{stepId.output}}`, and `{{stepId.structured.title}}`. `dependsOn` is optional when a dependency is directly inferable from `{{stepId...}}` references in `prompt` or `when`, or from `fanOutFrom.step`; the runner adds those dependencies automatically.
+
+```text
+# Explicit dependsOn is still valid:
+{id:"synth", dependsOn:["triage", "review"], prompt:"Use {{triage.json}} and {{review.json}}"}
+
+# Also valid: dependencies are inferred from direct references:
+{id:"synth", dependsOn:["review"], prompt:"Use {{review.json}} and {{triage.json}}"}
+# normalized dependsOn: ["review", "triage"]
+```
 
 ## Notes
 
