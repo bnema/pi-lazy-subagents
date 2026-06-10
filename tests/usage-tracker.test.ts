@@ -47,4 +47,19 @@ describe("usage tracker", () => {
     recordUsageSample(tracker, 13_500);
     expect(tracker.totalTokens).toBe(81_500);
   });
+
+  test("tracks cumulative cache hit rate from prompt usage", () => {
+    const tracker = createUsageTracker();
+
+    recordUsageSample(tracker, { totalTokens: 1_000, input: 200, cacheRead: 600, cacheWrite: 200 });
+    expect(tracker.totalPromptTokens).toBe(1_000);
+    expect(tracker.totalCacheReadTokens).toBe(600);
+    expect(tracker.cacheHitRate).toBe(60);
+    commitUsageTurn(tracker);
+
+    recordUsageSample(tracker, { totalTokens: 1_500, input: 250, cacheRead: 250, cacheWrite: 0 });
+    expect(tracker.totalPromptTokens).toBe(1_500);
+    expect(tracker.totalCacheReadTokens).toBe(850);
+    expect(tracker.cacheHitRate).toBeCloseTo(56.667, 3);
+  });
 });

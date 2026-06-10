@@ -90,6 +90,9 @@ export interface NormalizedRunUpdate {
   currentTool?: string;
   toolCount?: number;
   totalTokens?: number;
+  promptTokens?: number;
+  cacheReadTokens?: number;
+  cacheHitRate?: number;
   attentionNeeded?: boolean;
   childProgress?: RunChildProgress[];
   event?: RunEvent;

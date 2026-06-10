@@ -47,6 +47,9 @@ type DirectAsyncStatusStep = {
   currentTool?: string;
   toolCount?: number;
   totalTokens?: number;
+  promptTokens?: number;
+  cacheReadTokens?: number;
+  cacheHitRate?: number;
   sessionFile?: string;
   outputFile?: string;
 };
@@ -64,6 +67,9 @@ type DirectAsyncStatus = {
   currentTool?: string;
   toolCount?: number;
   totalTokens?: number;
+  promptTokens?: number;
+  cacheReadTokens?: number;
+  cacheHitRate?: number;
   steps?: DirectAsyncStatusStep[];
 };
 
@@ -77,6 +83,9 @@ type DirectResultFile = {
   sessionFile?: string;
   toolCount?: number;
   totalTokens?: number;
+  promptTokens?: number;
+  cacheReadTokens?: number;
+  cacheHitRate?: number;
   results?: Array<{
     stepId?: string;
     taskSummary?: string;
@@ -94,6 +103,9 @@ type DirectResultFile = {
     output?: string;
     sessionFile?: string;
     totalTokens?: number;
+    promptTokens?: number;
+    cacheReadTokens?: number;
+    cacheHitRate?: number;
     toolCount?: number;
     artifactPaths?: {
       outputPath?: string;
@@ -494,12 +506,22 @@ function normalizeStepProgress(step: DirectAsyncStatusStep): RunChildProgress {
   };
 }
 
+function isFanOutAggregateResult(result: NonNullable<DirectResultFile["results"]>[number]): boolean {
+  const structured = result.structuredOutput;
+  return Boolean(
+    structured
+      && typeof structured === "object"
+      && "children" in structured
+      && Array.isArray((structured as { children?: unknown }).children),
+  );
+}
+
 export function normalizeAsyncStatus(
   runId: string,
   asyncDir: string,
   status: Pick<
     DirectAsyncStatus,
-    "runId" | "mode" | "state" | "activityState" | "startedAt" | "lastUpdate" | "endedAt" | "sessionFile" | "outputFile" | "currentTool" | "toolCount" | "totalTokens" | "steps"
+    "runId" | "mode" | "state" | "activityState" | "startedAt" | "lastUpdate" | "endedAt" | "sessionFile" | "outputFile" | "currentTool" | "toolCount" | "totalTokens" | "promptTokens" | "cacheReadTokens" | "cacheHitRate" | "steps"
   >,
 ): NormalizedRunUpdate {
   const mappedStatus = mapAsyncStateToRunStatus(status.state);
@@ -511,6 +533,9 @@ export function normalizeAsyncStatus(
   const currentTool = primaryStep?.currentTool ?? status.currentTool;
   const toolCount = status.toolCount ?? primaryStep?.toolCount;
   const totalTokens = status.totalTokens ?? primaryStep?.totalTokens;
+  const promptTokens = status.promptTokens ?? primaryStep?.promptTokens;
+  const cacheReadTokens = status.cacheReadTokens ?? primaryStep?.cacheReadTokens;
+  const cacheHitRate = status.cacheHitRate ?? primaryStep?.cacheHitRate;
   const outputFile = primaryStep?.outputFile ?? status.outputFile;
   const sessionFile = primaryStep?.sessionFile ?? status.sessionFile;
   const childProgress = status.steps?.map(normalizeStepProgress);
@@ -537,6 +562,9 @@ export function normalizeAsyncStatus(
     currentTool,
     toolCount,
     totalTokens,
+    promptTokens,
+    cacheReadTokens,
+    cacheHitRate,
     attentionNeeded,
     childProgress,
     event: buildEvent(runId, localStatus, updatedAt, summary, attentionNeeded),
@@ -559,8 +587,13 @@ export function normalizeAsyncResult(runId: string, result: DirectResultFile): N
       ?? result.results?.find((child) => child.skipped)?.skipReason,
   );
 
-  const toolCounts = result.results?.map((child) => child.toolCount).filter((value): value is number => typeof value === "number");
-  const tokenTotals = result.results?.map((child) => child.totalTokens).filter((value): value is number => typeof value === "number");
+  const metricResults = result.results?.filter((child) => !isFanOutAggregateResult(child));
+  const toolCounts = metricResults?.map((child) => child.toolCount).filter((value): value is number => typeof value === "number");
+  const tokenTotals = metricResults?.map((child) => child.totalTokens).filter((value): value is number => typeof value === "number");
+  const promptTokenTotals = metricResults?.map((child) => child.promptTokens).filter((value): value is number => typeof value === "number");
+  const cacheReadTokenTotals = metricResults?.map((child) => child.cacheReadTokens).filter((value): value is number => typeof value === "number");
+  const promptTokens = result.promptTokens ?? (promptTokenTotals && promptTokenTotals.length > 0 ? promptTokenTotals.reduce((sum, value) => sum + value, 0) : undefined);
+  const cacheReadTokens = result.cacheReadTokens ?? (cacheReadTokenTotals && cacheReadTokenTotals.length > 0 ? cacheReadTokenTotals.reduce((sum, value) => sum + value, 0) : undefined);
 
   return {
     runId,
@@ -571,6 +604,9 @@ export function normalizeAsyncResult(runId: string, result: DirectResultFile): N
     artifactPath: getResultArtifactPath(result),
     toolCount: result.toolCount ?? (toolCounts && toolCounts.length > 0 ? toolCounts.reduce((sum, value) => sum + value, 0) : undefined),
     totalTokens: result.totalTokens ?? (tokenTotals && tokenTotals.length > 0 ? tokenTotals.reduce((sum, value) => sum + value, 0) : undefined),
+    promptTokens,
+    cacheReadTokens,
+    cacheHitRate: result.cacheHitRate ?? (promptTokens && promptTokens > 0 ? ((cacheReadTokens ?? 0) / promptTokens) * 100 : undefined),
     resultPreview: baseStatus === "completed" || baseStatus === "paused" ? summary : undefined,
     errorPreview: baseStatus === "failed" || baseStatus === "cancelled" ? summary : undefined,
     attentionNeeded: baseStatus === "paused",
