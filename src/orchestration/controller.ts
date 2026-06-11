@@ -285,7 +285,7 @@ function equalUpdate(existing: RunRecord, update: NormalizedRunUpdate): boolean 
     && existing.totalTokens === mergeTotalTokens(existing.totalTokens, update.totalTokens)
     && existing.promptTokens === (update.promptTokens ?? existing.promptTokens)
     && existing.cacheReadTokens === (update.cacheReadTokens ?? existing.cacheReadTokens)
-    && existing.cacheHitRate === (clampCacheHitRate(update.cacheHitRate) ?? existing.cacheHitRate)
+    && existing.cacheHitRate === (clampCacheHitRate(update.cacheHitRate ?? existing.cacheHitRate) ?? existing.cacheHitRate)
     && existing.attentionNeeded === (update.attentionNeeded ?? false);
 }
 

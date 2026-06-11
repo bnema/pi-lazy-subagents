@@ -53,12 +53,14 @@ function updateCacheHitRate(tracker) {
 
 export function recordUsageSample(tracker, usage) {
   const sample = normalizeUsageSample(usage);
+  let sampleDelta;
   if (sample.totalTokens !== undefined) {
     tracker.currentTurnLatestSample = sample.totalTokens;
-    tracker.currentTurnMaxDelta = Math.max(tracker.currentTurnMaxDelta ?? 0, calculateSampleDelta(tracker, sample.totalTokens));
+    sampleDelta = calculateSampleDelta(tracker, sample.totalTokens);
+    tracker.currentTurnMaxDelta = Math.max(tracker.currentTurnMaxDelta ?? 0, sampleDelta);
     tracker.currentTurnTokens = tracker.currentTurnMaxDelta;
   }
-  if (sample.promptTokens !== undefined) {
+  if (sample.promptTokens !== undefined && sample.totalTokens !== undefined && (sampleDelta ?? 0) > 0) {
     tracker.currentTurnPromptTokens = sample.promptTokens;
     tracker.currentTurnCacheReadTokens = sample.cacheReadTokens ?? 0;
   }

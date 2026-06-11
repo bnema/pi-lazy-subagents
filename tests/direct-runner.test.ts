@@ -387,6 +387,7 @@ describe("direct runner stdout processing", () => {
       cacheReadTokens: 50,
       cacheHitRate: 50,
       toolCount: 5,
+      aggregateKind: "fanout_group",
     });
     expect(aggregate.structuredOutput.children).toEqual([
       expect.objectContaining({ id: "review[security]", taskSummary: "Security", success: true, structuredOutput: { severity: "low" }, cacheHitRate: undefined }),

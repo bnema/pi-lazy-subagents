@@ -485,18 +485,6 @@ function extractUsageSample(event) {
     }
   }
 
-  const totalCandidates = [
-    event?.message?.usage?.totalTokens,
-    event?.assistantMessageEvent?.partial?.usage?.totalTokens,
-    event?.assistantMessageEvent?.message?.usage?.totalTokens,
-  ];
-
-  for (const candidate of totalCandidates) {
-    if (typeof candidate === "number" && Number.isFinite(candidate)) {
-      return { totalTokens: candidate };
-    }
-  }
-
   return undefined;
 }
 
@@ -874,6 +862,7 @@ export function aggregateFanOutGroupResult(groupStep, childResults) {
     cacheReadTokens,
     cacheHitRate: promptTokens > 0 ? (cacheReadTokens / promptTokens) * 100 : undefined,
     toolCount,
+    aggregateKind: "fanout_group",
     structuredOutput: {
       status,
       success,

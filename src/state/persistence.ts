@@ -1,5 +1,6 @@
 import type { CompletionPolicy, RunChildProgress, RunEvent, RunEventCategory, RunKind, RunLaunchRef, RunRecord, RunStatus } from "../types.js";
 import { COMPLETION_POLICIES, RUN_CHILD_PROGRESS_STATUSES, RUN_EVENT_CATEGORIES, RUN_KINDS, RUN_STATUSES } from "../types.js";
+import { clampCacheHitRate } from "../utils/usage-metrics.js";
 
 import type { SerializedRunRegistryState } from "./run-registry.js";
 
@@ -154,7 +155,7 @@ function normalizeRunRecord(value: unknown): RunRecord | undefined {
     totalTokens: asNumber(value.totalTokens),
     promptTokens: asNumber(value.promptTokens),
     cacheReadTokens: asNumber(value.cacheReadTokens),
-    cacheHitRate: asNumber(value.cacheHitRate),
+    cacheHitRate: clampCacheHitRate(asNumber(value.cacheHitRate)),
     model: asString(value.model),
     attentionNeeded,
     name: asString(value.name),

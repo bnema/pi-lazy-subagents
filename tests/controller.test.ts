@@ -1120,6 +1120,46 @@ describe("LazySubagentsController", () => {
     expect(controller.getSnapshot().runs.find((run) => run.id === "run-1")?.cacheHitRate).toBe(100);
   });
 
+  test("normalizes invalid existing cache hit rate when a later update omits the metric", async () => {
+    const { api } = createPi();
+    const launcher = new FakeLauncher();
+    const controller = new LazySubagentsController(api as any, { launcher, now: () => 110 });
+    const { ctx } = createContext({ isIdle: true, hasPendingMessages: false });
+
+    await controller.handleSessionStart(ctx);
+    ((controller as any).registry as RunRegistry).upsert({
+      id: "run-1",
+      kind: "single",
+      agent: "reviewer",
+      title: "Review auth",
+      taskSummary: "Review auth",
+      status: "running",
+      startedAt: 100,
+      updatedAt: 110,
+      completedAt: undefined,
+      completionPolicy: "wake_if_idle",
+      cacheHitRate: 250,
+      attentionNeeded: false,
+      launchRef: { runId: "run-1", asyncId: "run-1", asyncDir: "/tmp/run-1" },
+      recentEvents: [],
+    });
+    ((controller as any).trackedLaunches as Map<string, LaunchResult>).set("run-1", {
+      runId: "run-1",
+      asyncId: "run-1",
+      asyncDir: "/tmp/run-1",
+    });
+    launcher.updates.set("run-1", {
+      runId: "run-1",
+      status: "running",
+      updatedAt: 110,
+      attentionNeeded: false,
+    });
+
+    await controller.pollOnce();
+
+    expect(controller.getSnapshot().runs.find((run) => run.id === "run-1")?.cacheHitRate).toBe(100);
+  });
+
   test("keeps the last nonzero token total when later live updates report zero", async () => {
     const { api } = createPi();
     const launcher = new FakeLauncher();

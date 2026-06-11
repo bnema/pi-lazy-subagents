@@ -107,6 +107,7 @@ type DirectResultFile = {
     cacheReadTokens?: number;
     cacheHitRate?: number;
     toolCount?: number;
+    aggregateKind?: "fanout_group";
     artifactPaths?: {
       outputPath?: string;
     };
@@ -507,13 +508,28 @@ function normalizeStepProgress(step: DirectAsyncStatusStep): RunChildProgress {
 }
 
 function isFanOutAggregateResult(result: NonNullable<DirectResultFile["results"]>[number]): boolean {
+  if (result.aggregateKind === "fanout_group") return true;
+
+  const stepId = result.stepId;
   const structured = result.structuredOutput;
-  return Boolean(
-    structured
-      && typeof structured === "object"
-      && "children" in structured
-      && Array.isArray((structured as { children?: unknown }).children),
-  );
+  if (!structured || typeof structured !== "object" || typeof stepId !== "string" || stepId.includes("[")) {
+    return false;
+  }
+
+  const aggregateMeta = structured as {
+    children?: unknown;
+    completedCount?: unknown;
+    failedCount?: unknown;
+    skippedCount?: unknown;
+  };
+  if (!Array.isArray(aggregateMeta.children)) return false;
+
+  return typeof aggregateMeta.completedCount === "number"
+    && typeof aggregateMeta.failedCount === "number"
+    && typeof aggregateMeta.skippedCount === "number"
+    && aggregateMeta.children.every((child) => typeof child === "object" && child !== null
+      && typeof (child as { id?: unknown }).id === "string"
+      && (child as { id: string }).id.startsWith(`${stepId}[`));
 }
 
 export function normalizeAsyncStatus(

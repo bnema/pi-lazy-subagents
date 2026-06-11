@@ -207,6 +207,7 @@ describe("PiSubagentsAdapter helpers", () => {
           promptTokens: 100,
           cacheReadTokens: 50,
           toolCount: 3,
+          aggregateKind: "fanout_group",
           structuredOutput: { children: [] },
         },
       ],
@@ -217,6 +218,27 @@ describe("PiSubagentsAdapter helpers", () => {
     expect((fallbackAggregate as any).cacheReadTokens).toBe(50);
     expect((fallbackAggregate as any).cacheHitRate).toBe(50);
     expect((fallbackAggregate as any).toolCount).toBe(3);
+
+    const childWithChildrenPayload = normalizeAsyncResult("run-child-children", {
+      id: "run-child-children",
+      state: "complete",
+      success: true,
+      timestamp: 100,
+      results: [{
+        stepId: "review[security]",
+        totalTokens: 120,
+        promptTokens: 80,
+        cacheReadTokens: 20,
+        toolCount: 2,
+        structuredOutput: { children: [{ id: "note-1" }] },
+      }],
+    });
+
+    expect((childWithChildrenPayload as any).totalTokens).toBe(120);
+    expect((childWithChildrenPayload as any).promptTokens).toBe(80);
+    expect((childWithChildrenPayload as any).cacheReadTokens).toBe(20);
+    expect((childWithChildrenPayload as any).cacheHitRate).toBe(25);
+    expect((childWithChildrenPayload as any).toolCount).toBe(2);
 
     const failed = normalizeAsyncResult("run-2", {
       id: "run-2",
