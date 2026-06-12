@@ -371,8 +371,8 @@ describe("direct runner stdout processing", () => {
     const aggregate = aggregateFanOutGroupResult(
       { id: "review", taskSummary: "Run reviews", agent: "{{item.agent}}", prompt: "Review" },
       [
-        { stepId: "review[security]", taskSummary: "Security", status: "completed", success: true, summary: "No auth gaps", output: "security output", structuredOutput: { severity: "low" }, totalTokens: 100, toolCount: 3 },
-        { stepId: "review[tests]", taskSummary: "Tests", status: "completed", success: true, summary: "Add edge tests", output: "tests output", totalTokens: 50, toolCount: 2 },
+        { stepId: "review[security]", taskSummary: "Security", status: "completed", success: true, summary: "No auth gaps", output: "security output", structuredOutput: { severity: "low" }, totalTokens: 100, promptTokens: 80, cacheReadTokens: 40, toolCount: 3 },
+        { stepId: "review[tests]", taskSummary: "Tests", status: "completed", success: true, summary: "Add edge tests", output: "tests output", totalTokens: 50, promptTokens: 20, cacheReadTokens: 10, toolCount: 2 },
       ],
     );
 
@@ -383,11 +383,15 @@ describe("direct runner stdout processing", () => {
       success: true,
       summary: "Fan-out group review completed: 2 completed.",
       totalTokens: 150,
+      promptTokens: 100,
+      cacheReadTokens: 50,
+      cacheHitRate: 50,
       toolCount: 5,
+      aggregateKind: "fanout_group",
     });
     expect(aggregate.structuredOutput.children).toEqual([
-      expect.objectContaining({ id: "review[security]", taskSummary: "Security", success: true, structuredOutput: { severity: "low" } }),
-      expect.objectContaining({ id: "review[tests]", taskSummary: "Tests", success: true }),
+      expect.objectContaining({ id: "review[security]", taskSummary: "Security", success: true, structuredOutput: { severity: "low" }, cacheHitRate: undefined }),
+      expect.objectContaining({ id: "review[tests]", taskSummary: "Tests", success: true, promptTokens: 20, cacheReadTokens: 10 }),
     ]);
 
     const workflowResults = {

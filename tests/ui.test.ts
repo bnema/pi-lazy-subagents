@@ -103,6 +103,7 @@ describe("visibility helpers", () => {
     (running as any).currentTool = "read";
     (running as any).toolCount = 3;
     (running as any).totalTokens = 1_240;
+    (running as any).cacheHitRate = 62.5;
     const blocked = createRun({ id: "run-2", status: "blocked", startedAt: 45_000, updatedAt: 52_000, title: "Needs human input", attentionNeeded: true });
     const completed = createRun({ id: "run-3", status: "completed", updatedAt: 58_000, completedAt: 58_000, title: "Plan done", agent: "planner", resultPreview: "Found 3 files" });
     const snapshot = createSnapshot([running, blocked, completed]);
@@ -133,6 +134,9 @@ describe("visibility helpers", () => {
       updatedAt: 59_000,
       title: "Research auth flow",
     });
+    running.toolCount = 2;
+    running.totalTokens = 1_240;
+    running.cacheHitRate = 62.5;
     const snapshot = createSnapshot([running]);
 
     const lines = buildWidgetLines(snapshot, 60_000, 6, {
@@ -157,6 +161,7 @@ describe("visibility helpers", () => {
     expect(lines[0]).toContain("running");
     expect(lines[0]).not.toContain("1 running");
     expect(lines[0]).toContain("Research auth flow");
+    expect(lines[0]).toContain("CH62.5%");
     expect(lines[0]).not.toContain("lazy subagents");
     expect(lines[0]).not.toContain("live");
   });
@@ -414,6 +419,7 @@ describe("visibility helpers", () => {
     run.currentTool = "read";
     run.toolCount = 2;
     run.totalTokens = 6_079;
+    run.cacheHitRate = 73.4;
 
     const compact = buildLiveRunViewModel(run, {
       progressLines: [
@@ -426,7 +432,7 @@ describe("visibility helpers", () => {
     });
 
     expect(compact.lines.join("\n")).toContain(`${GLYPH_PINNED} Review auth diff`);
-    expect(compact.lines.join("\n")).toContain("reviewer · running · 2 turns · last 4.3k tok · read · 2 tools · 6.1k tokens");
+    expect(compact.lines.join("\n")).toContain("reviewer · running · 2 turns · last 4.3k tok · read · 2 tools · 6.1k tokens · CH73.4%");
     expect(compact.lines.join("\n")).toContain("model (openai-codex) gpt-5.4 • xhigh");
     expect(compact.lines.join("\n")).not.toContain("run run-42");
     expect(compact.lines.join("\n")).toContain("assistant · latest progress line");

@@ -2,6 +2,9 @@ export type WorkflowTerminalStatus = "completed" | "skipped" | "failed";
 
 export type WorkflowResultMetrics = {
   totalTokens?: number;
+  promptTokens?: number;
+  cacheReadTokens?: number;
+  cacheHitRate?: number;
   toolCount?: number;
 };
 

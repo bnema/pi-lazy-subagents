@@ -2,6 +2,7 @@ import { truncateToWidth } from "@earendil-works/pi-tui";
 
 import type { RunRecord, RunRegistrySnapshot } from "../types.js";
 import { formatCompactThousands } from "../utils/time.js";
+import { formatCacheHitRate } from "../utils/usage-metrics.js";
 import { GLYPH_LAZY_SUBAGENTS, GLYPH_PINNED } from "./glyphs.js";
 
 export interface WidgetViewModel {
@@ -159,6 +160,8 @@ function buildLazyLine(snapshot: RunRegistrySnapshot, theme?: WidgetThemeLike, o
     if (focusRun.toolCount !== undefined && focusRun.toolCount > 0) parts.push(muted(`${focusRun.toolCount} tools`, theme));
     const tokens = compactTokenCount(focusRun.totalTokens);
     if (tokens) parts.push(muted(tokens, theme));
+    const cacheHitRate = formatCacheHitRate(focusRun.cacheHitRate);
+    if (cacheHitRate) parts.push(muted(cacheHitRate, theme));
   }
   if (parts.length === 1) parts.push(color(formatCount(snapshot.runs.length, "run"), "muted", theme));
 

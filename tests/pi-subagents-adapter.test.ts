@@ -145,6 +145,9 @@ describe("PiSubagentsAdapter helpers", () => {
         currentTool: "bash",
         toolCount: 4,
         totalTokens: 6520,
+        promptTokens: 1000,
+        cacheReadTokens: 750,
+        cacheHitRate: 75,
         outputFile: "output-0.log",
       }],
     } as any);
@@ -158,6 +161,9 @@ describe("PiSubagentsAdapter helpers", () => {
     expect((update as any).currentTool).toBe("bash");
     expect((update as any).toolCount).toBe(4);
     expect((update as any).totalTokens).toBe(6520);
+    expect((update as any).promptTokens).toBe(1000);
+    expect((update as any).cacheReadTokens).toBe(750);
+    expect((update as any).cacheHitRate).toBe(75);
   });
 
   test("normalizes terminal result files into completion and failure updates", () => {
@@ -169,6 +175,9 @@ describe("PiSubagentsAdapter helpers", () => {
       timestamp: 42,
       sessionFile: "/tmp/completed.jsonl",
       totalTokens: 122_967,
+      promptTokens: 40_000,
+      cacheReadTokens: 30_000,
+      cacheHitRate: 75,
       toolCount: 62,
       results: [{ artifactPaths: { outputPath: "/tmp/artifact.md" } }],
     });
@@ -178,8 +187,58 @@ describe("PiSubagentsAdapter helpers", () => {
     expect(completed.resultPreview).toBe("research complete");
     expect(completed.artifactPath).toBe("/tmp/artifact.md");
     expect((completed as any).totalTokens).toBe(122_967);
+    expect((completed as any).promptTokens).toBe(40_000);
+    expect((completed as any).cacheReadTokens).toBe(30_000);
+    expect((completed as any).cacheHitRate).toBe(75);
     expect((completed as any).toolCount).toBe(62);
     expect(completed.event?.category).toBe("completion");
+
+    const fallbackAggregate = normalizeAsyncResult("run-fallback", {
+      id: "run-fallback",
+      state: "complete",
+      success: true,
+      timestamp: 99,
+      results: [
+        { stepId: "review[security]", totalTokens: 100, promptTokens: 80, cacheReadTokens: 40, toolCount: 2 },
+        { stepId: "review[tests]", totalTokens: 50, promptTokens: 20, cacheReadTokens: 10, toolCount: 1 },
+        {
+          stepId: "review",
+          totalTokens: 150,
+          promptTokens: 100,
+          cacheReadTokens: 50,
+          toolCount: 3,
+          aggregateKind: "fanout_group",
+          structuredOutput: { children: [] },
+        },
+      ],
+    });
+
+    expect((fallbackAggregate as any).totalTokens).toBe(150);
+    expect((fallbackAggregate as any).promptTokens).toBe(100);
+    expect((fallbackAggregate as any).cacheReadTokens).toBe(50);
+    expect((fallbackAggregate as any).cacheHitRate).toBe(50);
+    expect((fallbackAggregate as any).toolCount).toBe(3);
+
+    const childWithChildrenPayload = normalizeAsyncResult("run-child-children", {
+      id: "run-child-children",
+      state: "complete",
+      success: true,
+      timestamp: 100,
+      results: [{
+        stepId: "review[security]",
+        totalTokens: 120,
+        promptTokens: 80,
+        cacheReadTokens: 20,
+        toolCount: 2,
+        structuredOutput: { children: [{ id: "note-1" }] },
+      }],
+    });
+
+    expect((childWithChildrenPayload as any).totalTokens).toBe(120);
+    expect((childWithChildrenPayload as any).promptTokens).toBe(80);
+    expect((childWithChildrenPayload as any).cacheReadTokens).toBe(20);
+    expect((childWithChildrenPayload as any).cacheHitRate).toBe(25);
+    expect((childWithChildrenPayload as any).toolCount).toBe(2);
 
     const failed = normalizeAsyncResult("run-2", {
       id: "run-2",

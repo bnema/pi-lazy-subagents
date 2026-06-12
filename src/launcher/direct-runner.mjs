@@ -434,10 +434,35 @@ function syncDerivedStatusFields(status) {
   const runningStep = steps.find((step) => step.status === "running");
   const toolCount = steps.reduce((sum, step) => sum + (typeof step.toolCount === "number" ? step.toolCount : 0), 0);
   const totalTokens = steps.reduce((sum, step) => sum + (typeof step.totalTokens === "number" ? step.totalTokens : 0), 0);
+  const promptTokens = steps.reduce((sum, step) => sum + (typeof step.promptTokens === "number" ? step.promptTokens : 0), 0);
+  const cacheReadTokens = steps.reduce((sum, step) => sum + (typeof step.cacheReadTokens === "number" ? step.cacheReadTokens : 0), 0);
 
   status.currentTool = runningStep?.currentTool;
   status.toolCount = toolCount > 0 ? toolCount : undefined;
   status.totalTokens = totalTokens > 0 ? totalTokens : undefined;
+  status.promptTokens = promptTokens > 0 ? promptTokens : undefined;
+  status.cacheReadTokens = cacheReadTokens > 0 ? cacheReadTokens : undefined;
+  status.cacheHitRate = promptTokens > 0 ? (cacheReadTokens / promptTokens) * 100 : undefined;
+}
+
+function trackerMetrics(usageTracker) {
+  return {
+    promptTokens: usageTracker.totalPromptTokens > 0 ? usageTracker.totalPromptTokens : undefined,
+    cacheReadTokens: usageTracker.totalCacheReadTokens > 0 ? usageTracker.totalCacheReadTokens : undefined,
+    cacheHitRate: usageTracker.cacheHitRate,
+  };
+}
+
+function stepMetricsChanged(step, metrics) {
+  return step.promptTokens !== metrics.promptTokens
+    || step.cacheReadTokens !== metrics.cacheReadTokens
+    || step.cacheHitRate !== metrics.cacheHitRate;
+}
+
+function assignStepMetrics(step, metrics) {
+  step.promptTokens = metrics.promptTokens;
+  step.cacheReadTokens = metrics.cacheReadTokens;
+  step.cacheHitRate = metrics.cacheHitRate;
 }
 
 async function updateStatus(statusPath, status) {
@@ -447,15 +472,15 @@ async function updateStatus(statusPath, status) {
   await writeJson(statusPath, status);
 }
 
-function extractUsageTotal(event) {
+function extractUsageSample(event) {
   const candidates = [
-    event?.message?.usage?.totalTokens,
-    event?.assistantMessageEvent?.partial?.usage?.totalTokens,
-    event?.assistantMessageEvent?.message?.usage?.totalTokens,
+    event?.message?.usage,
+    event?.assistantMessageEvent?.partial?.usage,
+    event?.assistantMessageEvent?.message?.usage,
   ];
 
   for (const candidate of candidates) {
-    if (typeof candidate === "number" && Number.isFinite(candidate)) {
+    if (candidate && typeof candidate === "object") {
       return candidate;
     }
   }
@@ -582,11 +607,13 @@ async function runChild(config, statusPath, status, child, index, promptOverride
       await appendLine(config.eventsPath, JSON.stringify({ runId: config.runId, index, raw: trimmed }));
     }
 
-    const usageTotal = extractUsageTotal(event);
-    if (usageTotal !== undefined) {
-      const nextTotalTokens = recordUsageSample(usageTracker, usageTotal);
-      if (shouldWriteStatusForUsageTotal(step.totalTokens, nextTotalTokens)) {
+    const usageSample = extractUsageSample(event);
+    if (usageSample !== undefined) {
+      const nextTotalTokens = recordUsageSample(usageTracker, usageSample);
+      const metrics = trackerMetrics(usageTracker);
+      if (shouldWriteStatusForUsageTotal(step.totalTokens, nextTotalTokens) || stepMetricsChanged(step, metrics)) {
         step.totalTokens = nextTotalTokens;
+        assignStepMetrics(step, metrics);
         await updateStatus(statusPath, status);
       }
     }
@@ -619,8 +646,10 @@ async function runChild(config, statusPath, status, child, index, promptOverride
 
     if (event.type === "turn_end") {
       const committedTotalTokens = commitUsageTurn(usageTracker);
-      if (step.totalTokens !== committedTotalTokens) {
+      const metrics = trackerMetrics(usageTracker);
+      if (step.totalTokens !== committedTotalTokens || stepMetricsChanged(step, metrics)) {
         step.totalTokens = committedTotalTokens;
+        assignStepMetrics(step, metrics);
         await updateStatus(statusPath, status);
       }
       return;
@@ -660,6 +689,7 @@ async function runChild(config, statusPath, status, child, index, promptOverride
   step.currentToolStartedAt = undefined;
   step.exitCode = exitCode;
   step.totalTokens = finalizeUsageTracker(usageTracker);
+  assignStepMetrics(step, trackerMetrics(usageTracker));
 
   let structuredOutput;
   let summary;
@@ -703,6 +733,9 @@ async function runChild(config, statusPath, status, child, index, promptOverride
     maxAttempts: (child.retries ?? 0) + 1,
     sessionFile,
     totalTokens: step.totalTokens,
+    promptTokens: step.promptTokens,
+    cacheReadTokens: step.cacheReadTokens,
+    cacheHitRate: step.cacheHitRate,
     toolCount: step.toolCount,
     artifactPaths: {
       outputPath: path.join(config.asyncDir, child.outputFile),
@@ -729,6 +762,9 @@ function failedChildResult(config, child, error, sessionFile, attempt = 1, attem
     attempts,
     sessionFile,
     totalTokens: 0,
+    promptTokens: 0,
+    cacheReadTokens: 0,
+    cacheHitRate: undefined,
     toolCount: 0,
     artifactPaths: {
       outputPath: path.join(config.asyncDir, child.outputFile),
@@ -753,6 +789,9 @@ function skippedChildResult(child, reason, success = true) {
     maxAttempts: (child.retries ?? 0) + 1,
     attempts: [],
     totalTokens: 0,
+    promptTokens: 0,
+    cacheReadTokens: 0,
+    cacheHitRate: undefined,
     toolCount: 0,
   };
 }
@@ -773,6 +812,9 @@ function fanOutChildResultEntry(result) {
     structuredOutput: result.structuredOutput,
     error: result.error,
     totalTokens: result.totalTokens,
+    promptTokens: result.promptTokens,
+    cacheReadTokens: result.cacheReadTokens,
+    cacheHitRate: result.cacheHitRate,
     toolCount: result.toolCount,
   };
 }
@@ -783,6 +825,8 @@ export function aggregateFanOutGroupResult(groupStep, childResults) {
   const skippedCount = children.filter((child) => child.skipped || child.status === "skipped").length;
   const completedCount = children.filter((child) => child.success && !child.skipped && child.status !== "skipped").length;
   const totalTokens = children.reduce((sum, child) => sum + (typeof child.totalTokens === "number" ? child.totalTokens : 0), 0);
+  const promptTokens = children.reduce((sum, child) => sum + (typeof child.promptTokens === "number" ? child.promptTokens : 0), 0);
+  const cacheReadTokens = children.reduce((sum, child) => sum + (typeof child.cacheReadTokens === "number" ? child.cacheReadTokens : 0), 0);
   const toolCount = children.reduce((sum, child) => sum + (typeof child.toolCount === "number" ? child.toolCount : 0), 0);
   const success = failedCount === 0;
   const status = success ? (completedCount === 0 && skippedCount > 0 ? "skipped" : "completed") : "failed";
@@ -814,7 +858,11 @@ export function aggregateFanOutGroupResult(groupStep, childResults) {
     maxAttempts: (groupStep.retries ?? 0) + 1,
     attempts: [],
     totalTokens,
+    promptTokens,
+    cacheReadTokens,
+    cacheHitRate: promptTokens > 0 ? (cacheReadTokens / promptTokens) * 100 : undefined,
     toolCount,
+    aggregateKind: "fanout_group",
     structuredOutput: {
       status,
       success,
@@ -847,8 +895,11 @@ function updateFanOutGroupStatus(status, groupStep, aggregate) {
   step.skipReason = aggregate.skipReason;
   step.summary = aggregate.summary;
   step.structuredOutput = aggregate.structuredOutput;
-  step.totalTokens = aggregate.totalTokens;
-  step.toolCount = aggregate.toolCount;
+  step.totalTokens = undefined;
+  step.promptTokens = undefined;
+  step.cacheReadTokens = undefined;
+  step.cacheHitRate = undefined;
+  step.toolCount = undefined;
   step.endedAt = now();
   step.durationMs = step.startedAt ? Math.max(0, step.endedAt - step.startedAt) : 0;
   return true;
@@ -886,6 +937,9 @@ async function writeResult(config, status, results) {
     sessionFile: results.find((result) => result.sessionFile)?.sessionFile,
     toolCount: status.toolCount,
     totalTokens: status.totalTokens,
+    promptTokens: status.promptTokens,
+    cacheReadTokens: status.cacheReadTokens,
+    cacheHitRate: status.cacheHitRate,
     results,
   });
 

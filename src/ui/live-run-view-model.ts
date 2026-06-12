@@ -1,6 +1,7 @@
 import type { RunRecord } from "../types.js";
 import { formatCompactThousands } from "../utils/time.js";
 import { summarizeSingleLine } from "../utils/text.js";
+import { formatCacheHitRate } from "../utils/usage-metrics.js";
 import { GLYPH_PINNED } from "./glyphs.js";
 
 interface LiveRunProgressStats {
@@ -39,6 +40,8 @@ export function buildLiveRunViewModel(run: RunRecord, options: LiveRunViewModelO
   if (run.currentTool) metaParts.push(run.currentTool);
   if (run.toolCount !== undefined && run.toolCount > 0) metaParts.push(`${run.toolCount} tools`);
   if (run.totalTokens !== undefined && run.totalTokens > 0) metaParts.push(`${formatCompactThousands(run.totalTokens)} tokens`);
+  const cacheHitRate = formatCacheHitRate(run.cacheHitRate);
+  if (cacheHitRate) metaParts.push(cacheHitRate);
 
   const detailLines = buildLiveRunDetailLines(run, options.progressLines);
   const maxDetails = expanded ? options.maxExpandedDetails ?? 20 : options.maxCompactDetails ?? 8;

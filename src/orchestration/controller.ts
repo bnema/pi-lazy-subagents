@@ -43,6 +43,7 @@ import { buildWidgetLines, createWidgetContent } from "../ui/widget.js";
 import { buildLiveRunViewModel } from "../ui/live-run-view-model.js";
 import { formatCompactThousands, formatDuration } from "../utils/time.js";
 import { summarizeSingleLine } from "../utils/text.js";
+import { clampCacheHitRate } from "../utils/usage-metrics.js";
 
 export interface LazySubagentsControllerOptions {
   launcher?: Launcher;
@@ -282,6 +283,9 @@ function equalUpdate(existing: RunRecord, update: NormalizedRunUpdate): boolean 
     && existing.toolCount === update.toolCount
     // equalUpdate compares against mergeTotalTokens because missing totals should preserve an existing non-zero value; the tests also cover the zero-update case, so we deliberately merge instead of comparing directly.
     && existing.totalTokens === mergeTotalTokens(existing.totalTokens, update.totalTokens)
+    && existing.promptTokens === (update.promptTokens ?? existing.promptTokens)
+    && existing.cacheReadTokens === (update.cacheReadTokens ?? existing.cacheReadTokens)
+    && existing.cacheHitRate === (clampCacheHitRate(update.cacheHitRate ?? existing.cacheHitRate) ?? existing.cacheHitRate)
     && existing.attentionNeeded === (update.attentionNeeded ?? false);
 }
 
@@ -1443,6 +1447,9 @@ export class LazySubagentsController {
         childProgress: update.childProgress ?? existing.childProgress,
         toolCount: update.toolCount,
         totalTokens: mergeTotalTokens(existing.totalTokens, update.totalTokens),
+        promptTokens: update.promptTokens ?? existing.promptTokens,
+        cacheReadTokens: update.cacheReadTokens ?? existing.cacheReadTokens,
+        cacheHitRate: clampCacheHitRate(update.cacheHitRate ?? existing.cacheHitRate),
         attentionNeeded: update.attentionNeeded ?? false,
         leaseExpiry: newLease ?? existing.leaseExpiry,
       });

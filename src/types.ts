@@ -81,6 +81,9 @@ export interface RunRecord {
   currentTool?: string;
   toolCount?: number;
   totalTokens?: number;
+  promptTokens?: number;
+  cacheReadTokens?: number;
+  cacheHitRate?: number;
   model?: string;
   attentionNeeded: boolean;
   name?: string;

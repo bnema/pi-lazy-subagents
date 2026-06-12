@@ -74,6 +74,22 @@ describe("persistence", () => {
     expect(restorePersistedState(null)).toEqual(createEmptyPersistedState());
   });
 
+  test("clamps restored cache hit rates", () => {
+    const restored = restorePersistedState({
+      version: 1,
+      updatedAt: 123,
+      surfacedCompletionKeys: [],
+      acknowledgedRunIds: [],
+      pinnedRunIds: [],
+      runs: [{
+        ...createRun({ id: "run-1", status: "running", completedAt: undefined }),
+        cacheHitRate: 250,
+      }],
+    });
+
+    expect(restored.runs[0]?.cacheHitRate).toBe(100);
+  });
+
   test("round-trips active names while archived runs release their names", () => {
     const registry = new RunRegistry();
     registry.upsert(createRun({
