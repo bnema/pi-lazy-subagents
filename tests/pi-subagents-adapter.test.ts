@@ -166,6 +166,43 @@ describe("PiSubagentsAdapter helpers", () => {
     expect((update as any).cacheHitRate).toBe(75);
   });
 
+  test("resolves workflow task summary templates before exposing child progress to the UI", () => {
+    const update = normalizeAsyncStatus("run-workflow", "/tmp/async/run-workflow", {
+      runId: "run-workflow",
+      mode: "workflow",
+      state: "running",
+      startedAt: 10,
+      lastUpdate: 20,
+      steps: [
+        {
+          id: "triage",
+          taskSummary: "Pick a base ref",
+          status: "completed",
+          summary: "Use origin/main",
+          structuredOutput: { baseRef: "origin/main" },
+        },
+        {
+          id: "review",
+          taskSummary: "Review the branch",
+          status: "completed",
+          summary: "Collected findings",
+          structuredOutput: { findings: [{ title: "Missing test" }], count: 1 },
+        },
+        {
+          id: "synth",
+          taskSummary: "Review the current branch against {{triage.structured.baseRef}} using tests + Deduplicate and prioritize findings from {{review.json}}.",
+          status: "pending",
+        },
+      ],
+    } as any);
+
+    expect(update.childProgress?.map((step) => step.taskSummary)).toEqual([
+      "Pick a base ref",
+      "Review the branch",
+      "Review the current branch against origin/main using tests + Deduplicate and prioritize findings from {\"findings\":[{\"title\":\"Missing test\"}],\"count\":1}.",
+    ]);
+  });
+
   test("normalizes terminal result files into completion and failure updates", () => {
     const completed = normalizeAsyncResult("run-1", {
       id: "run-1",

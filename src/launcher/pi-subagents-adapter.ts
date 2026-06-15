@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 import { getAgentProfile, listAvailableAgentProfiles, type AgentProfile } from "./agent-profiles.js";
+import { renderWorkflowTemplate } from "./direct-runner.mjs";
 import type {
   ContinueLaunchRequest,
   LaunchChildRequest,
@@ -498,11 +499,48 @@ function selectPrimaryStep(status: Pick<DirectAsyncStatus, "steps">): DirectAsyn
   return steps.find((step) => step.status === "running") ?? steps[0];
 }
 
-function normalizeStepProgress(step: DirectAsyncStatusStep): RunChildProgress {
+type WorkflowDisplayResult = {
+  summary?: string;
+  output?: string;
+  structuredOutput?: Record<string, unknown>;
+};
+
+function buildWorkflowDisplayResultsMap(steps: DirectAsyncStatus["steps"]): Record<string, WorkflowDisplayResult> {
+  return Object.fromEntries(
+    (steps ?? [])
+      .filter((step): step is DirectAsyncStatusStep & { id: string } => typeof step.id === "string" && step.id.length > 0)
+      .filter((step) => step.summary !== undefined || step.structuredOutput !== undefined)
+      .map((step) => [step.id, {
+        summary: step.summary ?? "",
+        output: step.summary ?? "",
+        structuredOutput: step.structuredOutput,
+      }]),
+  );
+}
+
+function resolveWorkflowTaskSummary(
+  taskSummary: string | undefined,
+  workflowResults: Record<string, WorkflowDisplayResult> | undefined,
+): string | undefined {
+  if (typeof taskSummary !== "string" || !taskSummary.includes("{{") || !workflowResults) {
+    return taskSummary;
+  }
+
+  try {
+    return renderWorkflowTemplate(taskSummary, workflowResults);
+  } catch {
+    return taskSummary;
+  }
+}
+
+function normalizeStepProgress(
+  step: DirectAsyncStatusStep,
+  workflowResults?: Record<string, WorkflowDisplayResult>,
+): RunChildProgress {
   return {
     id: step.id,
     agent: step.agent,
-    taskSummary: step.taskSummary,
+    taskSummary: resolveWorkflowTaskSummary(step.taskSummary, workflowResults),
     status: step.status,
   };
 }
@@ -554,7 +592,8 @@ export function normalizeAsyncStatus(
   const cacheHitRate = status.cacheHitRate ?? primaryStep?.cacheHitRate;
   const outputFile = primaryStep?.outputFile ?? status.outputFile;
   const sessionFile = primaryStep?.sessionFile ?? status.sessionFile;
-  const childProgress = status.steps?.map(normalizeStepProgress);
+  const workflowResults = status.mode === "workflow" ? buildWorkflowDisplayResultsMap(status.steps) : undefined;
+  const childProgress = status.steps?.map((step) => normalizeStepProgress(step, workflowResults));
   const artifactPath = outputFile
     ? path.isAbsolute(outputFile)
       ? outputFile
