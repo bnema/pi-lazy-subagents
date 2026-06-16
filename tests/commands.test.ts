@@ -56,7 +56,11 @@ describe("lazy-subagents command parsing", () => {
 
     expect(help).toContain("/lazy-subagents list");
     expect(help).toContain("/lazy-subagents continue");
+    expect(help).toContain("/lazy-subagents stop");
     expect(help).toContain("lazy_subagents action=list");
+    expect(help).toContain("lazy_subagents action=stop");
+    expect(help).toContain("resumable");
+    expect(help).toContain("cancel is final");
     expect(help).toContain("inspect available sub agents before choosing one");
     expect(help).toContain("Slash command usage:");
     expect(help).toContain("Tool usage:");
@@ -113,6 +117,17 @@ describe("lazy-subagents command parsing", () => {
     expect(message).toContain("Continued run-1 (reviewer).");
     expect(message).toContain("Signals arrive automatically");
     expect(message).toContain("do not wait or poll right away");
+  });
+
+  test("stop command pauses a run with continuation guidance", async () => {
+    const controller = {
+      stopRun: async (runId: string) => runId === "run-1",
+    };
+
+    const message = await executeLazySubagentsCommand("stop run-1", controller as any, {} as any);
+
+    expect(message).toContain("Stopped run-1.");
+    expect(message).toContain("continue target=run-1");
   });
 
   test("continue command formats controller errors for the user", async () => {
@@ -176,7 +191,7 @@ describe("lazy-subagents command parsing", () => {
     expect(parseLazySubagentsCommand(`run reviewer "Review" --name ${"a".repeat(65)}`)).toEqual({ action: "help" });
   });
 
-  test("parses list, run, status, wait, result, pickup, pin, clear, and cancel commands", () => {
+  test("parses list, run, status, wait, result, pickup, pin, stop, clear, and cancel commands", () => {
     expect(parseLazySubagentsCommand('run reviewer "Review the auth diff" --policy ignored --title "Review auth diff"')).toEqual({
       action: "run",
       agent: "reviewer",
@@ -193,8 +208,10 @@ describe("lazy-subagents command parsing", () => {
     expect(parseLazySubagentsCommand("result run-1")).toEqual({ action: "result", runId: "run-1" });
     expect(parseLazySubagentsCommand("pickup run-1")).toEqual({ action: "pickup", runId: "run-1" });
     expect(parseLazySubagentsCommand("pin run-1")).toEqual({ action: "pin", runId: "run-1" });
+    expect(parseLazySubagentsCommand("stop run-1")).toEqual({ action: "stop", runId: "run-1" });
     expect(parseLazySubagentsCommand("clear all")).toEqual({ action: "clear", scope: "all" });
     expect(parseLazySubagentsCommand("cancel run-1")).toEqual({ action: "cancel", runId: "run-1" });
+    expect(parseLazySubagentsCommand("stop")).toEqual({ action: "help" });
   });
 
   test("formats wait reports for ready, timeout, and ambiguous waits", () => {
@@ -216,6 +233,8 @@ describe("lazy-subagents command parsing", () => {
     const running = createRun({ id: "run-1", status: "running", startedAt: 50_000, updatedAt: 59_000, completedAt: undefined, model: "(openai-codex) gpt-5.4 • xhigh" });
     (running as any).currentTool = "read";
     (running as any).toolCount = 3;
+    (running as any).lastActionAt = 57_000;
+    (running as any).lastActionSummary = "tool start: read";
     running.recentEvents = [{ id: "progress-1", category: "progress", timestamp: 59_000, summary: "Inspecting auth.ts" }];
     const completed = createRun({ id: "run-2", status: "completed", startedAt: 40_000, updatedAt: 58_000, completedAt: 58_000, agent: "reviewer", resultPreview: "Found 3 issues" });
     const snapshot = createSnapshot([running, completed]);
@@ -225,6 +244,7 @@ describe("lazy-subagents command parsing", () => {
     expect(report).toContain("Active runs: 1");
     expect(report).toContain("elapsed: 10s");
     expect(report).toContain("updated: 1s ago");
+    expect(report).toContain("last action: 3s ago · tool start: read");
     expect(report).toContain("model: (openai-codex) gpt-5.4 • xhigh");
     expect(report).toContain("tool: read");
     expect(report).toContain("tools used: 3");

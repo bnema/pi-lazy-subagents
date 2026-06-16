@@ -22,6 +22,18 @@ describe("lazy_subagents tool schema", () => {
     expect(nameProp.description).toMatch(/named run addressing/i);
   });
 
+  test("tool action exposes stop alongside cancel and continue", () => {
+    const action = ToolParamsSchema.properties.action;
+
+    expect(action).toMatchObject({
+      anyOf: expect.arrayContaining([
+        expect.objectContaining({ const: "stop" }),
+        expect.objectContaining({ const: "cancel" }),
+        expect.objectContaining({ const: "continue" }),
+      ]),
+    });
+  });
+
   test("workflow action exposes workflow steps and concurrency controls", () => {
     const action = ToolParamsSchema.properties.action;
     const maxConcurrency = ToolParamsSchema.properties.maxConcurrency;

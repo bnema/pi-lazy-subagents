@@ -21,6 +21,7 @@ export type ParsedLazySubagentsCommand =
   | { action: "result"; runId: string }
   | { action: "pickup"; runId: string }
   | { action: "pin"; runId: string }
+  | { action: "stop"; runId: string }
   | { action: "cancel"; runId: string }
   | { action: "clear"; scope: "completed" | "all"; runId?: string }
   | { action: "continue"; target: string; prompt: string; title?: string }
@@ -151,7 +152,7 @@ export function parseLazySubagentsCommand(input: string): ParsedLazySubagentsCom
     return { action, runId, timeoutMs };
   }
 
-  if (action === "result" || action === "pickup" || action === "pin" || action === "cancel") {
+  if (action === "result" || action === "pickup" || action === "pin" || action === "stop" || action === "cancel") {
     const runId = tokens[0];
     return runId ? { action, runId } : { action: "help" };
   }
@@ -248,6 +249,10 @@ function formatRunStatus(run: RunRecord, now: number): string[] {
   lines.push(`  task: ${run.title || run.taskSummary}`);
   lines.push(`  elapsed: ${formatDuration(now - run.startedAt)}`);
   lines.push(`  updated: ${formatAge({ now, timestamp: run.updatedAt })}`);
+  if (run.lastActionAt !== undefined) {
+    const actionSuffix = run.lastActionSummary ? ` · ${run.lastActionSummary}` : "";
+    lines.push(`  last action: ${formatAge({ now, timestamp: run.lastActionAt })}${actionSuffix}`);
+  }
   if (run.model) lines.push(`  model: ${run.model}`);
   if (run.currentTool) lines.push(`  tool: ${run.currentTool}`);
   if (run.toolCount !== undefined) lines.push(`  tools used: ${run.toolCount}`);
@@ -343,8 +348,10 @@ export function buildLazySubagentsHelp(): string {
     "  /lazy-subagents result <runId>",
     "  /lazy-subagents pickup <runId>",
     "  /lazy-subagents pin <runId|on|off>",
+    "  /lazy-subagents stop <runId>",
     "  /lazy-subagents cancel <runId>",
     "  /lazy-subagents clear [all|runId]",
+
     "",
     "Tool usage:",
     "  lazy_subagents action=help",
@@ -358,6 +365,7 @@ export function buildLazySubagentsHelp(): string {
     "  lazy_subagents action=result runId=<runId>",
     "  lazy_subagents action=pickup runId=<runId>",
     "  lazy_subagents action=pin runId=<runId|on|off>",
+    "  lazy_subagents action=stop runId=<runId>",
     "  lazy_subagents action=cancel runId=<runId>",
     "  lazy_subagents action=clear [scope=completed|all] [runId=<runId>]",
     "",
@@ -367,7 +375,9 @@ export function buildLazySubagentsHelp(): string {
     "  - Named completed single runs stay visible and followup-able for a bounded lease (default 30 min).",
     "  - When the lease expires, named successes are hidden and can no longer be resumed.",
     "  - Failed, attention-needed, and pinned runs always stay visible until resolved or cleared.",
-    "  - Use action=continue target=<name> prompt=<new prompt> to send a follow-up task to a completed named agent.",
+    "  - Use action=stop runId=<runId> for a resumable pause of a stuck active single run; cancel is final and cannot be continued.",
+    "  - Use action=continue target=<name|runId> prompt=<new prompt> to send a follow-up task to a completed named or stopped single agent.",
+
     "    The agent resumes in its existing session directory and runs another turn.",
     "  - Continuation is only supported for single runs, not group or workflow runs.",
     "",
@@ -389,6 +399,8 @@ export function buildLazySubagentsHelp(): string {
     "  lazy_subagents action=list",
     "  lazy_subagents action=run agent=reviewer prompt=\"Review the auth diff\" name=diff-reviewer",
     "  lazy_subagents action=continue target=diff-reviewer prompt=\"I applied your fixes; validate\"",
+    "  lazy_subagents action=stop runId=<runId>",
+    "  lazy_subagents action=continue target=<runId> prompt=\"Resume after I stopped the stuck command\"",
     "  lazy_subagents action=run agent=worker prompt=\"Implement the requested fix\"",
     "  lazy_subagents action=parallel children=[{agent:\"scout\",prompt:\"Inspect the package layout\"},{agent:\"reviewer\",prompt:\"Review the auth diff\"}]",
     "  lazy_subagents action=parallel children=[{agent:\"reviewer\",prompt:\"Review the diff\"},{agent:\"scout\",prompt:\"Find related docs\"},{agent:\"worker\",prompt:\"Prototype the isolated parser change\"}]",
@@ -442,6 +454,10 @@ export async function executeLazySubagentsCommand(
       if (outcome === "not_pinnable") return `Run already complete: ${parsed.runId} is not pinned in widget.`;
       return `Run not found: ${parsed.runId}`;
     }
+    case "stop":
+      return (await controller.stopRun(parsed.runId, ctx))
+        ? `Stopped ${parsed.runId}. Use lazy_subagents action=continue target=${parsed.runId} prompt=<message> to resume.`
+        : `Could not stop ${parsed.runId}.`;
     case "cancel":
       return (await controller.cancelRun(parsed.runId, ctx))
         ? `Cancelled ${parsed.runId}.`

@@ -57,6 +57,8 @@ function normalizeChildProgress(value: unknown): RunChildProgress[] | undefined 
         agent: asString(entry.agent),
         taskSummary: asString(entry.taskSummary),
         status: status && isRunChildProgressStatus(status) ? status : undefined,
+        lastActionAt: asNumber(entry.lastActionAt),
+        lastActionSummary: asString(entry.lastActionSummary),
       };
     })
     .filter((entry): entry is RunChildProgress => Boolean(entry?.id || entry?.agent || entry?.taskSummary || entry?.status));
@@ -151,6 +153,8 @@ function normalizeRunRecord(value: unknown): RunRecord | undefined {
     resultPreview: asString(value.resultPreview),
     errorPreview: asString(value.errorPreview),
     currentTool: asString(value.currentTool),
+    lastActionAt: asNumber(value.lastActionAt),
+    lastActionSummary: asString(value.lastActionSummary),
     toolCount: asNumber(value.toolCount),
     totalTokens: asNumber(value.totalTokens),
     promptTokens: asNumber(value.promptTokens),

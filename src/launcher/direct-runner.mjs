@@ -390,6 +390,8 @@ function createInitialStatus(config) {
     state: "queued",
     startedAt,
     lastUpdate: startedAt,
+    lastActionAt: startedAt,
+    lastActionSummary: "queued",
     steps: config.children.map((child, index) => ({
       index,
       id: child.id,
@@ -409,9 +411,12 @@ function createInitialStatus(config) {
       outputSchema: child.outputSchema,
       summary: undefined,
       structuredOutput: undefined,
+      sessionDir: child.sessionDir,
       startedAt: undefined,
       endedAt: undefined,
       currentTool: undefined,
+      lastActionAt: undefined,
+      lastActionSummary: undefined,
       totalTokens: undefined,
       sessionFile: undefined,
       outputFile: child.outputFile,
@@ -463,6 +468,14 @@ function assignStepMetrics(step, metrics) {
   step.promptTokens = metrics.promptTokens;
   step.cacheReadTokens = metrics.cacheReadTokens;
   step.cacheHitRate = metrics.cacheHitRate;
+}
+
+function markStepAction(status, step, summary) {
+  const timestamp = now();
+  step.lastActionAt = timestamp;
+  step.lastActionSummary = summary;
+  status.lastActionAt = timestamp;
+  status.lastActionSummary = summary;
 }
 
 async function updateStatus(statusPath, status) {
@@ -568,7 +581,7 @@ async function runChild(config, statusPath, status, child, index, promptOverride
   step.summary = undefined;
   step.structuredOutput = undefined;
   step.currentTool = undefined;
-  step.currentToolStartedAt = undefined;
+  markStepAction(status, step, "child started");
   await updateStatus(statusPath, status);
 
   const continueSessionFile = config.mode === "continue" ? config.continueSessionFile : undefined;
@@ -620,16 +633,17 @@ async function runChild(config, statusPath, status, child, index, promptOverride
 
     if (event.type === "tool_execution_start") {
       step.currentTool = event.toolName;
-      step.currentToolStartedAt = now();
+      markStepAction(status, step, `tool start: ${event.toolName ?? "unknown"}`);
       await updateStatus(statusPath, status);
       return;
     }
 
     if (event.type === "tool_execution_end") {
+      const toolName = step.currentTool ?? event.toolName ?? "unknown";
       step.currentTool = undefined;
-      step.currentToolStartedAt = undefined;
       toolCount += 1;
       step.toolCount = toolCount;
+      markStepAction(status, step, `tool end: ${toolName}`);
       await updateStatus(statusPath, status);
       return;
     }
@@ -639,6 +653,7 @@ async function runChild(config, statusPath, status, child, index, promptOverride
       if (text) {
         finalOutput = text;
         await appendLine(path.join(config.asyncDir, child.outputFile), text);
+        markStepAction(status, step, "assistant message");
         await updateStatus(statusPath, status);
       }
       return;
@@ -650,8 +665,9 @@ async function runChild(config, statusPath, status, child, index, promptOverride
       if (step.totalTokens !== committedTotalTokens || stepMetricsChanged(step, metrics)) {
         step.totalTokens = committedTotalTokens;
         assignStepMetrics(step, metrics);
-        await updateStatus(statusPath, status);
       }
+      markStepAction(status, step, "turn end");
+      await updateStatus(statusPath, status);
       return;
     }
   };
@@ -686,7 +702,6 @@ async function runChild(config, statusPath, status, child, index, promptOverride
   step.endedAt = now();
   step.durationMs = step.startedAt ? Math.max(0, step.endedAt - step.startedAt) : undefined;
   step.currentTool = undefined;
-  step.currentToolStartedAt = undefined;
   step.exitCode = exitCode;
   step.totalTokens = finalizeUsageTracker(usageTracker);
   assignStepMetrics(step, trackerMetrics(usageTracker));
@@ -732,6 +747,8 @@ async function runChild(config, statusPath, status, child, index, promptOverride
     attempt: attemptNumber,
     maxAttempts: (child.retries ?? 0) + 1,
     sessionFile,
+    lastActionAt: step.lastActionAt,
+    lastActionSummary: step.lastActionSummary,
     totalTokens: step.totalTokens,
     promptTokens: step.promptTokens,
     cacheReadTokens: step.cacheReadTokens,
@@ -761,6 +778,8 @@ function failedChildResult(config, child, error, sessionFile, attempt = 1, attem
     maxAttempts: (child.retries ?? 0) + 1,
     attempts,
     sessionFile,
+    lastActionAt: undefined,
+    lastActionSummary: undefined,
     totalTokens: 0,
     promptTokens: 0,
     cacheReadTokens: 0,
@@ -788,6 +807,8 @@ function skippedChildResult(child, reason, success = true) {
     attempt: 0,
     maxAttempts: (child.retries ?? 0) + 1,
     attempts: [],
+    lastActionAt: undefined,
+    lastActionSummary: undefined,
     totalTokens: 0,
     promptTokens: 0,
     cacheReadTokens: 0,
@@ -811,6 +832,8 @@ function fanOutChildResultEntry(result) {
     output: result.output ?? "",
     structuredOutput: result.structuredOutput,
     error: result.error,
+    lastActionAt: result.lastActionAt,
+    lastActionSummary: result.lastActionSummary,
     totalTokens: result.totalTokens,
     promptTokens: result.promptTokens,
     cacheReadTokens: result.cacheReadTokens,
@@ -935,6 +958,8 @@ async function writeResult(config, status, results) {
     summary,
     timestamp,
     sessionFile: results.find((result) => result.sessionFile)?.sessionFile,
+    lastActionAt: status.lastActionAt,
+    lastActionSummary: status.lastActionSummary,
     toolCount: status.toolCount,
     totalTokens: status.totalTokens,
     promptTokens: status.promptTokens,
@@ -1123,7 +1148,6 @@ async function runWorkflow(config, status) {
           step.summary = undefined;
           step.structuredOutput = undefined;
           step.currentTool = undefined;
-          step.currentToolStartedAt = undefined;
           step.endedAt = now();
           step.durationMs = step.startedAt ? Math.max(0, step.endedAt - step.startedAt) : undefined;
           await updateStatus(config.statusPath, status);

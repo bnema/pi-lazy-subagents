@@ -137,12 +137,16 @@ describe("PiSubagentsAdapter helpers", () => {
       activityState: "needs_attention",
       startedAt: 10,
       lastUpdate: 20,
+      lastActionAt: 18,
+      lastActionSummary: "tool start: bash",
       sessionFile: "/tmp/child.jsonl",
       outputFile: "output-0.log",
       steps: [{
         agent: "reviewer",
         status: "running",
         currentTool: "bash",
+        lastActionAt: 18,
+        lastActionSummary: "tool start: bash",
         toolCount: 4,
         totalTokens: 6520,
         promptTokens: 1000,
@@ -154,6 +158,8 @@ describe("PiSubagentsAdapter helpers", () => {
 
     expect(update.status).toBe("blocked");
     expect(update.updatedAt).toBe(20);
+    expect((update as any).lastActionAt).toBe(18);
+    expect((update as any).lastActionSummary).toBe("tool start: bash");
     expect(update.attentionNeeded).toBe(true);
     expect(update.sessionFile).toBe("/tmp/child.jsonl");
     expect(update.artifactPath).toBe(path.join("/tmp/async/run-1", "output-0.log"));
@@ -211,6 +217,8 @@ describe("PiSubagentsAdapter helpers", () => {
       summary: "research complete",
       timestamp: 42,
       sessionFile: "/tmp/completed.jsonl",
+      lastActionAt: 41,
+      lastActionSummary: "assistant message",
       totalTokens: 122_967,
       promptTokens: 40_000,
       cacheReadTokens: 30_000,
@@ -221,6 +229,8 @@ describe("PiSubagentsAdapter helpers", () => {
 
     expect(completed.status).toBe("completed");
     expect(completed.completedAt).toBe(42);
+    expect((completed as any).lastActionAt).toBe(41);
+    expect((completed as any).lastActionSummary).toBe("assistant message");
     expect(completed.resultPreview).toBe("research complete");
     expect(completed.artifactPath).toBe("/tmp/artifact.md");
     expect((completed as any).totalTokens).toBe(122_967);
@@ -338,6 +348,77 @@ describe("PiSubagentsAdapter helpers", () => {
       expect(result.id).toBe("persisted-run-1");
       expect(result.runId).toBe("persisted-run-1");
       expect(result.results[0]).toMatchObject({ stepId: "plan", taskSummary: "Draft the plan", dependsOn: ["research"], agent: "scout" });
+    } finally {
+      killSpy.mockRestore();
+    }
+  });
+
+  test("stop writes paused status and result markers while preserving resumable metadata", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-lazy-subagents-"));
+    const asyncDirRoot = path.join(tempDir, "async");
+    const resultsDir = path.join(tempDir, "results");
+    const asyncDir = path.join(asyncDirRoot, "run-1");
+    await fs.mkdir(asyncDir, { recursive: true });
+    await fs.mkdir(resultsDir, { recursive: true });
+    await fs.writeFile(
+      path.join(asyncDir, "status.json"),
+      JSON.stringify({
+        runId: "persisted-run-1",
+        mode: "single",
+        state: "running",
+        pid: 123,
+        sessionFile: "/tmp/session.jsonl",
+        steps: [{ id: "review", taskSummary: "Review diff", agent: "reviewer", pid: 456, sessionFile: "/tmp/session.jsonl", outputFile: "output-0.log" }],
+      }),
+      "utf8",
+    );
+
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true as never);
+    const adapter = new PiSubagentsAdapter({ asyncDirRoot, resultsDir });
+
+    try {
+      await expect((adapter as any).stop({ runId: "run-1", asyncId: "run-1", asyncDir })).resolves.toBe(true);
+
+      const status = JSON.parse(await fs.readFile(path.join(asyncDir, "status.json"), "utf8")) as { state: string; sessionFile?: string; steps: Array<{ status?: string; sessionFile?: string }> };
+      const result = JSON.parse(await fs.readFile(path.join(resultsDir, "run-1.json"), "utf8")) as { state: string; success: boolean; summary: string; sessionFile?: string; results: Array<{ status?: string; sessionFile?: string }> };
+      expect(status.state).toBe("paused");
+      expect(status.sessionFile).toBe("/tmp/session.jsonl");
+      expect(status.steps[0]).toMatchObject({ status: "paused", sessionFile: "/tmp/session.jsonl" });
+      expect(result.state).toBe("paused");
+      expect(result.success).toBe(false);
+      expect(result.summary).toContain("Stopped by user");
+      expect(result.sessionFile).toBe("/tmp/session.jsonl");
+      expect(result.results[0]).toMatchObject({ status: "paused", sessionFile: "/tmp/session.jsonl" });
+    } finally {
+      killSpy.mockRestore();
+    }
+  });
+
+  test("stop returns false without killing when no resumable session file exists", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-lazy-subagents-"));
+    const asyncDirRoot = path.join(tempDir, "async");
+    const resultsDir = path.join(tempDir, "results");
+    const asyncDir = path.join(asyncDirRoot, "run-1");
+    await fs.mkdir(asyncDir, { recursive: true });
+    await fs.mkdir(resultsDir, { recursive: true });
+    await fs.writeFile(
+      path.join(asyncDir, "status.json"),
+      JSON.stringify({
+        runId: "persisted-run-1",
+        mode: "single",
+        state: "running",
+        pid: 123,
+        steps: [{ id: "review", taskSummary: "Review diff", agent: "reviewer", pid: 456, sessionDir: path.join(asyncDir, "missing-session") }],
+      }),
+      "utf8",
+    );
+
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true as never);
+    const adapter = new PiSubagentsAdapter({ asyncDirRoot, resultsDir });
+
+    try {
+      await expect((adapter as any).stop({ runId: "run-1", asyncId: "run-1", asyncDir })).resolves.toBe(false);
+      expect(killSpy).not.toHaveBeenCalled();
     } finally {
       killSpy.mockRestore();
     }

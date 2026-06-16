@@ -1,7 +1,7 @@
 import { truncateToWidth } from "@earendil-works/pi-tui";
 
 import type { RunRecord, RunRegistrySnapshot } from "../types.js";
-import { formatCompactThousands } from "../utils/time.js";
+import { formatAge, formatCompactThousands } from "../utils/time.js";
 import { formatCacheHitRate } from "../utils/usage-metrics.js";
 import { GLYPH_LAZY_SUBAGENTS, GLYPH_PINNED } from "./glyphs.js";
 
@@ -19,7 +19,7 @@ export interface WidgetThemeLike {
 
 export interface WidgetBuildOptions {
   isPinned?: (runId: string) => boolean;
-  getPinnedProgressLines?: (runId: string) => string[];
+  getPinnedProgressLines?: (runId: string, now?: number) => string[];
   runningDots?: string;
   suppressFocusIdentity?: boolean;
 }
@@ -135,7 +135,7 @@ function lazyFocusRun(snapshot: RunRegistrySnapshot, isPinned: (runId: string) =
   ][0];
 }
 
-function buildLazyLine(snapshot: RunRegistrySnapshot, theme?: WidgetThemeLike, options: WidgetBuildOptions = {}): string {
+function buildLazyLine(snapshot: RunRegistrySnapshot, now: number, theme?: WidgetThemeLike, options: WidgetBuildOptions = {}): string {
   const isPinned = options.isPinned ?? (() => false);
   const activeRuns = runningRuns(snapshot);
   const attentionCount = snapshot.runs.filter((run) => needsAttention(run)).length;
@@ -157,6 +157,10 @@ function buildLazyLine(snapshot: RunRegistrySnapshot, theme?: WidgetThemeLike, o
       parts.push(bold(shortTitle(focusRun), theme));
       if (focusRun.currentTool) parts.push(muted(focusRun.currentTool, theme));
     }
+    if (!options.suppressFocusIdentity && focusRun.lastActionAt !== undefined) {
+      const actionSuffix = focusRun.lastActionSummary ? ` ${focusRun.lastActionSummary}` : "";
+      parts.push(muted(`last action ${formatAge({ now, timestamp: focusRun.lastActionAt })}${actionSuffix}`, theme));
+    }
     if (focusRun.toolCount !== undefined && focusRun.toolCount > 0) parts.push(muted(`${focusRun.toolCount} tools`, theme));
     const tokens = compactTokenCount(focusRun.totalTokens);
     if (tokens) parts.push(muted(tokens, theme));
@@ -174,8 +178,8 @@ function fallbackProgressLines(run: RunRecord): string[] {
     .filter(Boolean);
 }
 
-function progressLinesForRun(run: RunRecord, options: WidgetBuildOptions): string[] {
-  const detailLines = (options.getPinnedProgressLines?.(run.id) ?? fallbackProgressLines(run))
+function progressLinesForRun(run: RunRecord, now: number, options: WidgetBuildOptions): string[] {
+  const detailLines = (options.getPinnedProgressLines?.(run.id, now) ?? fallbackProgressLines(run))
     .map((line) => line.trim())
     .filter((line) => line.length > 0);
   return detailLines.slice(Math.max(0, detailLines.length - PINNED_DETAIL_LIMIT));
@@ -232,13 +236,13 @@ function buildPinnedTitleLine(run: RunRecord, theme?: WidgetThemeLike): string {
   return `${color(GLYPH_PINNED, "accent", theme)} ${bold(title, theme)}`;
 }
 
-function buildPinnedPanelLines(runs: RunRecord[], theme: WidgetThemeLike | undefined, options: WidgetBuildOptions): string[] {
+function buildPinnedPanelLines(runs: RunRecord[], now: number, theme: WidgetThemeLike | undefined, options: WidgetBuildOptions): string[] {
   const [primary, ...moreRuns] = runs;
   if (!primary) return [];
 
   const lines = [
     buildPinnedTitleLine(primary, theme),
-    ...progressLinesForRun(primary, options).map((line) => buildPinnedDetailLine(line, theme)),
+    ...progressLinesForRun(primary, now, options).map((line) => buildPinnedDetailLine(line, theme)),
   ];
 
   if (moreRuns.length > 0) {
@@ -266,8 +270,8 @@ export function buildWidgetLines(
   if (snapshot.runs.length === 0 || limit <= 0) return [];
 
   const isPinned = options.isPinned ?? (() => false);
-  const pinnedPanelLines = buildPinnedPanelLines(pinnedRuns(snapshot, isPinned), theme, options);
-  const lazyLine = buildLazyLine(snapshot, theme, { ...options, suppressFocusIdentity: pinnedPanelLines.length > 0 });
+  const pinnedPanelLines = buildPinnedPanelLines(pinnedRuns(snapshot, isPinned), now, theme, options);
+  const lazyLine = buildLazyLine(snapshot, now, theme, { ...options, suppressFocusIdentity: pinnedPanelLines.length > 0 });
 
   return keepFinalLineVisible([...pinnedPanelLines, lazyLine], limit);
 }

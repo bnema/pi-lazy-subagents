@@ -28,6 +28,7 @@ pi install git:github.com/bnema/pi-lazy-subagents
 /lazy-subagents result <runId>
 /lazy-subagents pickup <runId>
 /lazy-subagents pin <runId|on|off>
+/lazy-subagents stop <runId>
 /lazy-subagents cancel <runId>
 /lazy-subagents clear [all|runId]
 ```
@@ -47,6 +48,7 @@ The `lazy_subagents` tool supports:
 - `result`
 - `pickup`
 - `pin`
+- `stop`
 - `clear`
 - `cancel`
 
@@ -56,7 +58,7 @@ Core parameters:
 - `children` for parallel groups: each child has `agent`, `prompt`, optional `taskSummary`, and optional `cwd`.
 - `steps` for workflows: each step has `id`, `agent`, `prompt`, optional `dependsOn`, `retries`, `outputMode`, `outputSchema`, `when`, `fanOutFrom`, and `cwd`.
 - `target` for continuing a named run or run id.
-- `runId`, `timeoutMs`, and `scope` for status/result/wait/clear-style actions.
+- `runId`, `timeoutMs`, and `scope` for status/result/wait/stop/clear-style actions.
 
 Examples:
 
@@ -65,6 +67,8 @@ lazy_subagents action=run agent=reviewer prompt="Review the auth diff" name=auth
 lazy_subagents action=continue target=auth-review prompt="I applied your fixes; validate again"
 lazy_subagents action=parallel children=[{agent:"reviewer",prompt:"Review correctness"},{agent:"scout",prompt:"Find docs"}]
 lazy_subagents action=wait runId=<runId> timeoutMs=600000
+lazy_subagents action=stop runId=<runId>
+lazy_subagents action=continue target=<runId> prompt="Resume after the stuck command was stopped"
 lazy_subagents action=result runId=<runId>
 lazy_subagents action=pickup runId=<runId>
 ```
@@ -82,7 +86,7 @@ Use `run` for one child, `parallel` for independent children, and `workflow` for
 
 ## Notes
 
-Subagents report terminal results back to the main session automatically. Use blocking `wait` only when you explicitly need to stop the main session until a child completes.
+Subagents report terminal results back to the main session automatically. Status surfaces include last-action timing, and stale runs raise attention so the main agent can inspect or stop them. Use `stop` for a resumable pause of a stuck active single run; `cancel` is final and cannot be continued. Use blocking `wait` only when you explicitly need to stop the main session until a child completes.
 
 ## Develop
 

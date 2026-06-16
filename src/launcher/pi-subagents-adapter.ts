@@ -46,11 +46,14 @@ type DirectAsyncStatusStep = {
   structuredOutput?: Record<string, unknown>;
   status?: "pending" | "running" | "completed" | "skipped" | "failed" | "paused" | "cancelled";
   currentTool?: string;
+  lastActionAt?: number;
+  lastActionSummary?: string;
   toolCount?: number;
   totalTokens?: number;
   promptTokens?: number;
   cacheReadTokens?: number;
   cacheHitRate?: number;
+  sessionDir?: string;
   sessionFile?: string;
   outputFile?: string;
 };
@@ -62,6 +65,8 @@ type DirectAsyncStatus = {
   activityState?: DirectActivityState;
   startedAt: number;
   lastUpdate?: number;
+  lastActionAt?: number;
+  lastActionSummary?: string;
   endedAt?: number;
   sessionFile?: string;
   outputFile?: string;
@@ -82,6 +87,8 @@ type DirectResultFile = {
   summary?: string;
   timestamp?: number;
   sessionFile?: string;
+  lastActionAt?: number;
+  lastActionSummary?: string;
   toolCount?: number;
   totalTokens?: number;
   promptTokens?: number;
@@ -103,6 +110,8 @@ type DirectResultFile = {
     error?: string;
     output?: string;
     sessionFile?: string;
+    lastActionAt?: number;
+    lastActionSummary?: string;
     totalTokens?: number;
     promptTokens?: number;
     cacheReadTokens?: number;
@@ -542,6 +551,8 @@ function normalizeStepProgress(
     agent: step.agent,
     taskSummary: resolveWorkflowTaskSummary(step.taskSummary, workflowResults),
     status: step.status,
+    lastActionAt: step.lastActionAt,
+    lastActionSummary: step.lastActionSummary,
   };
 }
 
@@ -575,7 +586,7 @@ export function normalizeAsyncStatus(
   asyncDir: string,
   status: Pick<
     DirectAsyncStatus,
-    "runId" | "mode" | "state" | "activityState" | "startedAt" | "lastUpdate" | "endedAt" | "sessionFile" | "outputFile" | "currentTool" | "toolCount" | "totalTokens" | "promptTokens" | "cacheReadTokens" | "cacheHitRate" | "steps"
+    "runId" | "mode" | "state" | "activityState" | "startedAt" | "lastUpdate" | "lastActionAt" | "lastActionSummary" | "endedAt" | "sessionFile" | "outputFile" | "currentTool" | "toolCount" | "totalTokens" | "promptTokens" | "cacheReadTokens" | "cacheHitRate" | "steps"
   >,
 ): NormalizedRunUpdate {
   const mappedStatus = mapAsyncStateToRunStatus(status.state);
@@ -585,6 +596,14 @@ export function normalizeAsyncStatus(
   const completedAt = isTerminalStatus(localStatus) ? status.endedAt ?? updatedAt : undefined;
   const primaryStep = selectPrimaryStep(status);
   const currentTool = primaryStep?.currentTool ?? status.currentTool;
+  const actionCandidates = [status, ...(status.steps ?? [])]
+    .filter((candidate): candidate is typeof candidate & { lastActionAt: number } => typeof candidate.lastActionAt === "number");
+  const latestAction = actionCandidates.reduce<typeof actionCandidates[number] | undefined>((latest, candidate) => {
+    if (!latest || candidate.lastActionAt > latest.lastActionAt) return candidate;
+    return latest;
+  }, undefined);
+  const lastActionAt = latestAction?.lastActionAt;
+  const lastActionSummary = latestAction?.lastActionSummary;
   const toolCount = status.toolCount ?? primaryStep?.toolCount;
   const totalTokens = status.totalTokens ?? primaryStep?.totalTokens;
   const promptTokens = status.promptTokens ?? primaryStep?.promptTokens;
@@ -615,6 +634,8 @@ export function normalizeAsyncStatus(
     sessionFile,
     artifactPath,
     currentTool,
+    lastActionAt,
+    lastActionSummary,
     toolCount,
     totalTokens,
     promptTokens,
@@ -649,6 +670,10 @@ export function normalizeAsyncResult(runId: string, result: DirectResultFile): N
   const cacheReadTokenTotals = metricResults?.map((child) => child.cacheReadTokens).filter((value): value is number => typeof value === "number");
   const promptTokens = result.promptTokens ?? (promptTokenTotals && promptTokenTotals.length > 0 ? promptTokenTotals.reduce((sum, value) => sum + value, 0) : undefined);
   const cacheReadTokens = result.cacheReadTokens ?? (cacheReadTokenTotals && cacheReadTokenTotals.length > 0 ? cacheReadTokenTotals.reduce((sum, value) => sum + value, 0) : undefined);
+  const childActionAtValues = result.results?.map((child) => child.lastActionAt).filter((value): value is number => typeof value === "number");
+  const lastActionAt = result.lastActionAt ?? (childActionAtValues && childActionAtValues.length > 0 ? Math.max(...childActionAtValues) : undefined);
+  const lastActionSummary = result.lastActionSummary
+    ?? result.results?.find((child) => child.lastActionAt === lastActionAt)?.lastActionSummary;
 
   return {
     runId,
@@ -657,6 +682,8 @@ export function normalizeAsyncResult(runId: string, result: DirectResultFile): N
     completedAt: updatedAt,
     sessionFile: getResultSessionFile(result),
     artifactPath: getResultArtifactPath(result),
+    lastActionAt,
+    lastActionSummary,
     toolCount: result.toolCount ?? (toolCounts && toolCounts.length > 0 ? toolCounts.reduce((sum, value) => sum + value, 0) : undefined),
     totalTokens: result.totalTokens ?? (tokenTotals && tokenTotals.length > 0 ? tokenTotals.reduce((sum, value) => sum + value, 0) : undefined),
     promptTokens,
@@ -684,6 +711,24 @@ async function readJsonFile<T>(filePath: string | undefined): Promise<T | undefi
 async function writeJsonFile(filePath: string, value: unknown): Promise<void> {
   await fsp.mkdir(path.dirname(filePath), { recursive: true });
   await fsp.writeFile(filePath, JSON.stringify(value, null, 2), "utf8");
+}
+
+async function findLatestSessionFile(sessionDir: string | undefined): Promise<string | undefined> {
+  if (!sessionDir) return undefined;
+  try {
+    const entries = await fsp.readdir(sessionDir, { withFileTypes: true });
+    const files = await Promise.all(entries
+      .filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
+      .map(async (entry) => {
+        const fullPath = path.join(sessionDir, entry.name);
+        const stats = await fsp.stat(fullPath);
+        return { fullPath, mtimeMs: stats.mtimeMs };
+      }));
+    files.sort((left, right) => right.mtimeMs - left.mtimeMs);
+    return files[0]?.fullPath;
+  } catch {
+    return undefined;
+  }
 }
 
 function runnerPath(): string {
@@ -841,7 +886,10 @@ export class PiSubagentsAdapter implements Launcher {
     return normalizeAsyncStatus(launch.runId, asyncDir, status);
   }
 
-  async cancel(launch: LaunchResult): Promise<boolean> {
+  private async terminate(
+    launch: LaunchResult,
+    options: { state: "paused" | "cancelled"; summary: string; stepError: string },
+  ): Promise<boolean> {
     const asyncDir = launch.asyncDir ?? path.join(this.asyncDirRoot, launch.asyncId);
     const statusPath = path.join(asyncDir, "status.json");
     const resultPath = launch.resultPath ?? computeResultPath(this.resultsDir, launch.asyncId);
@@ -851,13 +899,19 @@ export class PiSubagentsAdapter implements Launcher {
       startedAt?: number;
       sessionFile?: string;
       pid?: number;
-      steps?: Array<{ id?: string; taskSummary?: string; dependsOn?: string[]; agent?: string; pid?: number; sessionFile?: string; outputFile?: string }>;
+      steps?: Array<{ id?: string; taskSummary?: string; dependsOn?: string[]; agent?: string; pid?: number; sessionDir?: string; sessionFile?: string; outputFile?: string }>;
     }>(statusPath);
     const pids = [...new Set([status?.pid, ...(status?.steps?.map((step) => step.pid) ?? [])])].filter(
       (value): value is number => typeof value === "number" && value > 0,
     );
 
     if (pids.length === 0) return false;
+
+    const sessionFile = status?.sessionFile
+      ?? launch.sessionFile
+      ?? status?.steps?.find((step) => step.sessionFile)?.sessionFile
+      ?? await findLatestSessionFile(status?.steps?.find((step) => step.sessionDir)?.sessionDir);
+    if (options.state === "paused" && !sessionFile) return false;
 
     let handledCount = 0;
     for (const pid of pids) {
@@ -880,11 +934,13 @@ export class PiSubagentsAdapter implements Launcher {
       runId: persistedRunId,
       mode: status?.mode ?? "single",
       pid: status?.pid,
-      state: "cancelled",
+      state: options.state,
       startedAt: status?.startedAt ?? timestamp,
       lastUpdate: timestamp,
+      lastActionAt: timestamp,
+      lastActionSummary: options.summary,
       endedAt: timestamp,
-      sessionFile: status?.sessionFile ?? launch.sessionFile,
+      sessionFile,
       steps: (status?.steps ?? []).map((step, index) => ({
         ...step,
         index,
@@ -892,26 +948,33 @@ export class PiSubagentsAdapter implements Launcher {
         pid: step.pid,
         sessionFile: step.sessionFile,
         outputFile: step.outputFile,
-        status: "cancelled",
-        error: "Cancelled by user",
+        status: options.state,
+        error: options.stepError,
+        lastActionAt: timestamp,
+        lastActionSummary: options.summary,
       })),
     });
     await writeJsonFile(resultPath, {
       id: persistedRunId,
       runId: persistedRunId,
-      state: "cancelled",
+      state: options.state,
       success: false,
-      summary: "Cancelled by user",
+      summary: options.summary,
       timestamp,
-      sessionFile: status?.sessionFile ?? launch.sessionFile,
+      sessionFile,
+      lastActionAt: timestamp,
+      lastActionSummary: options.summary,
       results: (status?.steps ?? []).map((step, index) => ({
         stepId: step.id,
         taskSummary: step.taskSummary,
         dependsOn: step.dependsOn,
         agent: step.agent ?? `child-${index + 1}`,
-        error: "Cancelled by user",
+        error: options.stepError,
         success: false,
+        status: options.state,
         sessionFile: step.sessionFile,
+        lastActionAt: timestamp,
+        lastActionSummary: options.summary,
         artifactPaths: step.outputFile
           ? { outputPath: path.join(asyncDir, step.outputFile) }
           : undefined,
@@ -919,6 +982,22 @@ export class PiSubagentsAdapter implements Launcher {
     });
 
     return true;
+  }
+
+  async stop(launch: LaunchResult): Promise<boolean> {
+    return await this.terminate(launch, {
+      state: "paused",
+      summary: "Stopped by user; continuation available",
+      stepError: "Stopped by user",
+    });
+  }
+
+  async cancel(launch: LaunchResult): Promise<boolean> {
+    return await this.terminate(launch, {
+      state: "cancelled",
+      summary: "Cancelled by user",
+      stepError: "Cancelled by user",
+    });
   }
 }
 

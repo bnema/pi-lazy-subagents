@@ -417,6 +417,8 @@ describe("visibility helpers", () => {
       model: "(openai-codex) gpt-5.4 • xhigh",
     });
     run.currentTool = "read";
+    run.lastActionAt = 59_000;
+    run.lastActionSummary = "tool start: read";
     run.toolCount = 2;
     run.totalTokens = 6_079;
     run.cacheHitRate = 73.4;
@@ -429,10 +431,11 @@ describe("visibility helpers", () => {
       ],
       progressStats: { turnCount: 2, lastTurnTokens: 4_321 },
       expanded: false,
+      now: 60_000,
     });
 
     expect(compact.lines.join("\n")).toContain(`${GLYPH_PINNED} Review auth diff`);
-    expect(compact.lines.join("\n")).toContain("reviewer · running · 2 turns · last 4.3k tok · read · 2 tools · 6.1k tokens · CH73.4%");
+    expect(compact.lines.join("\n")).toContain("reviewer · running · 2 turns · last 4.3k tok · read · last action 1s ago tool start: read · 2 tools · 6.1k tokens · CH73.4%");
     expect(compact.lines.join("\n")).toContain("model (openai-codex) gpt-5.4 • xhigh");
     expect(compact.lines.join("\n")).not.toContain("run run-42");
     expect(compact.lines.join("\n")).toContain("assistant · latest progress line");

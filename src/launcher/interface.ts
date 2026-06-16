@@ -88,6 +88,8 @@ export interface NormalizedRunUpdate {
   resultPreview?: string;
   errorPreview?: string;
   currentTool?: string;
+  lastActionAt?: number;
+  lastActionSummary?: string;
   toolCount?: number;
   totalTokens?: number;
   promptTokens?: number;
@@ -104,5 +106,6 @@ export interface Launcher {
   launchWorkflow(request: LaunchWorkflowRequest, runtime: LauncherRuntimeContext): Promise<LaunchResult>;
   continueChild?(request: ContinueLaunchRequest, runtime: LauncherRuntimeContext): Promise<LaunchResult>;
   readUpdate(launch: LaunchResult): Promise<NormalizedRunUpdate | undefined>;
+  stop?(launch: LaunchResult): Promise<boolean>;
   cancel?(launch: LaunchResult): Promise<boolean>;
 }

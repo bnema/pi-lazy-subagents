@@ -83,6 +83,8 @@ describe("extension entrypoint", () => {
     expect(guidance).toContain("Do not poll");
     expect(guidance).toContain("60s");
     expect(guidance).toContain("action=result");
+    expect(guidance).toContain("action=stop");
+    expect(guidance).toContain("resumable");
     expect(guidance).toContain("Use action=workflow for dependent pipelines");
     expect(guidance).toContain("Subagents always report terminal results back to the main agent");
     expect(guidance).not.toContain("notify_only");
@@ -116,6 +118,21 @@ describe("extension entrypoint", () => {
       { prompt: "Inspect the package layout" },
       { prompt: "Review the auth diff" },
     ])).toBe("Inspect the package layout + Review the auth diff");
+  });
+
+  test("tool stop action returns error when run not found", async () => {
+    const { api, tools } = createPi();
+    lazySubagentsExtension(api as any);
+
+    const tool = tools.find((entry) => entry.name === TOOL_NAME);
+    const ctx = { cwd: process.cwd(), hasUI: false };
+
+    const result = await tool.execute("tool-stop", {
+      action: "stop",
+      runId: "run-1",
+    }, new AbortController().signal, () => undefined, ctx);
+
+    expect(result.content[0].text).toContain("Could not stop run-1.");
   });
 
   test("tool rejects names on group and workflow runs", async () => {

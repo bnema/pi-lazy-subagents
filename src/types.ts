@@ -61,6 +61,8 @@ export interface RunChildProgress {
   agent?: string;
   taskSummary?: string;
   status?: RunChildProgressStatus;
+  lastActionAt?: number;
+  lastActionSummary?: string;
 }
 
 export interface RunRecord {
@@ -79,6 +81,8 @@ export interface RunRecord {
   resultPreview?: string;
   errorPreview?: string;
   currentTool?: string;
+  lastActionAt?: number;
+  lastActionSummary?: string;
   toolCount?: number;
   totalTokens?: number;
   promptTokens?: number;

@@ -279,6 +279,8 @@ function equalUpdate(existing: RunRecord, update: NormalizedRunUpdate): boolean 
     && existing.resultPreview === update.resultPreview
     && existing.errorPreview === update.errorPreview
     && existing.currentTool === update.currentTool
+    && existing.lastActionAt === (update.lastActionAt ?? update.updatedAt ?? existing.lastActionAt)
+    && existing.lastActionSummary === (update.lastActionSummary ?? update.event?.summary ?? existing.lastActionSummary)
     && (update.childProgress === undefined || JSON.stringify(existing.childProgress ?? []) === JSON.stringify(update.childProgress))
     && existing.toolCount === update.toolCount
     // equalUpdate compares against mergeTotalTokens because missing totals should preserve an existing non-zero value; the tests also cover the zero-update case, so we deliberately merge instead of comparing directly.
@@ -331,16 +333,21 @@ function buildRunHealthAlerts(run: RunRecord, now: number): RunHealthAlert[] {
   if (isTerminalStatus(run.status)) return [];
 
   const alerts: RunHealthAlert[] = [];
-  const silenceMs = Math.max(0, now - run.updatedAt);
+  const lastActionAt = run.lastActionAt ?? run.updatedAt;
+  const silenceMs = Math.max(0, now - lastActionAt);
   if (silenceMs >= DEFAULT_STALE_RUN_MS) {
     const staleWindow = Math.floor(silenceMs / DEFAULT_STALE_RUN_MS);
+    const actionSummary = run.lastActionSummary ? ` Last action: ${run.lastActionSummary}.` : "";
+    const remediation = run.kind === "single"
+      ? `inspect /lazy-subagents status ${run.id}, stop it with lazy_subagents action=stop runId=${run.id}, then resume with lazy_subagents action=continue target=${run.id} prompt=<message>.`
+      : `inspect /lazy-subagents status ${run.id}; stop/continue is only resumable for single runs, so cancel this ${run.kind} run if it must be terminated.`;
     alerts.push({
       status: "blocked",
       event: {
-        id: `${run.id}:health:stale:${run.updatedAt}:${staleWindow}`,
+        id: `${run.id}:health:stale:${lastActionAt}:${staleWindow}`,
         category: "attention",
-        timestamp: run.updatedAt,
-        summary: `No progress from ${run.agent} for ${formatDuration(silenceMs)}. The child may be stuck; inspect /lazy-subagents status ${run.id}.`,
+        timestamp: lastActionAt,
+        summary: `No child action from ${run.agent} for ${formatDuration(silenceMs)}.${actionSummary} The child may be stuck; ${remediation}`,
         status: "blocked",
       },
     });
@@ -698,6 +705,8 @@ export class LazySubagentsController {
         status: "queued",
         startedAt: timestamp,
         updatedAt: timestamp,
+        lastActionAt: timestamp,
+        lastActionSummary: "queued",
         completionPolicy,
         sessionFile: launch.sessionFile,
         artifactPath: launch.artifactPath,
@@ -731,6 +740,8 @@ export class LazySubagentsController {
         startedAt: timestamp,
         updatedAt: timestamp,
         completedAt: timestamp,
+        lastActionAt: timestamp,
+        lastActionSummary: "launch failed",
         completionPolicy,
         errorPreview: error instanceof Error ? error.message : String(error),
         attentionNeeded: true,
@@ -785,6 +796,8 @@ export class LazySubagentsController {
         status: "queued",
         startedAt: timestamp,
         updatedAt: timestamp,
+        lastActionAt: timestamp,
+        lastActionSummary: "queued",
         completionPolicy,
         sessionFile: launch.sessionFile,
         artifactPath: launch.artifactPath,
@@ -818,6 +831,8 @@ export class LazySubagentsController {
         startedAt: timestamp,
         updatedAt: timestamp,
         completedAt: timestamp,
+        lastActionAt: timestamp,
+        lastActionSummary: "launch failed",
         completionPolicy,
         errorPreview: error instanceof Error ? error.message : String(error),
         attentionNeeded: true,
@@ -873,6 +888,8 @@ export class LazySubagentsController {
         status: "queued",
         startedAt: timestamp,
         updatedAt: timestamp,
+        lastActionAt: timestamp,
+        lastActionSummary: "queued",
         completionPolicy,
         sessionFile: launch.sessionFile,
         artifactPath: launch.artifactPath,
@@ -906,6 +923,8 @@ export class LazySubagentsController {
         startedAt: timestamp,
         updatedAt: timestamp,
         completedAt: timestamp,
+        lastActionAt: timestamp,
+        lastActionSummary: "launch failed",
         completionPolicy,
         errorPreview: error instanceof Error ? error.message : String(error),
         attentionNeeded: true,
@@ -1046,6 +1065,8 @@ export class LazySubagentsController {
       resultPreview: undefined,
       errorPreview: undefined,
       currentTool: undefined,
+      lastActionAt: now,
+      lastActionSummary: "queued",
       toolCount: undefined,
       attentionNeeded: false,
       leaseExpiry: newLeaseExpiry,
@@ -1083,6 +1104,8 @@ export class LazySubagentsController {
         resultPreview: existing.resultPreview,
         errorPreview: existing.errorPreview,
         currentTool: existing.currentTool,
+        lastActionAt: existing.lastActionAt,
+        lastActionSummary: existing.lastActionSummary,
         toolCount: existing.toolCount,
         attentionNeeded: existing.attentionNeeded,
         sessionFile: existing.sessionFile,
@@ -1295,14 +1318,51 @@ export class LazySubagentsController {
     }).lines;
   }
 
-  private getPinnedProgressLines(runId: string): string[] {
+  private getPinnedProgressLines(runId: string, now = this.now()): string[] {
     const run = this.registry.get(runId);
     if (!run) return [];
 
     return buildLiveRunViewModel(run, {
+      now,
       progressLines: this.progressLines.get(runId),
       progressStats: this.progressStats.get(runId),
     }).detailLines;
+  }
+
+  async stopRun(runId: string, ctx?: ExtensionContext): Promise<boolean> {
+    if (ctx) this.captureContext(ctx);
+    const launch = this.trackedLaunches.get(runId);
+    const run = this.registry.get(runId);
+    if (!launch || !run || run.kind !== "single" || !this.launcher.stop || isTerminalStatus(run.status)) return false;
+
+    const stopped = await this.launcher.stop(launch);
+    if (!stopped) return false;
+
+    const timestamp = this.now();
+    this.trackedLaunches.delete(runId);
+    this.registry.updateRun(runId, {
+      status: "paused",
+      updatedAt: timestamp,
+      completedAt: timestamp,
+      lastActionAt: timestamp,
+      lastActionSummary: "stopped by user",
+      attentionNeeded: true,
+      errorPreview: `Stopped by user. Resume with lazy_subagents action=continue target=${runId} prompt=<message>.`,
+    });
+    this.registry.recordEvent(runId, {
+      id: `${runId}:${timestamp}:stopped`,
+      category: "attention",
+      timestamp,
+      summary: `Stopped ${run.agent} · ${run.title || run.taskSummary}. Resume with lazy_subagents action=continue target=${runId} prompt=<message>.`,
+      status: "paused",
+    });
+
+    const stored = this.registry.get(runId)!;
+    this.sendVisiblePayload(createAttentionMessagePayload(stored));
+    this.persistState();
+    this.renderUi();
+    this.refreshPoller();
+    return true;
   }
 
   async cancelRun(runId: string, ctx?: ExtensionContext): Promise<boolean> {
@@ -1320,6 +1380,8 @@ export class LazySubagentsController {
       status: "cancelled",
       updatedAt: timestamp,
       completedAt: timestamp,
+      lastActionAt: timestamp,
+      lastActionSummary: "cancelled by user",
       attentionNeeded: false,
       errorPreview: "Cancelled by user",
     });
@@ -1444,6 +1506,8 @@ export class LazySubagentsController {
         resultPreview: update.resultPreview ?? existing.resultPreview,
         errorPreview: update.errorPreview ?? existing.errorPreview,
         currentTool: update.currentTool,
+        lastActionAt: update.lastActionAt ?? update.updatedAt ?? existing.lastActionAt,
+        lastActionSummary: update.lastActionSummary ?? update.event?.summary ?? existing.lastActionSummary,
         childProgress: update.childProgress ?? existing.childProgress,
         toolCount: update.toolCount,
         totalTokens: mergeTotalTokens(existing.totalTokens, update.totalTokens),
@@ -1777,14 +1841,19 @@ export class LazySubagentsController {
       if (!current) continue;
 
       for (const alert of buildRunHealthAlerts(current, this.now())) {
-        if (current.recentEvents.some((event) => event.id === alert.event.id)) {
+        const alreadyRecorded = current.recentEvents.some((event) => event.id === alert.event.id);
+        if (current.status !== (alert.status ?? current.status) || !current.attentionNeeded) {
+          this.registry.updateRun(run.id, {
+            status: alert.status ?? current.status,
+            attentionNeeded: true,
+          });
+          changed = true;
+        }
+
+        if (alreadyRecorded) {
           continue;
         }
 
-        this.registry.updateRun(run.id, {
-          status: alert.status ?? current.status,
-          attentionNeeded: true,
-        });
         this.registry.recordEvent(run.id, alert.event);
         this.sendVisiblePayload(createAttentionMessagePayload(this.registry.get(run.id)!), { triggerTurn: true });
         changed = true;
@@ -1851,7 +1920,7 @@ export class LazySubagentsController {
   private syncTrackedLaunchesFromSnapshot(): void {
     this.trackedLaunches.clear();
     for (const run of this.registry.snapshot().activeRuns) {
-      if (run.launchRef) {
+      if (run.launchRef && !isTerminalStatus(run.status)) {
         this.trackedLaunches.set(run.id, run.launchRef);
       }
     }
@@ -1868,7 +1937,7 @@ export class LazySubagentsController {
     const timestamp = this.now();
     const widgetOptions = {
       isPinned: (runId: string) => this.shouldShowPinnedPanelForRun(runId),
-      getPinnedProgressLines: (runId: string) => this.getPinnedProgressLines(runId),
+      getPinnedProgressLines: (runId: string, now?: number) => this.getPinnedProgressLines(runId, now),
     };
     const status = buildFooterStatus(snapshot, ctx.ui.theme);
     const widgetLines = buildWidgetLines(snapshot, timestamp, 7, ctx.ui.theme, widgetOptions);

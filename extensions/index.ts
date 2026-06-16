@@ -41,6 +41,7 @@ export const ToolParamsSchema = Type.Object({
     Type.Literal("result"),
     Type.Literal("pickup"),
     Type.Literal("pin"),
+    Type.Literal("stop"),
     Type.Literal("continue"),
     Type.Literal("clear"),
     Type.Literal("cancel"),
@@ -64,7 +65,7 @@ export const ToolParamsSchema = Type.Object({
     description: "Run id or name to continue. Use action=continue with a new prompt to resume a completed named or single subagent in the same child session.",
   })),
   runId: Type.Optional(Type.String({
-    description: "Existing run id for wait, status, result, pickup, clear, or cancel operations. Use this sparingly for later health checks or final-result retrieval, not tight polling loops.",
+    description: "Existing run id for wait, status, result, pickup, pin, stop, clear, or cancel operations. Use this sparingly for later health checks or final-result retrieval, not tight polling loops.",
   })),
   timeoutMs: Type.Optional(Type.Number({
     minimum: 1,
@@ -196,7 +197,8 @@ export default function lazySubagentsExtension(pi: ExtensionAPI): void {
       "Use action=wait only for explicit blocking requests or non-interactive scripts.",
       "Use action=status only for human-requested health checks, suspected stalls, or after about 60s with no signal. Do not poll.",
       "Use action=result after terminal completion, pickup to inject the result, pin off/on to hide or restore the persistent progress panel, and clear/cancel to manage runs.",
-      "Use action=continue target=<name|runId> prompt=<new prompt> to resume a completed named subagent for another review round. The run reuses its existing session.",
+      "Use action=stop runId=<runId> for a resumable pause of a stuck active single run; cancel is final and cannot be continued.",
+      "Use action=continue target=<name|runId> prompt=<new prompt> to resume a completed named or stopped single subagent. The run reuses its existing session.",
     ],
     parameters: ToolParamsSchema,
     renderCall(args, theme) {
@@ -326,6 +328,11 @@ export default function lazySubagentsExtension(pi: ExtensionAPI): void {
           const cleared = controller.clearRuns(params.scope ?? "completed", params.runId);
           return { content: [{ type: "text", text: cleared > 0 ? `Cleared ${cleared} run(s).` : "Nothing to clear." }], details: { action: params.action, cleared } };
         }
+        case "stop":
+          return {
+            content: [{ type: "text", text: params.runId && await controller.stopRun(params.runId, ctx) ? `Stopped ${params.runId}. Use action=continue target=${params.runId} prompt=<message> to resume.` : `Could not stop ${params.runId ?? "(missing runId)"}.` }],
+            details: { action: params.action, runId: params.runId },
+          };
         case "cancel":
           return {
             content: [{ type: "text", text: params.runId && await controller.cancelRun(params.runId, ctx) ? `Cancelled ${params.runId}.` : `Could not cancel ${params.runId ?? "(missing runId)"}.` }],

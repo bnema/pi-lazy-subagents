@@ -44,6 +44,8 @@ function createRun(overrides: Partial<RunRecord> = {}): RunRecord {
     resultPreview: overrides.resultPreview,
     errorPreview: overrides.errorPreview,
     currentTool: overrides.currentTool,
+    lastActionAt: overrides.lastActionAt,
+    lastActionSummary: overrides.lastActionSummary,
     toolCount: overrides.toolCount,
     model: overrides.model,
     attentionNeeded: overrides.attentionNeeded ?? false,
@@ -67,6 +69,8 @@ class FakeLauncher implements Launcher {
   public readonly continueLaunches: ContinueLaunchRequest[] = [];
   public launchGroupError: Error | undefined;
   public continueError: Error | undefined;
+  public stopResult = true;
+  public readonly stoppedLaunches: LaunchResult[] = [];
   public launchChildHook: ((request: LaunchChildRequest) => Promise<void>) | undefined;
   public readUpdateHook: ((launch: LaunchResult) => Promise<NormalizedRunUpdate | undefined>) | undefined;
 
@@ -131,6 +135,11 @@ class FakeLauncher implements Launcher {
 
   async cancel(): Promise<boolean> {
     return true;
+  }
+
+  async stop(launch: LaunchResult): Promise<boolean> {
+    this.stoppedLaunches.push(launch);
+    return this.stopResult;
   }
 }
 
@@ -1282,7 +1291,7 @@ describe("LazySubagentsController", () => {
     expect(widgetText).toContain("Failed visible");
   });
 
-  test("surfaces a stuck-run attention signal after 5 minutes without progress", async () => {
+  test("surfaces a stuck-run attention signal after 5 minutes without child action", async () => {
     const { api, messages } = createPi();
     const launcher = new FakeLauncher();
     let clock = 100;
@@ -1299,14 +1308,48 @@ describe("LazySubagentsController", () => {
       },
       ctx,
     );
+    await controller.pollOnce();
 
+    launcher.updates.set("run-1", {
+      runId: "run-1",
+      status: "running",
+      updatedAt: 100 + (5 * 60_000) + 1,
+      lastActionAt: 100,
+      lastActionSummary: "child started",
+    } as any);
     clock = 100 + (5 * 60_000) + 1;
     await controller.pollOnce();
 
     expect(controller.getSnapshot().activeRuns[0]?.attentionNeeded).toBe(true);
     expect(messages.at(-1)?.message.customType).toBe(MESSAGE_TYPE_ATTENTION);
     expect(messages.at(-1)?.options?.triggerTurn).toBe(true);
-    expect(messages.at(-1)?.message.content).toContain("No progress");
+    expect(messages.at(-1)?.message.content).toContain("No child action");
+    expect(messages.at(-1)?.message.content).toContain("action=stop runId=run-1");
+  });
+
+  test("does not mark a run stale when status updates are old but child action is recent", async () => {
+    const { api, messages } = createPi();
+    const launcher = new FakeLauncher();
+    let clock = 100;
+    const controller = new LazySubagentsController(api as any, { launcher, createRunId: () => "run-1", now: () => clock });
+    const { ctx } = createContext({ isIdle: true, hasPendingMessages: false });
+
+    await controller.handleSessionStart(ctx);
+    await controller.launchChild({ agent: "reviewer", title: "Review", taskSummary: "Review", prompt: "Review." }, ctx);
+    await controller.pollOnce();
+
+    clock = 100 + (5 * 60_000) + 1;
+    launcher.updates.set("run-1", {
+      runId: "run-1",
+      status: "running",
+      updatedAt: 100,
+      lastActionAt: clock - 1_000,
+      lastActionSummary: "assistant message",
+    } as any);
+    await controller.pollOnce();
+
+    expect(controller.getSnapshot().activeRuns[0]?.attentionNeeded).toBe(false);
+    expect(messages.filter((entry) => entry.message.customType === MESSAGE_TYPE_ATTENTION)).toHaveLength(0);
   });
 
   test("can re-alert when a run resumes and later goes stale again", async () => {
@@ -1497,6 +1540,26 @@ describe("LazySubagentsController", () => {
 
     expect(controller.getSnapshot().activeRuns[0]?.attentionNeeded).toBe(false);
     expect(messages.some((entry) => entry.message.customType === MESSAGE_TYPE_ATTENTION)).toBe(false);
+  });
+
+  test("stopRun marks active runs paused and keeps them continuable", async () => {
+    const { api, messages } = createPi();
+    const launcher = new FakeLauncher();
+    const controller = new LazySubagentsController(api as any, { launcher, createRunId: () => "run-1", now: () => 100 });
+    const { ctx } = createContext({ isIdle: true, hasPendingMessages: false });
+
+    await controller.handleSessionStart(ctx);
+    await controller.launchChild({ agent: "reviewer", title: "Review", taskSummary: "Review", prompt: "Review." }, ctx);
+
+    await expect((controller as any).stopRun("run-1", ctx)).resolves.toBe(true);
+
+    const run = controller.getSnapshot().runs.find((entry: RunRecord) => entry.id === "run-1");
+    expect(run?.status).toBe("paused");
+    expect(run?.attentionNeeded).toBe(true);
+    expect(run?.errorPreview).toContain("Stopped by user");
+    expect(launcher.stoppedLaunches).toHaveLength(1);
+    expect(messages.at(-1)?.message.customType).toBe(MESSAGE_TYPE_ATTENTION);
+    expect(messages.at(-1)?.message.content).toContain("continue");
   });
 
   test("ignores stale in-flight running updates after cancel", async () => {
@@ -2693,6 +2756,8 @@ describe("continueChild", () => {
       status: "completed",
       completedAt: 50,
       resultPreview: "Old result",
+      lastActionAt: 45,
+      lastActionSummary: "assistant message",
       sessionFile,
       artifactPath,
       launchRef: { runId: "run-cont-revert", asyncId: "run-cont-revert", asyncDir, sessionFile, artifactPath },
@@ -2710,6 +2775,8 @@ describe("continueChild", () => {
     expect(run?.taskSummary).toBe("Old task");
     expect(run?.status).toBe("completed");
     expect(run?.resultPreview).toBe("Old result");
+    expect(run?.lastActionAt).toBe(45);
+    expect(run?.lastActionSummary).toBe("assistant message");
     expect(run?.sessionFile).toBe(sessionFile);
     expect(run?.artifactPath).toBe(artifactPath);
     expect(run?.launchRef?.sessionFile).toBe(sessionFile);

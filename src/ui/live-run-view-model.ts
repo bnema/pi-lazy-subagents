@@ -1,5 +1,5 @@
 import type { RunRecord } from "../types.js";
-import { formatCompactThousands } from "../utils/time.js";
+import { formatAge, formatCompactThousands } from "../utils/time.js";
 import { summarizeSingleLine } from "../utils/text.js";
 import { formatCacheHitRate } from "../utils/usage-metrics.js";
 import { GLYPH_PINNED } from "./glyphs.js";
@@ -15,6 +15,7 @@ interface LiveRunViewModelOptions {
   progressStats?: LiveRunProgressStats;
   maxCompactDetails?: number;
   maxExpandedDetails?: number;
+  now?: number;
 }
 
 export interface LiveRunViewModel {
@@ -32,12 +33,17 @@ function buildLiveRunDetailLines(run: RunRecord, progressLines?: string[]): stri
 
 export function buildLiveRunViewModel(run: RunRecord, options: LiveRunViewModelOptions = {}): LiveRunViewModel {
   const expanded = options.expanded ?? false;
+  const now = options.now ?? Date.now();
   const title = run.title || run.taskSummary;
   const stats = options.progressStats;
   const metaParts = [run.agent, run.status];
   if (stats?.turnCount) metaParts.push(`${stats.turnCount} turns`);
   if (stats?.lastTurnTokens) metaParts.push(`last ${formatCompactThousands(stats.lastTurnTokens)} tok`);
   if (run.currentTool) metaParts.push(run.currentTool);
+  if (run.lastActionAt !== undefined) {
+    const actionSuffix = run.lastActionSummary ? ` ${run.lastActionSummary}` : "";
+    metaParts.push(`last action ${formatAge({ now, timestamp: run.lastActionAt })}${actionSuffix}`);
+  }
   if (run.toolCount !== undefined && run.toolCount > 0) metaParts.push(`${run.toolCount} tools`);
   if (run.totalTokens !== undefined && run.totalTokens > 0) metaParts.push(`${formatCompactThousands(run.totalTokens)} tokens`);
   const cacheHitRate = formatCacheHitRate(run.cacheHitRate);
